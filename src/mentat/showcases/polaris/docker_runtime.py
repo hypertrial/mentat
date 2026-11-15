@@ -319,9 +319,9 @@ def run_case(
             fixture = root / "fixture.json"
             fixture.write_bytes(case_payload(case))
             fixture.chmod(0o644)
-            oracle = Path(__file__).parent / "pack" / "runtime" / "oracle_cli.py"
-            if not oracle.is_file():
-                raise RuntimeError("trusted oracle unavailable")
+            oracle = root / "oracle_cli.py"
+            oracle.write_bytes((_RUNTIME / "oracle_cli.py").read_bytes())
+            oracle.chmod(0o644)
 
             def create(name: str, *arguments: str) -> None:
                 containers.append(name)

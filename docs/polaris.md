@@ -45,7 +45,9 @@ Copy the bundled public fixture shape from `src/mentat/showcases/polaris/pack/pu
 ```sh
 HELD_OUT=/absolute/path/to/held-out.json
 FROZEN_SHA=$(shasum -a 256 "$HELD_OUT" | cut -d ' ' -f 1)
-uv run --locked --extra polaris mentat showcase polaris evaluate --repo "$POLARIS" --held-out "$HELD_OUT" --sha256 "$FROZEN_SHA"
+REPAIR='paste the full commit ID of the repair'
+uv run --locked --extra polaris mentat showcase polaris evaluate \
+  --repo "$POLARIS" --rev "$REPAIR" --held-out "$HELD_OUT" --sha256 "$FROZEN_SHA"
 ```
 
 The report compares frozen upstream pytest, a Hypothesis-generated test corpus, and live verification on the historical failure, repair, and three controls. Evaluation reports use `schema_version` 2. Their `baseline_rows` record one result per candidate variant for each test baseline. The live `rows` record one result per candidate variant and private fixture, so the totals use different denominators. Private inputs and detailed failures stay out of the evaluation bundle. Candidate code can observe inputs delivered during replay, so keep the final trial operator-run and rotate cases before further repair attempts. A baseline that also fails on the unmutated repair receives an ambiguous alert when it rejects a violation case.

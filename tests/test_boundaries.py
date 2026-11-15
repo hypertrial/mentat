@@ -2,6 +2,7 @@ import json
 import os
 import sqlite3
 import subprocess
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -9,6 +10,7 @@ from typer.testing import CliRunner
 
 from mentat.cli import app
 from mentat.evidence import read_run, save_run
+from mentat.showcases.polaris import docker_runtime
 from mentat.showcases.polaris.docker_runtime import _stage_cli
 from mentat.showcases.polaris.evaluation import BEFORE, FIXED, _control, evaluate
 from mentat.showcases.polaris.formal import run_z3
@@ -300,6 +302,37 @@ def test_snapshot_staging_is_readable_in_container_under_restrictive_umask(tmp_p
     assert cli.stat().st_mode & 0o777 == 0o755
     assert (cli / "command").stat().st_mode & 0o777 == 0o755
     assert (cli / "command/setup.py").stat().st_mode & 0o777 == 0o644
+
+
+def test_replay_stages_owner_only_oracle_as_readable_in_container(tmp_path, monkeypatch, spec):
+    runtime = tmp_path / "pack/runtime"
+    runtime.mkdir(parents=True)
+    installed = runtime / "oracle_cli.py"
+    installed.write_bytes(b"# installed oracle\n")
+    installed.chmod(0o600)
+    monkeypatch.setattr(docker_runtime, "_RUNTIME", runtime)
+    monkeypatch.setattr(
+        docker_runtime,
+        "doctor",
+        lambda _: {"ok": True, "client_image": "client", "server_image": "server"},
+    )
+    staged_oracles = []
+
+    def docker(_context, *args, **_kwargs):
+        if args[0] == "cp" and args[2].endswith(":/opt/oracle_cli.py"):
+            staged = Path(args[1])
+            staged_oracles.append((staged.read_bytes(), staged.stat().st_mode & 0o777))
+            return 1, b""  # Stop once we've inspected the actual source of docker cp.
+        if args[0] == "inspect":
+            return 0, b"exited 0"
+        return 0, b""
+
+    monkeypatch.setattr(docker_runtime, "_docker", docker)
+    candidate = Snapshot("a" * 40, "b" * 64, (("command/setup.py", b"# fixture\n"),))
+    case = load_cases(PACK / "public.json", spec)[0]
+    docker_runtime.run_case(candidate, "colima-mentat", case, spec.selected_properties, "oracle")
+    assert staged_oracles == [(installed.read_bytes(), 0o644)]
+    assert installed.stat().st_mode & 0o777 == 0o600
 
 
 def test_fixture_rejects_missing_fields_and_duplicate_case_ids(tmp_path, spec):
