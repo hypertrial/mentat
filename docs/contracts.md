@@ -17,7 +17,7 @@ Create `.mentat/contract.json` and commit it along with the approved models and 
 
 Every claim needs a behavior check. At least one claim needs both a formal and a behavior check. Use IDs made from letters, digits, dots, underscores, and hyphens, starting with a letter, digit, or underscore. Claim and check IDs are unique across the manifest.
 
-- **Z3** uses the bundled solver. With `engine: "z3"`, set `expected` to `"sat"` or `"unsat"`. A SAT check uses SMT-LIB declarations, definitions, and assertions from `source`. For UNSAT, provide a separate `counterexample` file with assertions. Mentat first checks the source alone for satisfiability, then checks both files together for a counterexample.
+- **Z3** uses the bundled solver. With `engine: "z3"`, set `expected` to `"sat"` or `"unsat"`. The `source` can use SMT-LIB declarations, definitions, and assertions, including `declare-datatype` and `declare-datatypes`. For UNSAT, provide a separate `counterexample` file containing only assertions. Mentat first checks the source alone for satisfiability, then checks both files together for a counterexample.
 - **Lean** uses Lean 4.31.0 on the Mentat host. With `engine: "lean"`, set `theorem` to a theorem declared in `source`, such as `"Example.clamp_zero"`. Put the installed toolchain’s `bin` directory on `PATH` and use Lean’s bundled libraries. Mentat checks the theorem and audits its transitive axioms. Review Lean source as executable code because elaboration can run code with the operator’s permissions. Approval explicitly covers this host execution even when behavior checks use Docker.
 
 For behavior, the working directory is the staged candidate root. Each `argv` element is one argument and may be empty after the command name. A leading `{checks}/` selects an approved file relative to `.mentat/`. For example, use `["/bin/sh", "{checks}/check.sh"]`. The runner sets `MENTAT_CANDIDATE_DIR`, `MENTAT_CHECKS_DIR`, and `MENTAT_ARTIFACTS_DIR`. Write optional diagnostic files to the artifacts directory.
@@ -49,7 +49,7 @@ Use `--docker-context NAME` before the command to override the environment. Supp
 
 **Host mode.** Set `allow_host` in the reviewed contract and add `--runner host` to `doctor`, `spec check`, `spec approve`, `verify`, and `accept`. Approve this mode separately. Each check gets a fresh temporary copy, but it can use the operator’s filesystem permissions and local network. Use it with code and tools you trust.
 
-Mentat accepts regular Git blobs with executable bits preserved. Symlinks, submodules, and unresolved Git LFS pointers in the selected files yield incomplete results. Limits per loaded tree are 4,096 files, 1 MB per file, and 32 MB total. The candidate snapshot excludes `.mentat/`, Git metadata, and uncommitted files.
+Mentat accepts regular Git blobs with executable bits preserved. Symlinks, submodules, and unresolved Git LFS pointers in the selected files yield incomplete results. Limits per loaded tree are 4,096 files, 1 MB per file, and 32 MB total. The candidate snapshot skips the root `.mentat` entry before traversal, so its contents do not count toward these limits. Selected paths retain their spelling from the Git tree. The snapshot excludes Git metadata and uncommitted files.
 
 ## Review, verify, and accept
 

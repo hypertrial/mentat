@@ -6,6 +6,8 @@ import re
 import selectors
 import subprocess
 import time
+from collections.abc import Iterable, Iterator
+from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Literal
@@ -18,6 +20,7 @@ CHECKS_PREFIX = "{checks}/"
 _MAX_FILE = 1_000_000
 _MAX_TOTAL = 32_000_000
 _MAX_FILES = 4096
+_MAX_PATH = 512
 _NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}\Z")
 _IMAGE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/:-]*@sha256:[0-9a-f]{64}\Z")
 
@@ -25,7 +28,7 @@ _IMAGE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/:-]*@sha256:[0-9a-f]{64}\Z")
 def _path(value: str) -> str:
     if (
         not value
-        or len(value) > 512
+        or len(value) > _MAX_PATH
         or "\\" in value
         or any(ord(c) < 32 for c in value)
         or any(p.casefold() in ("", ".", "..", ".git") for p in value.split("/"))
@@ -142,69 +145,116 @@ class Project:
     fingerprint: str
 
 
-def _git(root: Path, *args: str, data: bytes | None = None, limit: int | None = None) -> bytes:
-    env = {
-        **os.environ,
+def _git_env() -> dict[str, str]:
+    # Ignore caller-provided Git environment that can redirect the repository or inject config.
+    return {
+        **{k: v for k, v in os.environ.items() if not k.startswith("GIT_")},
         "GIT_NO_REPLACE_OBJECTS": "1",
         "GIT_NO_LAZY_FETCH": "1",
         "GIT_ALLOW_PROTOCOL": "",
         "GIT_TERMINAL_PROMPT": "0",
         "GIT_OPTIONAL_LOCKS": "0",
     }
-    # Ignore caller-provided Git environment that can redirect the repository or inject config.
-    env = {
-        k: v
-        for k, v in env.items()
-        if not k.startswith("GIT_")
-        or k
-        in {
-            "GIT_NO_REPLACE_OBJECTS",
-            "GIT_NO_LAZY_FETCH",
-            "GIT_ALLOW_PROTOCOL",
-            "GIT_TERMINAL_PROMPT",
-            "GIT_OPTIONAL_LOCKS",
-        }
-    }
+
+
+def _git(root: Path, *args: str, data: bytes | None = None) -> bytes:
     try:
-        if limit is not None:
-            with subprocess.Popen(
-                ["git", "-C", str(root), *args],
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                env=env,
-            ) as process:
-                deadline = time.monotonic() + 60
-                output = bytearray()
-                try:
-                    with selectors.DefaultSelector() as selector:
-                        selector.register(process.stdout, selectors.EVENT_READ)
-                        while selector.select(max(0, deadline - time.monotonic())):
-                            if time.monotonic() >= deadline:
-                                break
-                            chunk = os.read(process.stdout.fileno(), 65536)
-                            if not chunk:
-                                if process.wait(timeout=max(0, deadline - time.monotonic())):
-                                    raise ValueError(f"git command failed: {args[0]}")
-                                return bytes(output)
-                            output.extend(chunk)
-                            if len(output) > limit:
-                                raise ValueError("Git output exceeds size limit")
-                    raise ValueError(f"git command timed out: {args[0]}")
-                finally:
-                    if process.poll() is None:
-                        process.kill()
         result = subprocess.run(
             ["git", "-C", str(root), *args],
             input=data,
             capture_output=True,
-            env=env,
+            env=_git_env(),
             timeout=60,
             check=True,
         )
     except (OSError, subprocess.SubprocessError) as exc:
         raise ValueError(f"git command failed: {args[0]}") from exc
     return result.stdout
+
+
+def _ls_tree(
+    root: Path, revision: str, flags: str, scope: list[bytes], deadline: float
+) -> Iterator[bytes]:
+    # Match the stored path bytes even on filesystems where Git normally precomposes Unicode.
+    try:
+        with (
+            subprocess.Popen(
+                [
+                    "git",
+                    "-C",
+                    str(root),
+                    "-c",
+                    "core.precomposeUnicode=false",
+                    "ls-tree",
+                    flags,
+                    "--full-tree",
+                    revision,
+                    "--",
+                    *scope,
+                ],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                env=_git_env(),
+            ) as process,
+            selectors.DefaultSelector() as selector,
+        ):
+            assert process.stdout is not None
+            selector.register(process.stdout, selectors.EVENT_READ)
+            pending = b""
+            try:
+                while (remaining := deadline - time.monotonic()) > 0 and selector.select(remaining):
+                    chunk = os.read(process.stdout.fileno(), 65536)
+                    if not chunk:
+                        if pending or process.wait(timeout=max(0, deadline - time.monotonic())):
+                            raise ValueError("git command failed: ls-tree")
+                        return
+                    *records, pending = (pending + chunk).split(b"\0")
+                    yield from records
+                    if len(pending) > 4 * _MAX_PATH + 100:
+                        raise ValueError("Git tree path exceeds size limit")
+                raise ValueError("git command timed out: ls-tree")
+            finally:
+                if process.poll() is None:
+                    process.kill()
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise ValueError("git command failed: ls-tree") from exc
+
+
+def _tree_records(root: Path, revision: str, *, approved: bool) -> Iterator[bytes]:
+    deadline = time.monotonic() + 60
+    if approved:
+        yield from _ls_tree(root, revision, "-rtz", [b".mentat"], deadline)
+        return
+
+    # ls-tree accepts literal paths but cannot exclude a subtree by pathspec.
+    with closing(_ls_tree(root, revision, "-z", [], deadline)) as roots:
+        scope = []
+        size = 0
+        for record in roots:
+            raw_path = record.split(b"\t", 1)[1]
+            if raw_path == b".mentat":
+                continue
+            if b"/" in raw_path:
+                raise ValueError("invalid Git root entry")
+            _git_path(raw_path)
+            pathspec = b":(literal)" + raw_path
+            weight = len(pathspec) + 9
+            if size + weight > 32_768:
+                yield from _ls_tree(root, revision, "-rtz", scope, deadline)
+                scope = []
+                size = 0
+            scope.append(pathspec)
+            size += weight
+        if scope:
+            yield from _ls_tree(root, revision, "-rtz", scope, deadline)
+
+
+def _git_path(raw_path: bytes) -> str:
+    try:
+        return _path(raw_path.decode("utf-8"))
+    except UnicodeError as exc:
+        raise ValueError("non-UTF-8 tree path") from exc
 
 
 def _root(repo: Path) -> Path:
@@ -228,42 +278,48 @@ def _revision(root: Path, rev: str) -> str:
     return result
 
 
-def _tree(root: Path, revision: str, *, approved: bool) -> dict[str, tuple[int, bytes]]:
-    scope = ["--", ".mentat"] if approved else []
-    listing = _git(root, "ls-tree", "-rtz", "--full-tree", revision, *scope, limit=2_000_000)
-    entries = []
-    paths = set()
-    for record in listing.split(b"\0"):
-        if not record:
-            continue
+def _tree_entries(records: Iterable[bytes]) -> dict[str, tuple[int, bytes]]:
+    entries = {}
+    # Git lists each tree before its children and orders siblings by name.
+    parents = [(b"", b"")]
+    for record in records:
         meta, raw_path = record.split(b"\t", 1)
-        if not approved and raw_path.split(b"/", 1)[0] == b".mentat":
-            continue
         mode, kind, oid = meta.split(b" ")
-        try:
-            path = _path(raw_path.decode("utf-8"))
-        except UnicodeError as exc:
-            raise ValueError("non-UTF-8 tree path") from exc
-        if path in paths:
+        path = _git_path(raw_path)
+        parent, _, name = raw_path.rpartition(b"/")
+        while len(parents) > 1 and parents[-1][0] != parent:
+            parents.pop()
+        directory = mode == b"040000" and kind == b"tree"
+        order = name + b"/" if directory else name
+        if path in entries or order == parents[-1][1]:
             raise ValueError(f"duplicate Git tree path: {path}")
-        paths.add(path)
-        if mode == b"040000" and kind == b"tree":
+        if parent != parents[-1][0] or order < parents[-1][1]:
+            raise ValueError(f"invalid Git tree order: {path}")
+        parents[-1] = (parent, order)
+        if directory:
+            parents.append((raw_path, b""))
             continue
         if mode not in (b"100644", b"100755") or kind != b"blob":
             raise ValueError(f"unsupported Git entry: {path}")
-        entries.append((path, int(mode, 8) & 0o777, oid))
-    if len(entries) > _MAX_FILES:
-        raise ValueError("too many files")
+        entries[path] = (int(mode, 8) & 0o777, oid)
+        if len(entries) > _MAX_FILES:
+            raise ValueError("too many files")
+    return entries
+
+
+def _tree(root: Path, revision: str, *, approved: bool) -> dict[str, tuple[int, bytes]]:
+    with closing(_tree_records(root, revision, approved=approved)) as listing:
+        entries = _tree_entries(listing)
     if not entries:
         return {}
-    ids = b"".join(oid + b"\n" for _, _, oid in entries)
+    ids = b"".join(oid + b"\n" for _, oid in entries.values())
     headers = _git(
         root, "cat-file", "--batch-check=%(objectname) %(objecttype) %(objectsize)", data=ids
     ).splitlines()
     if len(headers) != len(entries):
         raise ValueError("incomplete Git objects")
     sizes = []
-    for (_, _, oid), header in zip(entries, headers, strict=True):
+    for (_, oid), header in zip(entries.values(), headers, strict=True):
         parts = header.split()
         if len(parts) != 3 or parts[0] != oid or parts[1] != b"blob" or not parts[2].isdigit():
             raise ValueError("invalid Git object")
@@ -273,7 +329,7 @@ def _tree(root: Path, revision: str, *, approved: bool) -> dict[str, tuple[int, 
     content = _git(root, "cat-file", "--batch", data=ids)
     offset = 0
     files = {}
-    for (path, mode, oid), size in zip(entries, sizes, strict=True):
+    for (path, (mode, oid)), size in zip(entries.items(), sizes, strict=True):
         header = oid + b" blob " + str(size).encode() + b"\n"
         if content[offset : offset + len(header)] != header:
             raise ValueError("invalid Git batch output")

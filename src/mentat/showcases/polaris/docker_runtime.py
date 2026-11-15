@@ -56,6 +56,42 @@ def _docker(context: str, *args: str, timeout: int = _TIMEOUT) -> tuple[int, byt
             process.wait()
 
 
+class _OOMKilled(RuntimeError):
+    pass
+
+
+def _container_state(context: str, name: str) -> dict:
+    inspect_code, raw = _docker(context, "inspect", "--format", "{{json .State}}", name, timeout=20)
+    if inspect_code:
+        raise RuntimeError("container did not finish normally")
+    try:
+        state = json.loads(raw)
+    except ValueError:
+        raise RuntimeError("container did not finish normally") from None
+    if isinstance(state, dict) and state.get("OOMKilled") is True:
+        raise _OOMKilled("container was OOM killed")
+    if (
+        not isinstance(state, dict)
+        or state.get("OOMKilled") is not False
+        or state.get("Error") != ""
+    ):
+        raise RuntimeError("container state could not be verified")
+    return state
+
+
+def _start(context: str, name: str, timeout: int) -> tuple[int, bytes]:
+    code, output = _docker(context, "start", "-a", name, timeout=timeout)
+    state = _container_state(context, name)
+    if (
+        state.get("Status") != "exited"
+        or type(state.get("ExitCode")) is not int
+        or state["ExitCode"] != code
+        or not 0 <= code <= 124
+    ):
+        raise RuntimeError("container did not finish normally")
+    return code, output
+
+
 def doctor(context: str) -> dict:
     try:
         _local_context(context)
@@ -185,11 +221,11 @@ def run_pytest(
     if not result["runtime"]["ok"]:
         return result
     name = None
-    created = False
+    create_attempted = False
     try:
         if len(test_source.encode()) > _MAX_OUTPUT:
             raise ValueError("test exceeds limit")
-        name = _name(run_id)
+        name = _name(run_id) + "-" + secrets.token_hex(6)
         with tempfile.TemporaryDirectory(prefix="mentat-") as temp:
             root = Path(temp)
             cli = root / "cli"
@@ -214,6 +250,7 @@ def run_pytest(
                 path.write_text(source, encoding="utf-8")
                 path.chmod(0o644)
                 support_paths.append(path)
+            create_attempted = True
             code, _ = _docker(
                 context,
                 "create",
@@ -254,7 +291,6 @@ def run_pytest(
             )
             if code:
                 return result
-            created = True
             if _docker(context, "cp", str(cli) + "/.", f"{name}:/opt/polaris/apache_polaris/cli/")[
                 0
             ]:
@@ -264,27 +300,29 @@ def run_pytest(
             for path in support_paths:
                 if _docker(context, "cp", str(path), f"{name}:/opt/{path.name}")[0]:
                     return result
-            code, _ = _docker(context, "start", "-a", name, timeout=120)
-            inspect_code, state = _docker(
-                context,
-                "inspect",
-                "--format",
-                "{{.State.Status}} {{.State.ExitCode}}",
-                name,
-                timeout=20,
-            )
-            if inspect_code or state.decode("ascii", errors="replace").strip() != f"exited {code}":
-                raise RuntimeError("container did not finish normally")
+            code, _ = _start(context, name, timeout=120)
             result["status"] = "pass" if code == 0 else "violation" if code == 1 else "incomplete"
             result["checks"].append({"name": "pytest", "status": result["status"]})
-    except (ValueError, RuntimeError, OSError):
-        pass
+    except (ValueError, RuntimeError, OSError) as exc:
+        if isinstance(exc, _OOMKilled):
+            result["checks"].append(
+                {"name": "pytest", "status": "incomplete", "detail": "Container was OOM killed"}
+            )
     finally:
-        if created and name:
+        if create_attempted and name:
             try:
-                _docker(context, "rm", "-f", name, timeout=20)
-            except (ValueError, RuntimeError):
-                pass
+                cleanup_ok = _docker(context, "rm", "-f", name, timeout=20)[0] == 0
+            except (ValueError, RuntimeError, OSError):
+                cleanup_ok = False
+            if not cleanup_ok:
+                result["status"] = "incomplete"
+                result["checks"].append(
+                    {
+                        "name": "cleanup",
+                        "status": "incomplete",
+                        "detail": "Container could not be removed",
+                    }
+                )
     return result
 
 
@@ -387,21 +425,7 @@ def run_case(
                     source_arg = str(source) + ("/." if source == cli else "")
                     if _docker(context, "cp", source_arg, f"{name}:{target}")[0]:
                         raise RuntimeError("container copy failed")
-                code, output = _docker(context, "start", "-a", name, timeout=timeout)
-                inspect_code, state = _docker(
-                    context,
-                    "inspect",
-                    "--format",
-                    "{{.State.Status}} {{.State.ExitCode}}",
-                    name,
-                    timeout=20,
-                )
-                if (
-                    inspect_code
-                    or state.decode("ascii", errors="replace").strip() != f"exited {code}"
-                ):
-                    raise RuntimeError("container did not finish normally")
-                return code, output
+                return _start(context, name, timeout=timeout)
 
             def oracle_call(index: int, action: str) -> bytes:
                 name = f"{prefix}-oracle-{index}-{action}-{len(containers)}"
@@ -519,7 +543,7 @@ def run_case(
                 ]
                 if action == "apply":
                     args.append("/opt/export.yaml")
-                return client(
+                code, output = client(
                     f"{prefix}-candidate-{index}-{action}",
                     networks[index],
                     passwords[index],
@@ -527,6 +551,9 @@ def run_case(
                     list(copies),
                     candidate=True,
                 )
+                if _container_state(context, f"{prefix}-server-{index}").get("Status") != "running":
+                    raise RuntimeError("Polaris server stopped")
+                return code, output
 
             phase = "export"
             code, exported = candidate(0, "export")
@@ -534,6 +561,7 @@ def run_case(
                 result["checks"].append(
                     {
                         "id": "namespace.identity",
+                        "claim": "namespace.identity",
                         "stage": phase,
                         "status": "violation",
                         "detail": "Candidate export failed",
@@ -550,6 +578,7 @@ def run_case(
                 result["checks"].append(
                     {
                         "id": "namespace.identity",
+                        "claim": "namespace.identity",
                         "stage": phase,
                         "status": "violation",
                         "detail": "Candidate export was invalid or unsafe",
@@ -566,6 +595,7 @@ def run_case(
                 result["checks"].append(
                     {
                         "id": "namespace.identity",
+                        "claim": "namespace.identity",
                         "stage": phase,
                         "status": "violation",
                         "detail": "Candidate apply failed",
@@ -582,6 +612,7 @@ def run_case(
                 result["checks"].append(
                     {
                         "id": "namespace.identity",
+                        "claim": "namespace.identity",
                         "stage": phase,
                         "status": "violation",
                         "detail": "Candidate re-export failed",
@@ -594,6 +625,7 @@ def run_case(
                 result["checks"].append(
                     {
                         "id": "namespace.identity",
+                        "claim": "namespace.identity",
                         "stage": phase,
                         "status": "violation",
                         "detail": "Candidate re-export was invalid or unsafe",
@@ -604,13 +636,17 @@ def run_case(
             phase = "destination after re-export"
             final_source = json.loads(oracle_call(1, "read"))
             result["checks"].extend(compare(case, final_source, selected_properties, phase))
-    except (ValueError, RuntimeError, OSError, TypeError, KeyError):
+    except (ValueError, RuntimeError, OSError, TypeError, KeyError) as exc:
         result["checks"].append(
             {
                 "id": "namespace.identity",
                 "stage": phase,
                 "status": "incomplete",
-                "detail": "Replay could not complete this stage",
+                "detail": (
+                    "Container was OOM killed"
+                    if isinstance(exc, _OOMKilled)
+                    else "Replay could not complete this stage"
+                ),
             }
         )
     finally:
@@ -640,8 +676,8 @@ def run_case(
         result["status"] = (
             "violation"
             if "violation" in statuses
-            else "incomplete"
-            if not statuses or statuses != {"pass"}
             else "pass"
+            if statuses == {"pass"}
+            else "incomplete"
         )
     return result

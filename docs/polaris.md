@@ -34,7 +34,9 @@ PASSING_RUN='paste the passing run ID here'
 uv run --locked --extra polaris mentat showcase polaris accept "$PASSING_RUN"
 ```
 
-The fixture gives `["finance.us"]` and `["finance", "us"]` distinct values. The oracle reads Polaris independently over REST, and the destination receives the source CLI's exact export bytes. The evidence records per-claim path and property differences. A supported violation that the native regression reproduces also produces a pytest file. Copy it into `client/python/tests/` in the repair workspace and run its header command against the failing and repaired revisions.
+The fixture gives `["finance.us"]` and `["finance", "us"]` distinct values. The oracle reads Polaris independently over REST, and the destination receives the source CLI's exact export bytes. The evidence records per-claim differences and command failures. Mentat attempts native reproduction for supported claim violations, including failures during export, apply, and re-export. A reproduced failure with confirmed container cleanup produces a pytest file. Copy it into `client/python/tests/` in the repair workspace and run its header command against the failing and repaired revisions.
+
+An out-of-memory kill, a signal exit, or a stopped server leaves the affected replay stage incomplete. If native pytest cannot confirm container removal, its result is incomplete.
 
 For agents, `--json` emits a versioned result. Exit `0` means complete success, `1` means a confirmed violation, and `2` means verification is incomplete or the input is invalid. Z3 and Lean cover the model. The live oracle and native regression cover the reported fixtures and revisions. A contract or verifier change requires fresh approval. SQLite caches only Z3 success, and `--fresh` bypasses that cache.
 

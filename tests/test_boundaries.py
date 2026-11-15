@@ -324,7 +324,7 @@ def test_replay_stages_owner_only_oracle_as_readable_in_container(tmp_path, monk
             staged_oracles.append((staged.read_bytes(), staged.stat().st_mode & 0o777))
             return 1, b""  # Stop once we've inspected the actual source of docker cp.
         if args[0] == "inspect":
-            return 0, b"exited 0"
+            return 0, b'{"Status":"exited","ExitCode":0,"OOMKilled":false,"Error":""}'
         return 0, b""
 
     monkeypatch.setattr(docker_runtime, "_docker", docker)

@@ -265,6 +265,18 @@ def test_host_candidate_cannot_shadow_command_through_relative_path(
         ("(declare-const x Int)\n(assert (> x 0))", "(assert (<= x 0))", "unsat", "pass"),
         ("(declare-const x Int)\n(assert (> x 0))", "(assert (> x 1))", "unsat", "violation"),
         ("(assert false)", "(assert false)", "unsat", "incomplete"),
+        (
+            "(declare-datatype Color ((red) (blue)))\n(declare-const c Color)\n(assert (= c red))",
+            "(assert (= c blue))",
+            "unsat",
+            "pass",
+        ),
+        (
+            "(declare-datatypes ((Color 0)) (((red) (blue))))\n(declare-const c Color)\n(assert (= c red))",
+            "(assert (= c blue))",
+            "unsat",
+            "pass",
+        ),
         ("(invalid command)", None, "sat", "incomplete"),
         ("(assert! false)", None, "sat", "incomplete"),
         ("(assert.foo false)", None, "sat", "incomplete"),
@@ -478,3 +490,122 @@ def test_lean_approval_discloses_host_execution_even_for_docker(
     assert len(decisions) == 1
     assert "docker" in decisions[0].lower()
     assert "lean" in decisions[0].lower() and "host" in decisions[0].lower()
+
+
+@pytest.mark.parametrize("excluded", [True, False])
+def test_snapshot_large_git_listing_respects_selection(project_repo, excluded):
+    repo, _, _ = project_repo
+
+    def plumbing(command, data):
+        return subprocess.run(
+            ["git", "-C", str(repo), command],
+            input=data,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+
+    blob = subprocess.run(
+        ["git", "-C", str(repo), "hash-object", "-w", "--stdin"],
+        input="x",
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    count = 100 if excluded else 22
+    leaf = plumbing(
+        "mktree", "".join(f"100644 blob {blob}\tf{i:03d}{'x' * 235}\n" for i in range(count))
+    )
+    dirs = 100 if excluded else 185
+    subtree = plumbing(
+        "mktree",
+        "".join(
+            f"040000 tree {leaf}\td{i:03d}{'y' * (0 if excluded else 245)}\n" for i in range(dirs)
+        ),
+    )
+    tree = (
+        plumbing("mktree", f"040000 tree {subtree}\t.mentat\n100644 blob {blob}\tselected.txt\n")
+        if excluded
+        else subtree
+    )
+    rev = git(repo, "commit-tree", tree, "-m", "large listing")
+    captured = snapshot(repo, rev)
+    if excluded:
+        assert captured.files == {"selected.txt": (0o644, b"x")}
+    else:
+        assert len(captured.files) == 4070
+        assert all(value[1] == b"x" for value in captured.files.values())
+
+
+def test_snapshot_excludes_only_exact_root_mentat_scope(project_repo):
+    repo, base, _ = project_repo
+    blob = git(repo, "rev-parse", f"{base}:candidate.txt")
+    approved_tree = git(repo, "rev-parse", f"{base}:.mentat")
+    leaf = subprocess.run(
+        ["git", "-C", str(repo), "mktree"],
+        input=f"100644 blob {blob}\tfile.txt\n",
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    nested = subprocess.run(
+        ["git", "-C", str(repo), "mktree"],
+        input=f"040000 tree {leaf}\t.mentat\n",
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    tree = subprocess.run(
+        ["git", "-C", str(repo), "mktree"],
+        input=(
+            f"040000 tree {approved_tree}\t.mentat\n"
+            f"040000 tree {leaf}\t.Mentat\n"
+            f"040000 tree {nested}\tnested\n"
+            f"100644 blob {blob}\t:(literal)*\n"
+        ),
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    rev = git(repo, "commit-tree", tree, "-m", "case-sensitive scope")
+    assert set(snapshot(repo, rev).files) == {
+        ".Mentat/file.txt",
+        "nested/.mentat/file.txt",
+        ":(literal)*",
+    }
+    assert load_project(repo, rev, "host").files["check.py"] == b"print('ok')\n"
+
+
+def test_snapshot_does_not_descend_into_missing_candidate_checks(project_repo):
+    repo, base, _ = project_repo
+    blob = git(repo, "rev-parse", f"{base}:candidate.txt")
+    tree = subprocess.run(
+        ["git", "-C", str(repo), "mktree", "--missing"],
+        input=f"040000 tree {'1' * len(blob)}\t.mentat\n100644 blob {blob}\tcandidate.txt\n",
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    rev = git(repo, "commit-tree", tree, "-m", "missing candidate checks")
+    assert snapshot(repo, rev).files == snapshot(repo, base).files
+    with pytest.raises(ValueError, match="ls-tree"):
+        load_project(repo, rev, "host")
+
+
+def test_snapshot_preserves_committed_unicode_path_spelling(project_repo):
+    repo, base, _ = project_repo
+    git(repo, "config", "core.precomposeUnicode", "true")
+    blob = git(repo, "rev-parse", f"{base}:candidate.txt").encode()
+    paths = ("Café", "Cafe\u0301")
+    tree = (
+        subprocess.check_output(
+            ["git", "-C", str(repo), "mktree", "-z"],
+            input=b"".join(
+                b"100644 blob " + blob + b"\t" + path.encode() + b"\0" for path in paths
+            ),
+        )
+        .decode()
+        .strip()
+    )
+    rev = git(repo, "commit-tree", tree, "-m", "stored Unicode names")
+    assert set(snapshot(repo, rev).files) == set(paths)

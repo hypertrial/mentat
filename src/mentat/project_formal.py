@@ -201,6 +201,8 @@ def _run_z3(check, files, tools):
         allowed = {
             "set-logic",
             "declare-const",
+            "declare-datatype",
+            "declare-datatypes",
             "declare-fun",
             "declare-sort",
             "define-fun",
