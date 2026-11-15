@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "nested-and-literal-dot",
+      "namespaces": [
+        {"path": ["finance"], "properties": {"mentat.label": "Finance"}},
+        {"path": ["finance", "us"], "properties": {"mentat.label": "Finance US", "mentat.note": "nested"}},
+        {"path": ["finance.us"], "properties": {"mentat.label": "Finance dot US", "mentat.note": "literal"}}
+      ]
+    }
+  ]
+}

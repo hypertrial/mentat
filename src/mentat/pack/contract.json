@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "selected_properties": ["mentat.label", "mentat.note"],
+  "claims": ["namespace.identity", "namespace.properties"],
+  "assumptions": ["distinct paths", "complete snapshot", "successful restore"],
+  "checks": [
+    {"id": "legacy-collision", "claim": "namespace.identity", "kind": "z3", "required": "sat", "source": "formal.py:run_z3"},
+    {"id": "list-identity", "claim": "namespace.identity", "kind": "z3", "required": "unsat and nonvacuous", "source": "formal.py:run_z3"},
+    {"id": "restore-lookup", "claim": "namespace.properties", "kind": "lean", "required": "kernel checked and axioms audited", "source": "lean/Main.lean:restore_lookup"}
+  ]
+}
