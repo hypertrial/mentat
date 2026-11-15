@@ -20,7 +20,7 @@ from .evaluation import FIXED
 from .evaluation import evaluate as evaluate_candidates
 from .formal import run_formal
 from .regression import render_regression
-from .replay import run_case, snapshot
+from .replay import _git_env, run_case, snapshot
 from .spec import PACK, load_cases, load_spec
 
 app = typer.Typer(no_args_is_help=True, pretty_exceptions_enable=False)
@@ -132,6 +132,7 @@ def approve_spec(ctx: typer.Context, digest: str) -> None:
 def candidate_repo(path: Path, state: Path) -> Path:
     git_root = subprocess.run(
         ["git", "-C", str(path.resolve()), "rev-parse", "--show-toplevel"],
+        env=_git_env(),
         capture_output=True,
         check=True,
         timeout=10,

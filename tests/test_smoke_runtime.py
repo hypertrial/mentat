@@ -66,15 +66,35 @@ def test_lean_check_disables_lake_toolchain_override(monkeypatch):
     monkeypatch.setenv("LEAN_SYSROOT", "/alternate")
 
     def run(args, **kwargs):
-        if args[0] == "lean":
+        assert "LAKE_OVERRIDE_LEAN" not in kwargs["env"]
+        if args[-1] == "--version":
             output = "Lean (version 4.31.0, test)"
         else:
-            assert "LAKE_OVERRIDE_LEAN" not in kwargs["env"]
             output = "'restore_lookup' does not depend on any axioms"
         return subprocess.CompletedProcess(args, 0, stdout=output, stderr="")
 
     monkeypatch.setattr(formal.subprocess, "run", run)
     assert formal.run_lean(PACK / "lean")[0]["status"] == "pass"
+
+
+def test_lean_check_rejects_wrong_lake_compiler_before_build(monkeypatch):
+    calls = []
+
+    def run(args, **kwargs):
+        calls.append(args)
+        output = {
+            ("lean", "--version"): "Lean (version 4.31.0, test)",
+            ("lake", "env", "lean", "--version"): "Lean (version 4.30.0, test)",
+            ("lake", "build"): "",
+            ("lake", "env", "lean", "Check.lean"): "'restore_lookup' does not depend on any axioms",
+        }[tuple(args)]
+        return subprocess.CompletedProcess(args, 0, stdout=output, stderr="")
+
+    monkeypatch.setattr(formal.subprocess, "run", run)
+    result = formal.run_lean(PACK / "lean")[0]
+    assert result["status"] == "incomplete"
+    assert "4.31.0" in result["detail"]
+    assert ["lake", "build"] not in calls
 
 
 def test_cleanup_checks_network_after_container_query_error(monkeypatch):

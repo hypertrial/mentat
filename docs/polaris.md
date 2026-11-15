@@ -4,7 +4,7 @@ Apache Polaris PR #5292 fixed a configuration round-trip bug. The Python setup C
 
 ## Prepare the showcase
 
-Use an Apple Silicon Mac with uv, the Docker CLI, Colima, and Lean 4.31.0 with Lake. Run these commands from the Mentat clone. Put `lean` and `lake` on `PATH`. With elan, install `leanprover/lean4:v4.31.0` and set `ELAN_TOOLCHAIN=leanprover/lean4:v4.31.0` for the Mentat session.
+Use an Apple Silicon Mac with uv, the Docker CLI, Colima, and Lean 4.31.0 with Lake. Run these commands from the Mentat clone. Put `lean` and `lake` on `PATH`. Mentat checks the compiler selected by Lake before building the proof. With elan, install `leanprover/lean4:v4.31.0` and set `ELAN_TOOLCHAIN=leanprover/lean4:v4.31.0` for the Mentat session.
 
 ```sh
 uv sync --locked --extra polaris
@@ -18,6 +18,8 @@ The dedicated `colima-mentat` context runs two disposable Polaris 1.8.0 ARM64 co
 ## Check and repair a Polaris change
 
 Review the contract shown by `spec check` and confirm it from an interactive terminal. The default state directory is `~/.local/state/mentat`. Use `--state` for a separate operator-owned directory outside the candidate clone. Use `--spec` to check an alternate draft from the trusted workspace. The FAS and its fixture must agree on the selected properties. Each namespace can carry up to 32 selected properties. Mentat checks the generated `location` separately.
+
+Mentat resolves `--repo` and reads committed inputs from that checkout, ignoring inherited Git overrides such as `GIT_DIR` and `GIT_WORK_TREE`.
 
 ```sh
 CONTRACT_DIGEST='paste the spec check digest here'

@@ -1,6 +1,5 @@
 """Founder-run evaluation against frozen fixtures and known controls."""
 
-import os
 import subprocess
 from dataclasses import replace
 from pathlib import Path
@@ -10,7 +9,7 @@ from mentat import evidence
 
 from . import docker_runtime
 from .regression import render_regression
-from .replay import Snapshot, run_case, snapshot
+from .replay import Snapshot, _git_env, run_case, snapshot
 
 BEFORE = "7bb319e281225b2b63c78f1cbc87726a1c9a7ece"
 FIXED = "ba152c04f7f985bbaeb487a55ef442df52321afe"
@@ -95,7 +94,7 @@ def _upstream_test(repo: Path, name: str) -> str:
             "show",
             f"{BEFORE}:client/python/tests/{name}",
         ],
-        env={**os.environ, "GIT_NO_LAZY_FETCH": "1"},
+        env=_git_env(),
         capture_output=True,
         check=True,
         timeout=10,

@@ -4,7 +4,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from mentat.showcases.polaris import replay
+from mentat.showcases.polaris import evaluation, replay
+from mentat.showcases.polaris.cli import candidate_repo
 
 
 def git(repo, *args):
@@ -113,3 +114,24 @@ def test_git_kills_child_when_selector_registration_fails(tmp_path, monkeypatch)
     with pytest.raises(OSError, match="cannot register"):
         replay._git(tmp_path, "ls-tree", "HEAD", limit=128)
     process.kill.assert_called_once_with()
+
+
+def test_polaris_git_reads_use_selected_checkout(tmp_path, monkeypatch):
+    repo = tmp_path / "polaris"
+    other = tmp_path / "other"
+    for path in (repo, other):
+        path.mkdir()
+        git(path, "init", "-q")
+    git(repo, "config", "user.email", "test@example.com")
+    git(repo, "config", "user.name", "Test")
+    baseline = repo / "client/python/tests/test_setup_command.py"
+    baseline.parent.mkdir(parents=True)
+    baseline.write_text("# Frozen test\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-qm", "frozen tests")
+    monkeypatch.setattr(evaluation, "BEFORE", git(repo, "rev-parse", "HEAD"))
+    monkeypatch.setenv("GIT_DIR", str(other / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(other))
+
+    assert candidate_repo(repo, tmp_path / "state") == repo.resolve()
+    assert evaluation._upstream_test(repo, baseline.name) == "# Frozen test\n"
