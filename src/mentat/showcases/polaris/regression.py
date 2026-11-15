@@ -1,6 +1,6 @@
 """Render a native Polaris regression for a setup namespace round trip."""
 
-from mentat.spec import Case
+from .spec import Case
 
 
 def render_regression(case: Case, selected_properties: tuple[str, ...]) -> str:

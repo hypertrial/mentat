@@ -12,6 +12,8 @@ import tempfile
 import time
 from pathlib import Path
 
+from mentat.colima import validate_colima as _local_context
+
 _IMAGE = "mentat-trusted-polaris-cli:1.8.0"
 _SERVER = "apache/polaris@sha256:74e6416c75f24563fc62f4ed52699d4fb872741b6a3e0af77fdc551b4ee72fce"
 _RUNTIME = Path(__file__).parent / "pack" / "runtime"
@@ -95,49 +97,6 @@ def doctor(context: str) -> dict:
         }
     except (RuntimeError, ValueError, OSError, subprocess.SubprocessError):
         return {"ok": False, "context": context, "client_image": None}
-
-
-def _local_context(context: str) -> None:
-    if not re.fullmatch(r"colima-[A-Za-z0-9_-]+", context):
-        raise ValueError("Mentat requires a named, dedicated Colima profile")
-    profile = context.removeprefix("colima-")
-    code, endpoint = _docker(
-        context,
-        "context",
-        "inspect",
-        context,
-        "--format",
-        '{{(index .Endpoints "docker").Host}}',
-        timeout=10,
-    )
-    if code or not endpoint.strip().startswith(b"unix:///"):
-        raise ValueError("Mentat requires a dedicated local Unix-socket Docker context")
-    status = subprocess.run(
-        ["colima", "status", profile, "--json"],
-        capture_output=True,
-        timeout=10,
-        check=True,
-    )
-    colima = json.loads(status.stdout)
-    if colima.get("docker_socket", "").encode() != endpoint.strip():
-        raise ValueError("Docker context does not match the selected Colima profile")
-    mounts = subprocess.run(
-        [
-            "colima",
-            "--profile",
-            profile,
-            "ssh",
-            "--",
-            "sh",
-            "-c",
-            'findmnt -rn -t virtiofs,9p,fuse.sshfs >/dev/null; test "$?" -eq 1 && printf unshared',
-        ],
-        capture_output=True,
-        timeout=15,
-        check=True,
-    )
-    if mounts.stdout != b"unshared":
-        raise ValueError("The dedicated Colima VM must have host mounts disabled")
 
 
 def _recipe() -> str:

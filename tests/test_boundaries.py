@@ -8,12 +8,13 @@ from pydantic import ValidationError
 from typer.testing import CliRunner
 
 from mentat.cli import app
-from mentat.docker_runtime import _stage_cli
-from mentat.evaluation import BEFORE, FIXED, _control, evaluate
-from mentat.evidence import approval, model_checks, pack_digest, read_run, save_run
-from mentat.formal import run_z3
-from mentat.replay import Snapshot, snapshot
-from mentat.spec import PACK, load_cases, load_spec
+from mentat.evidence import read_run, save_run
+from mentat.showcases.polaris.docker_runtime import _stage_cli
+from mentat.showcases.polaris.evaluation import BEFORE, FIXED, _control, evaluate
+from mentat.showcases.polaris.formal import run_z3
+from mentat.showcases.polaris.model_evidence import approval, model_checks, pack_digest
+from mentat.showcases.polaris.replay import Snapshot, snapshot
+from mentat.showcases.polaris.spec import PACK, load_cases, load_spec
 
 
 @pytest.fixture
@@ -44,7 +45,9 @@ def test_duplicate_json_keys_are_rejected_at_any_depth(tmp_path, spec):
 def test_spec_check_reports_invalid_json_limits(tmp_path, content, detail):
     path = tmp_path / "contract.json"
     path.write_bytes(content)
-    result = CliRunner().invoke(app, ["--spec", str(path), "spec", "check", "--json"])
+    result = CliRunner().invoke(
+        app, ["showcase", "polaris", "--spec", str(path), "spec", "check", "--json"]
+    )
     assert result.exit_code == 2
     record = json.loads(result.stdout)
     assert record["status"] == "incomplete"
@@ -118,7 +121,19 @@ def test_verify_reports_deeply_nested_approval_as_invalid(tmp_path):
     state.mkdir(mode=0o700)
     (state / "approval.json").write_bytes(b'{"extra":' + b"[" * 100_000 + b"]" * 100_000 + b"}")
     result = CliRunner().invoke(
-        app, ["--state", str(state), "verify", "--repo", str(tmp_path), "--rev", "0" * 40, "--json"]
+        app,
+        [
+            "--state",
+            str(state),
+            "showcase",
+            "polaris",
+            "verify",
+            "--repo",
+            str(tmp_path),
+            "--rev",
+            "0" * 40,
+            "--json",
+        ],
     )
     assert result.exit_code == 2
     record = json.loads(result.stdout)
@@ -163,8 +178,8 @@ def test_model_cache_does_not_reuse_other_contract_or_failure(tmp_path, spec, mo
         calls.append(1)
         return [{"kind": "z3", "status": "violation" if len(calls) == 1 else "pass"}]
 
-    monkeypatch.setattr("mentat.evidence.run_z3", solver)
-    monkeypatch.setattr("mentat.evidence.run_lean", lambda _: [])
+    monkeypatch.setattr("mentat.showcases.polaris.model_evidence.run_z3", solver)
+    monkeypatch.setattr("mentat.showcases.polaris.model_evidence.run_lean", lambda _: [])
     assert model_checks(tmp_path, spec, "first", fresh=False)[0]["status"] == "violation"
     assert model_checks(tmp_path, spec, "first", fresh=False)[0]["status"] == "pass"
     assert model_checks(tmp_path, spec, "second", fresh=False)[0].get("cached") is not True
@@ -173,7 +188,7 @@ def test_model_cache_does_not_reuse_other_contract_or_failure(tmp_path, spec, mo
 
 @pytest.mark.parametrize("broken", [None, "[]", "partial"])
 def test_invalid_solver_cache_cannot_skip_a_required_check(tmp_path, spec, monkeypatch, broken):
-    monkeypatch.setattr("mentat.evidence.run_lean", lambda _: [])
+    monkeypatch.setattr("mentat.showcases.polaris.model_evidence.run_lean", lambda _: [])
     first = model_checks(tmp_path, spec, "first", fresh=False)
     assert model_checks(tmp_path, spec, "first", fresh=False)[0]["cached"] is True
     if broken == "partial":
@@ -250,12 +265,14 @@ def test_evaluation_counts_each_baseline_variant_once(tmp_path, monkeypatch, spe
         return {"status": "violation"} if run_id.endswith("upstream-pytest") else outcome(run_id)
 
     monkeypatch.setattr(
-        "mentat.evaluation.snapshot",
+        "mentat.showcases.polaris.evaluation.snapshot",
         lambda repo, rev: Snapshot(rev, rev, (("command/setup.py", b"# sample\n"),)),
     )
-    monkeypatch.setattr("mentat.evaluation._upstream_test", lambda *args: "")
-    monkeypatch.setattr("mentat.evaluation.docker_runtime.run_pytest", pytest_run)
-    monkeypatch.setattr("mentat.evaluation.run_case", lambda *args: outcome(args[-1]))
+    monkeypatch.setattr("mentat.showcases.polaris.evaluation._upstream_test", lambda *args: "")
+    monkeypatch.setattr("mentat.showcases.polaris.evaluation.docker_runtime.run_pytest", pytest_run)
+    monkeypatch.setattr(
+        "mentat.showcases.polaris.evaluation.run_case", lambda *args: outcome(args[-1])
+    )
     public = load_cases(PACK / "public.json", spec)[0]
     result = evaluate(tmp_path, FIXED, "test-context", spec, [public, public], public, "sample")
 
@@ -341,7 +358,7 @@ def export_yaml(namespaces):
     ],
 )
 def test_export_rejects_untrusted_yaml(raw, spec):
-    from mentat.oracle import validate_export
+    from mentat.showcases.polaris.oracle import validate_export
 
     with pytest.raises(ValueError):
         validate_export(raw, spec.selected_properties)
@@ -358,14 +375,14 @@ def test_export_rejects_untrusted_yaml(raw, spec):
     ],
 )
 def test_export_rejects_invalid_or_unselected_properties(namespace, spec):
-    from mentat.oracle import validate_export
+    from mentat.showcases.polaris.oracle import validate_export
 
     with pytest.raises(ValueError):
         validate_export(export_yaml([namespace]), spec.selected_properties)
 
 
 def test_export_property_limit_excludes_generated_location():
-    from mentat.oracle import validate_export
+    from mentat.showcases.polaris.oracle import validate_export
 
     keys = tuple(f"field{i}" for i in range(32))
     user_properties = dict.fromkeys(keys, "value")
@@ -380,7 +397,7 @@ def test_export_property_limit_excludes_generated_location():
 
 
 def test_comparison_detects_missing_empty_duplicate_and_path_collision(spec):
-    from mentat.oracle import compare, validate_export
+    from mentat.showcases.polaris.oracle import compare, validate_export
 
     case = load_cases(PACK / "public.json", spec)[0]
     entries = [{"name": list(ns.path), "properties": dict(ns.properties)} for ns in case.namespaces]

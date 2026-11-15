@@ -6,7 +6,9 @@ from dataclasses import replace
 from pathlib import Path
 from time import monotonic
 
-from . import docker_runtime, evidence
+from mentat import evidence
+
+from . import docker_runtime
 from .regression import render_regression
 from .replay import Snapshot, run_case, snapshot
 

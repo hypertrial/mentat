@@ -1,16 +1,18 @@
 [project]
 name = "mentat"
-version = "0.1.0"
-description = "Specification-driven verification for Polaris setup round trips"
+version = "0.2.0"
+description = "Verify Git commits against approved project contracts"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "pydantic>=2.12,<3",
-    "pyyaml>=6.0.3,<7",
     "rich>=14,<16",
     "typer>=0.20,<1",
     "z3-solver>=4.15,<5",
 ]
+
+[project.optional-dependencies]
+polaris = ["pyyaml>=6.0.3,<7"]
 
 [project.scripts]
 mentat = "mentat.cli:app"

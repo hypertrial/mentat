@@ -1,1 +1,1 @@
-"""Specification-driven verification of Polaris setup round trips."""
+"""Specification-driven verification of changes in Git repositories."""

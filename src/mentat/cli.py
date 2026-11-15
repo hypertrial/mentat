@@ -1,385 +1,269 @@
-"""Local specification and verification commands."""
+"""Verify a Git commit against a separately approved project contract."""
 
-import json
 import os
 import shlex
 import shutil
 import subprocess
-import sys
-import tempfile
 from pathlib import Path
-from time import monotonic
+from typing import Annotated, Literal
 from uuid import uuid4
 
 import typer
 
-from . import docker_runtime, evidence
-from .evaluation import FIXED
-from .evaluation import evaluate as evaluate_candidates
-from .regression import render_regression
-from .replay import run_case, snapshot
-from .spec import PACK, load_cases, load_spec
+from . import evidence
+from .command import emit, finish, operator_confirm
+from .project import Project, load_project, snapshot
+from .project_formal import run_formal, tool_info
+from .runner import run_behavior, runner_info
+from .showcases.polaris.cli import app as polaris_app
 
 app = typer.Typer(no_args_is_help=True, pretty_exceptions_enable=False)
 spec_app = typer.Typer(no_args_is_help=True)
 evidence_app = typer.Typer(no_args_is_help=True)
-app.add_typer(spec_app, name="spec")
-app.add_typer(evidence_app, name="evidence")
+showcase_app = typer.Typer(no_args_is_help=True)
+app.add_typer(spec_app, name="spec", help="Review and approve a project contract.")
+app.add_typer(evidence_app, name="evidence", help="Inspect and export run evidence.")
+app.add_typer(showcase_app, name="showcase", help="Try Mentat on a real project.")
+showcase_app.add_typer(polaris_app, name="polaris", help="Replay a Polaris configuration bug.")
+
+Repo = Annotated[Path, typer.Option(exists=True, file_okay=False, help="Local Git repository.")]
+Base = Annotated[str, typer.Option(help="Full commit ID containing the approved contract.")]
+Runner = Annotated[
+    Literal["docker", "host"], typer.Option(help="Execution mode to approve or use.")
+]
+JsonOutput = Annotated[bool, typer.Option("--json", help="Emit machine-readable JSON.")]
+_USER_ERRORS = (OSError, ValueError, subprocess.SubprocessError)
 
 
 @app.callback()
 def configure(
     ctx: typer.Context,
-    spec: Path = typer.Option(PACK / "contract.json", "--spec", envvar="MENTAT_SPEC"),
-    state: Path | None = typer.Option(None, "--state", envvar="MENTAT_STATE"),
-    docker_context: str = typer.Option(
-        "colima-mentat", "--docker-context", envvar="MENTAT_DOCKER_CONTEXT"
-    ),
+    state: Annotated[Path | None, typer.Option("--state", envvar="MENTAT_STATE")] = None,
+    docker_context: Annotated[
+        str | None, typer.Option("--docker-context", envvar="MENTAT_DOCKER_CONTEXT")
+    ] = None,
 ) -> None:
     ctx.obj = {
-        "spec": spec.expanduser().resolve(),
         "state": state
         or Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "mentat",
         "docker": docker_context,
     }
 
 
-def emit(result: dict, output_json: bool) -> None:
-    if output_json:
-        typer.echo(evidence.json_bytes({"schema_version": 1, **result}).decode().rstrip())
-        return
-    title = result.get("status", "pass" if result.get("ok") else "incomplete")
-    typer.echo(f"Mentat {title}")
-    for key in ("detail", "context", "contract_digest", "run_id", "bundle", "next_action"):
-        if result.get(key):
-            typer.echo(f"{key.replace('_', ' ')}  {result[key]}")
-    for check in result.get("model_checks", []):
-        typer.echo(f"{check['kind']}  {check['status']}  {check['detail']}")
-        if check.get("witness"):
-            typer.echo(json.dumps(check["witness"], ensure_ascii=True, sort_keys=True))
-    for case in result.get("cases", []):
-        typer.echo(f"{case['case_id']}  {case['status']}")
-        for check in case.get("checks", []):
-            if check.get("status") != "pass":
-                typer.echo(f"  {check.get('detail', check.get('id', 'check'))}")
-    for method, counts in result.get("counts", {}).items():
-        typer.echo(f"{method}  {json.dumps(counts, sort_keys=True)}")
+def _scope(project: Project) -> dict:
+    return {
+        "repo": str(project.root),
+        "base": project.base,
+        "runner": project.runner,
+        "contract_digest": project.fingerprint,
+    }
 
 
-def finish(result: dict, output_json: bool) -> None:
-    emit(result, output_json)
-    code = {"pass": 0, "violation": 1, "incomplete": 2}[result["status"]]
-    if code:
-        raise typer.Exit(code)
+def _state(ctx: typer.Context, project: Project) -> Path:
+    state = ctx.obj["state"].expanduser().resolve()
+    if state.is_relative_to(project.root) or project.root.is_relative_to(state):
+        raise ValueError("Mentat state must be outside the candidate repository")
+    return evidence.state_directory(state)
 
 
-def error(exc: Exception, output_json: bool) -> None:
-    finish({"status": "incomplete", "detail": str(exc)}, output_json)
+def _approval_path(state: Path, project: Project) -> Path:
+    return state / "approvals" / f"{project.fingerprint}.json"
 
 
-def contract_inputs(ctx: typer.Context):
-    spec = load_spec(ctx.obj["spec"])
-    return spec, evidence.pack_digest(spec)
+def _approval(state: Path, project: Project) -> dict:
+    try:
+        record = evidence.read_json(_approval_path(state, project))
+    except FileNotFoundError as exc:
+        raise ValueError(
+            "Approve this repository, base commit, and runner with mentat spec approve"
+        ) from exc
+    if (
+        not isinstance(record, dict)
+        or any(record.get(key) != value for key, value in _scope(project).items())
+        or not isinstance(record.get("approved_at"), str)
+    ):
+        raise ValueError("Approval record is invalid. Check and approve the current contract")
+    return record
 
 
-def operator_confirm(message: str) -> None:
-    if not sys.stdin.isatty() or not sys.stdout.isatty():
-        raise ValueError("Operator approval or acceptance requires an interactive terminal")
-    if not typer.confirm(message, default=False):
-        raise ValueError("The operator declined")
+def _error(exc: Exception, output_json: bool) -> None:
+    finish({"schema_version": 2, "status": "incomplete", "detail": str(exc)}, output_json)
+
+
+def _summary(project: Project) -> dict:
+    return {
+        "schema_version": 2,
+        "status": "pass",
+        **_scope(project),
+        "lean_runs_on_host": any(check.engine == "lean" for check in project.contract.formal),
+        "contract": project.contract.model_dump(mode="json", exclude_none=True),
+        "approved_files": {name: evidence.digest(data) for name, data in project.files.items()},
+    }
 
 
 @app.command()
 def doctor(
     ctx: typer.Context,
-    prepare: bool = typer.Option(False, help="Pull pinned images and build the trusted runner."),
-    output_json: bool = typer.Option(False, "--json"),
+    repo: Repo,
+    base: Base,
+    runner: Runner = "docker",
+    output_json: JsonOutput = False,
 ) -> None:
-    docker = (docker_runtime.prepare if prepare else docker_runtime.doctor)(ctx.obj["docker"])
-    lean = shutil.which("lean")
-    lake = shutil.which("lake")
+    """Check the selected runtime and model tools."""
     try:
-        spec, fingerprint = contract_inputs(ctx)
-        models = evidence.model_checks(
-            evidence.state_directory(ctx.obj["state"]), spec, fingerprint, fresh=True
-        )
-    except (OSError, ValueError, KeyError) as exc:
-        error(exc, output_json)
-        return
-    ok = bool(docker["ok"] and lean and lake and evidence.status(models) == "pass")
-    finish(
-        {
-            **docker,
-            "status": "pass" if ok else "incomplete",
-            "lean": lean,
-            "lake": lake,
-            "model_checks": models,
-            "next_action": None
-            if ok
-            else "Check the selected Colima context and pinned Lean toolchain. Run doctor --prepare to provision images.",
-        },
-        output_json,
-    )
+        project = load_project(repo, base, runner)
+        runtime = runner_info(project, ctx.obj["docker"])
+        tools = tool_info(project)
+        result = {
+            "schema_version": 2,
+            "status": "pass",
+            **_scope(project),
+            "runtime": runtime,
+            "tools": tools,
+        }
+        if not output_json:
+            typer.echo(evidence.json_bytes({"runtime": runtime, "tools": tools}).decode().rstrip())
+        finish(result, output_json)
+    except _USER_ERRORS as exc:
+        _error(exc, output_json)
 
 
 @spec_app.command("check")
-def check_spec(ctx: typer.Context, output_json: bool = typer.Option(False, "--json")) -> None:
+def check_spec(
+    repo: Repo, base: Base, runner: Runner = "docker", output_json: JsonOutput = False
+) -> None:
+    """Show the committed contract and the digest to approve."""
     try:
-        spec, fingerprint = contract_inputs(ctx)
-        load_cases(PACK / "public.json", spec)
-        state = evidence.state_directory(ctx.obj["state"])
-        checks = evidence.model_checks(state, spec, fingerprint, fresh=True)
-        finish(
-            {
-                "status": evidence.status(checks),
-                "contract_digest": fingerprint,
-                "contract": spec.as_dict(),
-                "model_checks": checks,
-            },
-            output_json,
-        )
-    except (OSError, ValueError, KeyError) as exc:
-        error(exc, output_json)
+        result = _summary(load_project(repo, base, runner))
+        if not output_json:
+            typer.echo(evidence.json_bytes(result).decode().rstrip())
+        finish(result, output_json)
+    except _USER_ERRORS as exc:
+        _error(exc, output_json)
 
 
 @spec_app.command("approve")
-def approve_spec(ctx: typer.Context, digest: str) -> None:
+def approve_spec(
+    ctx: typer.Context, digest: str, repo: Repo, base: Base, runner: Runner = "docker"
+) -> None:
+    """Approve the exact contract reviewed in the terminal."""
     try:
-        spec, fingerprint = contract_inputs(ctx)
-        if digest != fingerprint:
+        project = load_project(repo, base, runner)
+        if digest != project.fingerprint:
             raise ValueError("Approval must name the digest displayed by spec check")
-        load_cases(PACK / "public.json", spec)
-        state = evidence.state_directory(ctx.obj["state"])
-        checks = evidence.model_checks(state, spec, fingerprint, fresh=True)
-        if evidence.status(checks) != "pass":
-            raise ValueError("Required formal checks must pass before approval")
-        typer.echo(evidence.json_bytes(spec.as_dict()).decode().rstrip())
-        operator_confirm(f"Approve contract {fingerprint} for verification?")
-        if evidence.pack_digest(load_spec(ctx.obj["spec"])) != fingerprint:
+        state = _state(ctx, project)
+        summary = _summary(project)
+        typer.echo(evidence.json_bytes(summary).decode().rstrip())
+        decision = f"Approve contract {digest} for {runner} candidate execution"
+        if summary["lean_runs_on_host"]:
+            decision += " and allow the reviewed Lean source to execute on this host"
+        operator_confirm(f"{decision}?")
+        if load_project(repo, base, runner).fingerprint != digest:
             raise ValueError("Contract changed during approval")
-        evidence.write_record(
-            state / "approval.json",
-            evidence.json_bytes({"contract_digest": fingerprint, "approved_at": evidence.now()}),
-        )
-        emit({"status": "pass", "contract_digest": fingerprint}, False)
-    except (OSError, ValueError, KeyError) as exc:
-        error(exc, False)
+        record = {**_scope(project), "approved_at": evidence.now()}
+        evidence.write_record(_approval_path(state, project), evidence.json_bytes(record))
+        finish({"status": "pass", "contract_digest": digest}, False)
+    except _USER_ERRORS as exc:
+        _error(exc, False)
 
 
-def candidate_repo(path: Path, state: Path) -> Path:
-    git_root = subprocess.run(
-        ["git", "-C", str(path.resolve()), "rev-parse", "--show-toplevel"],
-        capture_output=True,
-        check=True,
-        timeout=10,
+def _status(checks: list[dict]) -> str:
+    outcomes = {check["status"] for check in checks}
+    if not outcomes or outcomes - {"pass", "violation"}:
+        return "incomplete"
+    return "violation" if "violation" in outcomes else "pass"
+
+
+def _reproduce(project: Project, state: Path, revision: str, context: str | None) -> str:
+    argv = ["mentat", "--state", str(state)]
+    if project.runner == "docker" and context:
+        argv += ["--docker-context", context]
+    return shlex.join(
+        argv
+        + [
+            "verify",
+            "--repo",
+            str(project.root),
+            "--base",
+            project.base,
+            "--rev",
+            revision,
+            "--runner",
+            project.runner,
+            "--json",
+        ]
     )
-    repo = Path(os.fsdecode(git_root.stdout.rstrip(b"\n"))).resolve()
-    if (
-        state.is_relative_to(repo)
-        or repo.is_relative_to(state)
-        or PACK.resolve().is_relative_to(repo)
-    ):
-        raise ValueError(
-            "Mentat state and trusted verifier must be separate from the candidate repository"
-        )
-    return repo
 
 
 @app.command()
 def verify(
     ctx: typer.Context,
-    repo: Path = typer.Option(..., exists=True, file_okay=False),
-    rev: str = typer.Option(...),
-    fresh: bool = typer.Option(False, help="Bypass the model result cache."),
-    output_json: bool = typer.Option(False, "--json"),
+    repo: Repo,
+    base: Base,
+    rev: Annotated[str, typer.Option(help="Full candidate commit ID.")],
+    runner: Runner = "docker",
+    output_json: JsonOutput = False,
 ) -> None:
+    """Run the approved formal and behavior checks for a commit."""
     try:
-        state = evidence.state_directory(ctx.obj["state"])
-        spec, fingerprint = contract_inputs(ctx)
-        approved = evidence.approval(state, fingerprint)
-        repo = candidate_repo(repo, state)
-        if ctx.obj["spec"].is_relative_to(repo):
-            raise ValueError("The specification must be outside the candidate repository")
-        candidate = snapshot(repo, rev)
-        fixtures = load_cases(PACK / "public.json", spec)
-        models = evidence.model_checks(state, spec, fingerprint, fresh=fresh)
+        project = load_project(repo, base, runner)
+        state = _state(ctx, project)
+        approved = _approval(state, project)
+        candidate = snapshot(project.root, rev)
         run_id = uuid4().hex
+        tools = tool_info(project)
+        models = run_formal(project, tools)
         cases = []
-        regressions = []
         artifacts = {}
-        if evidence.status(models) == "pass":
-            for fixture in fixtures:
-                result = run_case(
-                    candidate,
-                    ctx.obj["docker"],
-                    fixture,
-                    spec.selected_properties,
-                    f"{run_id}-{len(cases)}",
-                )
-                cases.append(result)
-                if result["status"] == "violation" and any(
-                    check.get("status") == "violation" and check.get("claim") in spec.claims
-                    for check in result["checks"]
-                ):
-                    source = render_regression(fixture, spec.selected_properties)
-                    regression = docker_runtime.run_pytest(
-                        candidate, ctx.obj["docker"], source, f"{run_id}-pytest-{len(cases)}"
-                    )
-                    regressions.append({**regression, "case_id": fixture.id})
-                    if regression["status"] == "violation":
-                        filename = (
-                            "test_mentat_regression.py"
-                            if len(fixtures) == 1
-                            else f"test_mentat_{len(cases)}.py"
-                        )
-                        artifacts[filename] = source.replace(
-                            "tests/test_mentat_regression.py", f"tests/{filename}", 1
-                        ).encode()
-        if not cases:
+        runtime = {"runner": runner}
+        context = ctx.obj["docker"]
+        if len(models) != len(project.contract.formal):
+            raise ValueError("Formal runner returned incomplete check results")
+        if _status(models) == "pass":
+            runtime = runner_info(project, context)
+            behavior, artifacts = run_behavior(project, candidate, context, runtime, run_id)
+            if len(behavior) != len(project.contract.behavior):
+                raise ValueError("Behavior runner returned incomplete check results")
             cases = [
-                {
-                    "case_id": case.id,
-                    "status": "incomplete",
-                    "checks": [
-                        {
-                            "status": "incomplete",
-                            "detail": "Live replay requires all formal checks to pass",
-                        }
-                    ],
-                }
-                for case in fixtures
+                {"case_id": check["id"], "status": check["status"], "checks": [check]}
+                for check in behavior
             ]
-        if evidence.pack_digest(load_spec(ctx.obj["spec"])) != fingerprint:
+        if load_project(repo, base, runner).fingerprint != project.fingerprint:
             raise ValueError("Contract or verifier changed during the run. Repeat after approval")
+        if _approval(state, project) != approved:
+            raise ValueError("Approval changed during the run")
         record = {
-            "schema_version": 1,
-            "kind": "verification",
+            "schema_version": 2,
+            "kind": "project-verification",
             "run_id": run_id,
             "recorded_at": evidence.now(),
-            "status": evidence.status([*models, *cases]),
+            **_scope(project),
+            "status": _status([*models, *cases]),
             "revision": candidate.revision,
             "snapshot_digest": candidate.digest,
-            "contract_digest": fingerprint,
             "approval": approved,
-            "fixture_digest": evidence.digest((PACK / "public.json").read_bytes()),
+            "claims": [claim.model_dump(mode="json") for claim in project.contract.claims],
             "model_checks": models,
+            "behavior_skipped": not bool(cases),
             "cases": cases,
-            "regressions": regressions,
-            "reproduce": shlex.join(
-                [
-                    "mentat",
-                    "--spec",
-                    str(ctx.obj["spec"]),
-                    "--state",
-                    str(state),
-                    "--docker-context",
-                    ctx.obj["docker"],
-                    "verify",
-                    "--repo",
-                    str(repo),
-                    "--rev",
-                    candidate.revision,
-                    "--fresh",
-                ]
-            ),
+            "runtime": runtime,
+            "tools": tools,
+            "reproduce": _reproduce(project, state, candidate.revision, runtime.get("context")),
         }
         bundle = evidence.save_run(state, record, artifacts)
         finish({**record, "bundle": str(bundle)}, output_json)
-    except (OSError, ValueError, KeyError, subprocess.SubprocessError) as exc:
-        error(exc, output_json)
-
-
-@app.command()
-def evaluate(
-    ctx: typer.Context,
-    repo: Path = typer.Option(..., exists=True, file_okay=False),
-    held_out: Path = typer.Option(..., exists=True, dir_okay=False),
-    sha256: str = typer.Option(..., help="SHA-256 recorded before repair."),
-    rev: str = typer.Option(FIXED, help="Committed repair to evaluate."),
-    output_json: bool = typer.Option(False, "--json"),
-) -> None:
-    try:
-        state = evidence.state_directory(ctx.obj["state"])
-        spec, fingerprint = contract_inputs(ctx)
-        approved = evidence.approval(state, fingerprint)
-        repo = candidate_repo(repo, state)
-        held_out = held_out.resolve()
-        if held_out.is_relative_to(repo) or ctx.obj["spec"].is_relative_to(repo):
-            raise ValueError(
-                "The specification and held-out fixtures must be outside the candidate repository"
-            )
-        with held_out.open("rb") as stream:
-            frozen = stream.read(1_000_001)
-        if len(frozen) > 1_000_000 or evidence.digest(frozen) != sha256:
-            raise ValueError(
-                "Held-out fixture does not match its frozen digest or exceeds the size limit"
-            )
-        with tempfile.TemporaryDirectory(dir=state) as temp:
-            fixture_path = Path(temp) / "fixtures.json"
-            fixture_path.write_bytes(frozen)
-            cases = load_cases(fixture_path, spec)
-        if any(
-            not any("." in part for ns in case.namespaces for part in ns.path) for case in cases
-        ):
-            raise ValueError("Each held-out fixture must exercise a literal-dot namespace")
-        if any(not any(ns.properties for ns in case.namespaces) for case in cases):
-            raise ValueError("Each held-out fixture must have a selected property to mutate")
-        public = load_cases(PACK / "public.json", spec)[0]
-        started = monotonic()
-        models = evidence.model_checks(state, spec, fingerprint, fresh=True)
-        formal_seconds = round(monotonic() - started, 3)
-        if evidence.status(models) != "pass":
-            raise ValueError("Required formal checks must pass before evaluation")
-        run_id = uuid4().hex
-        result = evaluate_candidates(repo, rev, ctx.obj["docker"], spec, cases, public, run_id)
-        if evidence.pack_digest(load_spec(ctx.obj["spec"])) != fingerprint:
-            raise ValueError("Contract or verifier changed during evaluation")
-        record = {
-            "schema_version": 2,
-            "kind": "evaluation",
-            "run_id": run_id,
-            "recorded_at": evidence.now(),
-            "revision": rev,
-            "contract_digest": fingerprint,
-            "approval": approved,
-            "held_out_digest": sha256,
-            "formal_seconds": formal_seconds,
-            "model_checks": models,
-            **result,
-            "reproduce": shlex.join(
-                [
-                    "mentat",
-                    "--spec",
-                    str(ctx.obj["spec"]),
-                    "--state",
-                    str(state),
-                    "--docker-context",
-                    ctx.obj["docker"],
-                    "evaluate",
-                    "--repo",
-                    str(repo),
-                    "--held-out",
-                    str(held_out),
-                    "--sha256",
-                    sha256,
-                    "--rev",
-                    rev,
-                ]
-            ),
-        }
-        bundle = evidence.save_run(state, record, {})
-        finish({**record, "bundle": str(bundle)}, output_json)
-    except (OSError, ValueError, KeyError, subprocess.SubprocessError) as exc:
-        error(exc, output_json)
+    except _USER_ERRORS as exc:
+        _error(exc, output_json)
 
 
 @evidence_app.command("export")
 def export_evidence(
     ctx: typer.Context,
     run_id: str,
-    output: Path | None = typer.Option(None, "--out"),
-    output_json: bool = typer.Option(False, "--json"),
+    output: Annotated[Path | None, typer.Option("--out")] = None,
+    output_json: JsonOutput = False,
 ) -> None:
+    """Check a run's local integrity and optionally copy its bundle."""
     try:
         state = evidence.state_directory(ctx.obj["state"])
         bundle, record = evidence.read_run(state, run_id)
@@ -394,33 +278,38 @@ def export_evidence(
             },
             output_json,
         )
-    except (OSError, ValueError, KeyError) as exc:
-        error(exc, output_json)
+    except (*_USER_ERRORS, KeyError) as exc:
+        _error(exc, output_json)
 
 
 @app.command()
-def accept(ctx: typer.Context, run_id: str) -> None:
+def accept(
+    ctx: typer.Context, run_id: str, repo: Repo, base: Base, runner: Runner = "docker"
+) -> None:
+    """Accept a complete passing run under the current approval."""
     try:
-        state = evidence.state_directory(ctx.obj["state"])
-        _, fingerprint = contract_inputs(ctx)
-        evidence.approval(state, fingerprint)
+        project = load_project(repo, base, runner)
+        state = _state(ctx, project)
+        approved = _approval(state, project)
         _, record = evidence.read_run(state, run_id)
         if (
-            record.get("kind") != "verification"
+            record.get("kind") != "project-verification"
             or record["status"] != "pass"
-            or record["contract_digest"] != fingerprint
+            or any(record.get(key) != value for key, value in _scope(project).items())
+            or record.get("approval") != approved
         ):
             raise ValueError(
-                "Only a complete passing run under the current contract can be accepted"
+                "Only a complete passing run under the current approval can be accepted"
             )
         receipt = (state / "receipts" / run_id).read_text()
         operator_confirm(f"Accept candidate {record['revision']} from run {run_id}?")
-        if contract_inputs(ctx)[1] != fingerprint:
+        if load_project(repo, base, runner).fingerprint != project.fingerprint:
             raise ValueError("Contract changed during acceptance")
         evidence.read_run(state, run_id)
-        if (state / "receipts" / run_id).read_text() != receipt:
-            raise ValueError("Evidence changed during acceptance")
-        evidence.approval(state, fingerprint)
+        if (state / "receipts" / run_id).read_text() != receipt or _approval(
+            state, project
+        ) != approved:
+            raise ValueError("Evidence or approval changed during acceptance")
         evidence.write_record(
             state / "acceptances" / f"{run_id}.json",
             evidence.json_bytes(
@@ -428,11 +317,11 @@ def accept(ctx: typer.Context, run_id: str) -> None:
                     "run_id": run_id,
                     "manifest_digest": receipt,
                     "revision": record["revision"],
-                    "contract_digest": fingerprint,
+                    "contract_digest": project.fingerprint,
                     "accepted_at": evidence.now(),
                 }
             ),
         )
-        emit({"status": "pass", "run_id": run_id}, False)
-    except (OSError, ValueError, KeyError) as exc:
-        error(exc, False)
+        finish({"status": "pass", "run_id": run_id}, False)
+    except (*_USER_ERRORS, KeyError) as exc:
+        _error(exc, False)

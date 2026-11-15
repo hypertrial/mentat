@@ -1,39 +1,14 @@
 """Strict, bounded input for the namespace preservation contract."""
 
-import json
 import re
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from mentat.evidence import read_json
+
 PACK = Path(__file__).with_name("pack")
 _NAME = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$")
-
-
-def read_json(path: Path):
-    with path.open("rb") as stream:
-        data = stream.read(1_000_001)
-    if len(data) > 1_000_000:
-        raise ValueError("JSON exceeds 1 MB")
-
-    def unique(pairs):
-        result = {}
-        for key, value in pairs:
-            if key in result:
-                raise ValueError(f"duplicate JSON key: {key}")
-            result[key] = value
-        return result
-
-    try:
-        return json.loads(
-            data,
-            object_pairs_hook=unique,
-            parse_constant=lambda value: (_ for _ in ()).throw(
-                ValueError(f"invalid JSON constant: {value}")
-            ),
-        )
-    except RecursionError as exc:
-        raise ValueError("JSON nesting exceeds parser limit") from exc
 
 
 class Spec(BaseModel):
