@@ -18,6 +18,7 @@ from mentat.command import emit, error, finish, operator_confirm
 from . import docker_runtime, model_evidence
 from .evaluation import FIXED
 from .evaluation import evaluate as evaluate_candidates
+from .formal import run_formal
 from .regression import render_regression
 from .replay import run_case, snapshot
 from .spec import PACK, load_cases, load_spec
@@ -64,10 +65,8 @@ def doctor(
     lean = shutil.which("lean")
     lake = shutil.which("lake")
     try:
-        spec, fingerprint = contract_inputs(ctx)
-        models = model_evidence.model_checks(
-            evidence.state_directory(ctx.obj["state"]), spec, fingerprint, fresh=True
-        )
+        spec, _ = contract_inputs(ctx)
+        models = run_formal(spec, PACK / "lean")
     except (OSError, ValueError, KeyError) as exc:
         error(exc, output_json)
         return
@@ -92,8 +91,7 @@ def check_spec(ctx: typer.Context, output_json: bool = typer.Option(False, "--js
     try:
         spec, fingerprint = contract_inputs(ctx)
         load_cases(PACK / "public.json", spec)
-        state = evidence.state_directory(ctx.obj["state"])
-        checks = model_evidence.model_checks(state, spec, fingerprint, fresh=True)
+        checks = run_formal(spec, PACK / "lean")
         finish(
             {
                 "status": evidence.status(checks),
@@ -115,7 +113,7 @@ def approve_spec(ctx: typer.Context, digest: str) -> None:
             raise ValueError("Approval must name the digest displayed by spec check")
         load_cases(PACK / "public.json", spec)
         state = evidence.state_directory(ctx.obj["state"])
-        checks = model_evidence.model_checks(state, spec, fingerprint, fresh=True)
+        checks = run_formal(spec, PACK / "lean")
         if evidence.status(checks) != "pass":
             raise ValueError("Required formal checks must pass before approval")
         typer.echo(evidence.json_bytes(spec.as_dict()).decode().rstrip())
@@ -155,7 +153,7 @@ def verify(
     ctx: typer.Context,
     repo: Path = typer.Option(..., exists=True, file_okay=False),
     rev: str = typer.Option(...),
-    fresh: bool = typer.Option(False, help="Bypass the model result cache."),
+    fresh: bool = typer.Option(False, help="Compatibility option. Formal checks always run."),
     output_json: bool = typer.Option(False, "--json"),
 ) -> None:
     try:
@@ -168,7 +166,7 @@ def verify(
             raise ValueError("The specification must be outside the candidate repository")
         candidate = snapshot(repo, rev)
         fixtures = load_cases(PACK / "public.json", spec)
-        models = model_evidence.model_checks(state, spec, fingerprint, fresh=fresh)
+        models = run_formal(spec, PACK / "lean")
         run_id = uuid4().hex
         cases = []
         regressions = []
@@ -222,7 +220,7 @@ def verify(
             "kind": "verification",
             "run_id": run_id,
             "recorded_at": evidence.now(),
-            "status": evidence.status([*models, *cases]),
+            "status": evidence.status([*models, *cases], incomplete_first=False),
             "revision": candidate.revision,
             "snapshot_digest": candidate.digest,
             "contract_digest": fingerprint,
@@ -295,7 +293,7 @@ def evaluate(
             raise ValueError("Each held-out fixture must have a selected property to mutate")
         public = load_cases(PACK / "public.json", spec)[0]
         started = monotonic()
-        models = model_evidence.model_checks(state, spec, fingerprint, fresh=True)
+        models = run_formal(spec, PACK / "lean")
         formal_seconds = round(monotonic() - started, 3)
         if evidence.status(models) != "pass":
             raise ValueError("Required formal checks must pass before evaluation")

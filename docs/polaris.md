@@ -13,7 +13,7 @@ uv run --locked --extra polaris mentat showcase polaris doctor --prepare
 uv run --locked --extra polaris mentat showcase polaris spec check
 ```
 
-The dedicated `colima-mentat` context runs two disposable Polaris 1.8.0 ARM64 containers per case. Image preparation can download dependencies. Candidate execution uses private Docker networks, synthetic credentials, and a committed snapshot of `client/python/apache_polaris/cli`. The server, generated SDK, and runner stay pinned. Run only operator-reviewed local candidates in this prototype.
+The dedicated `colima-mentat` context runs two disposable Polaris 1.8.0 ARM64 containers per case. Image preparation can download dependencies. Candidate execution uses private Docker networks, synthetic credentials, and a committed snapshot of `client/python/apache_polaris/cli`. Snapshot limits are 4,096 files, 512 characters per relative path, 2 MiB per file, and 16 MiB total. The server, generated SDK, and runner stay pinned. Run only operator-reviewed local candidates in this prototype.
 
 ## Check and repair a Polaris change
 
@@ -38,7 +38,7 @@ The fixture gives `["finance.us"]` and `["finance", "us"]` distinct values. The 
 
 An out-of-memory kill, a signal exit, or a stopped server leaves the affected replay stage incomplete. If native pytest cannot confirm container removal, its result is incomplete.
 
-For agents, `--json` emits a versioned result. Exit `0` means complete success, `1` means a confirmed violation, and `2` means verification is incomplete or the input is invalid. Z3 and Lean cover the model. The live oracle and native regression cover the reported fixtures and revisions. A contract or verifier change requires fresh approval. SQLite caches only Z3 success, and `--fresh` bypasses that cache.
+For agents, `--json` emits a versioned result. Exit `0` means complete success, `1` means a confirmed violation, and `2` means verification is incomplete or the input is invalid. Polaris verification gives a confirmed violation precedence when another check is incomplete. The manifest retains each result. Mentat reruns Z3 and Lean for every verification. Existing commands may still pass `--fresh`. The live oracle and native regression cover the reported fixtures and revisions. A contract or verifier change requires fresh approval.
 
 ## Run the founder evaluation
 
@@ -53,6 +53,19 @@ uv run --locked --extra polaris mentat showcase polaris evaluate \
 ```
 
 The report compares frozen upstream pytest, a Hypothesis-generated test corpus, and live verification on the historical failure, repair, and three controls. Evaluation reports use `schema_version` 2. Their `baseline_rows` record one result per candidate variant for each test baseline. The live `rows` record one result per candidate variant and private fixture, so the totals use different denominators. Private inputs and detailed failures stay out of the evaluation bundle. Candidate code can observe inputs delivered during replay, so keep the final trial operator-run and rotate cases before further repair attempts. A baseline that also fails on the unmutated repair receives an ambiguous alert when it rejects a violation case.
+
+An incomplete attempt takes precedence in the evaluation exit status. If Docker preflight fails, the report records the common failure on the planned rows, with zero execution time.
+
+## Run the runtime smoke check
+
+Use the prepared Colima profile and images from the setup above. Put the installed Lean 4.31.0 toolchain's own `bin` directory on `PATH`. The smoke check requires a local Polaris checkout containing both pinned commits. It runs the formal checks and exercises both revisions through live replay and native pytest, then checks for leftover containers and networks labeled with its run IDs.
+
+```sh
+uv run --locked --extra polaris python scripts/smoke_runtime.py \
+  --repo "$POLARIS" --docker-context colima-mentat
+```
+
+The smoke command exits nonzero if prerequisites, expected results, or resource cleanup checks fail. It uses temporary runtime resources and leaves operator approvals and evidence alone.
 
 ## Cleanup and upgrade
 

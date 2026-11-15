@@ -1,6 +1,5 @@
 import json
 import os
-import sqlite3
 import subprocess
 from pathlib import Path
 
@@ -14,7 +13,7 @@ from mentat.showcases.polaris import docker_runtime
 from mentat.showcases.polaris.docker_runtime import _stage_cli
 from mentat.showcases.polaris.evaluation import BEFORE, FIXED, _control, evaluate
 from mentat.showcases.polaris.formal import run_z3
-from mentat.showcases.polaris.model_evidence import approval, model_checks, pack_digest
+from mentat.showcases.polaris.model_evidence import approval, pack_digest
 from mentat.showcases.polaris.replay import Snapshot, snapshot
 from mentat.showcases.polaris.spec import PACK, load_cases, load_spec
 
@@ -173,36 +172,30 @@ def test_evidence_rejects_bundle_tampering(tmp_path, tamper):
         read_run(tmp_path, "a" * 32)
 
 
-def test_model_cache_does_not_reuse_other_contract_or_failure(tmp_path, spec, monkeypatch):
-    calls = []
+def test_polaris_recomputes_models_with_legacy_cache_present(tmp_path, monkeypatch):
+    state = tmp_path / "state"
+    state.mkdir(mode=0o700)
+    legacy = state / "models.sqlite3"
+    legacy.write_bytes(b"an existing legacy cache")
+    monkeypatch.setattr("mentat.showcases.polaris.formal.run_lean", lambda _: [])
+    solver_calls = []
 
-    def solver(_spec):
-        calls.append(1)
-        return [{"kind": "z3", "status": "violation" if len(calls) == 1 else "pass"}]
+    def solver(spec):
+        solver_calls.append(spec)
+        return run_z3(spec)
 
-    monkeypatch.setattr("mentat.showcases.polaris.model_evidence.run_z3", solver)
-    monkeypatch.setattr("mentat.showcases.polaris.model_evidence.run_lean", lambda _: [])
-    assert model_checks(tmp_path, spec, "first", fresh=False)[0]["status"] == "violation"
-    assert model_checks(tmp_path, spec, "first", fresh=False)[0]["status"] == "pass"
-    assert model_checks(tmp_path, spec, "second", fresh=False)[0].get("cached") is not True
-    assert len(calls) == 3
-
-
-@pytest.mark.parametrize("broken", [None, "[]", "partial"])
-def test_invalid_solver_cache_cannot_skip_a_required_check(tmp_path, spec, monkeypatch, broken):
-    monkeypatch.setattr("mentat.showcases.polaris.model_evidence.run_lean", lambda _: [])
-    first = model_checks(tmp_path, spec, "first", fresh=False)
-    assert model_checks(tmp_path, spec, "first", fresh=False)[0]["cached"] is True
-    if broken == "partial":
-        broken = json.dumps(first[:1])
-    with sqlite3.connect(tmp_path / "models.sqlite3") as db:
-        db.execute("UPDATE model SET result = ?", (broken,))
-    next_run = model_checks(tmp_path, spec, "first", fresh=False)
-    assert [(check["check"], check["result"]) for check in next_run] == [
-        ("legacy-collision", "sat"),
-        ("list-identity", "unsat"),
-    ]
-    assert not any(check.get("cached") for check in next_run)
+    monkeypatch.setattr("mentat.showcases.polaris.formal.run_z3", solver)
+    command = ["--state", str(state), "showcase", "polaris", "spec", "check", "--json"]
+    for _ in range(2):
+        result = CliRunner().invoke(app, command)
+        assert result.exit_code == 0, result.output
+        checks = json.loads(result.output)["model_checks"]
+        assert [(check["check"], check["result"]) for check in checks] == [
+            ("legacy-collision", "sat"),
+            ("list-identity", "unsat"),
+        ]
+    assert len(solver_calls) == 2
+    assert legacy.read_bytes() == b"an existing legacy cache"
 
 
 def git(repo, *args):
@@ -271,6 +264,9 @@ def test_evaluation_counts_each_baseline_variant_once(tmp_path, monkeypatch, spe
         lambda repo, rev: Snapshot(rev, rev, (("command/setup.py", b"# sample\n"),)),
     )
     monkeypatch.setattr("mentat.showcases.polaris.evaluation._upstream_test", lambda *args: "")
+    monkeypatch.setattr(
+        "mentat.showcases.polaris.evaluation.docker_runtime.doctor", lambda _: {"ok": True}
+    )
     monkeypatch.setattr("mentat.showcases.polaris.evaluation.docker_runtime.run_pytest", pytest_run)
     monkeypatch.setattr(
         "mentat.showcases.polaris.evaluation.run_case", lambda *args: outcome(args[-1])
@@ -288,6 +284,41 @@ def test_evaluation_counts_each_baseline_variant_once(tmp_path, monkeypatch, spe
     assert result["counts"]["upstream-pytest"]["ambiguous_alert"] == 3
     assert result["counts"]["hypothesis"]["detected"] == 3
     assert result["counts"]["mentat"]["detected"] == 6
+
+
+def test_evaluation_failed_preflight_keeps_planned_rows(tmp_path, monkeypatch, spec):
+    calls = []
+    monkeypatch.setattr(
+        "mentat.showcases.polaris.evaluation.snapshot",
+        lambda repo, rev: Snapshot(rev, rev, (("command/setup.py", b"# sample\n"),)),
+    )
+    monkeypatch.setattr("mentat.showcases.polaris.evaluation._upstream_test", lambda *args: "")
+    monkeypatch.setattr(
+        "mentat.showcases.polaris.evaluation.docker_runtime.doctor",
+        lambda context: calls.append(context) or {"ok": False},
+    )
+
+    def unexpected(*args):
+        pytest.fail("preflight failure must skip all Docker executions")
+
+    monkeypatch.setattr("mentat.showcases.polaris.evaluation.docker_runtime.run_pytest", unexpected)
+    monkeypatch.setattr("mentat.showcases.polaris.evaluation.run_case", unexpected)
+    public = load_cases(PACK / "public.json", spec)[0]
+    result = evaluate(tmp_path, FIXED, "test-context", spec, [public, public], public, "sample")
+
+    assert calls == ["test-context"]
+    assert result["status"] == "incomplete"
+    assert result["native_regression"] == ["incomplete", "incomplete"]
+    assert len(result["baseline_rows"]) == 5
+    assert len(result["rows"]) == 10
+    assert result["counts"]["upstream-pytest"]["incomplete"] == 5
+    assert result["counts"]["hypothesis"]["incomplete"] == 5
+    assert result["counts"]["mentat"]["incomplete"] == 10
+    for row in result["baseline_rows"] + result["rows"]:
+        for method in row["methods"].values():
+            assert method["status"] == "incomplete"
+            assert method["seconds"] == 0.0
+            assert "doctor --prepare" in method["detail"]
 
 
 def test_snapshot_staging_is_readable_in_container_under_restrictive_umask(tmp_path):

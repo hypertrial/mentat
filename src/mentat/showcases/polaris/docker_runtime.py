@@ -12,6 +12,7 @@ import tempfile
 import time
 from pathlib import Path
 
+from mentat import evidence
 from mentat.colima import validate_colima as _local_context
 
 _IMAGE = "mentat-trusted-polaris-cli:1.8.0"
@@ -672,12 +673,5 @@ def run_case(
                     "detail": "Replay resources could not all be removed",
                 }
             )
-        statuses = {check.get("status") for check in result["checks"]}
-        result["status"] = (
-            "violation"
-            if "violation" in statuses
-            else "pass"
-            if statuses == {"pass"}
-            else "incomplete"
-        )
+        result["status"] = evidence.status(result["checks"], incomplete_first=False)
     return result

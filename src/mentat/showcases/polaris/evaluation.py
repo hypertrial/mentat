@@ -131,8 +131,23 @@ def evaluate(
     support = {"cli_test_utils.py": _upstream_test(repo, "cli_test_utils.py")}
     native_source = render_regression(public, spec.selected_properties)
     property_test = _hypothesis(public, spec.selected_properties)
+    preflight = docker_runtime.doctor(context)
+
+    def timed_check(check, *args):
+        if not preflight["ok"]:
+            return {
+                "status": "incomplete",
+                "seconds": 0.0,
+                "detail": "Docker preflight failed; check the selected Colima context and run polaris doctor --prepare.",
+            }
+        start = monotonic()
+        result = check(*args)
+        return {"status": result["status"], "seconds": round(monotonic() - start, 3)}
+
     native = [
         docker_runtime.run_pytest(case, context, native_source, f"{run_id}-native-{index}")
+        if preflight["ok"]
+        else {"status": "incomplete"}
         for index, case in enumerate((before, fixed))
     ]
     rows = []
@@ -153,30 +168,29 @@ def evaluate(
             ("upstream-pytest", frozen, support),
             ("hypothesis", property_test, None),
         ):
-            start = monotonic()
-            result = docker_runtime.run_pytest(
-                variant, context, test, f"{run_id}-{name}-{method}", extras
+            methods[method] = timed_check(
+                docker_runtime.run_pytest,
+                variant,
+                context,
+                test,
+                f"{run_id}-{name}-{method}",
+                extras,
             )
-            methods[method] = {
-                "status": result["status"],
-                "seconds": round(monotonic() - start, 3),
-            }
         baseline_rows.append({**row, "methods": methods})
         for index, fixture in enumerate(cases, start=1):
-            start = monotonic()
-            result = run_case(
-                variant, context, fixture, spec.selected_properties, f"{run_id}-{index}-{name}-m"
+            method_result = timed_check(
+                run_case,
+                variant,
+                context,
+                fixture,
+                spec.selected_properties,
+                f"{run_id}-{index}-{name}-m",
             )
             rows.append(
                 {
                     **row,
                     "case": index,
-                    "methods": {
-                        "mentat": {
-                            "status": result["status"],
-                            "seconds": round(monotonic() - start, 3),
-                        }
-                    },
+                    "methods": {"mentat": method_result},
                 }
             )
     checks = {method: _score(baseline_rows, method) for method in ("upstream-pytest", "hypothesis")}

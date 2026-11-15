@@ -127,10 +127,11 @@ def run_lean(lean_dir: Path) -> list[dict]:
             if version.returncode != 0 or not version.stdout.startswith("Lean (version 4.31.0,"):
                 result["detail"] = "Lean executable is not version 4.31.0"
                 return [result]
+            # Let the pinned Lake toolchain select its own compiler and libraries.
             env = {
                 key: value
                 for key, value in os.environ.items()
-                if key not in ("LEAN_PATH", "LEAN_SRC_PATH")
+                if key not in ("LEAN_PATH", "LEAN_SRC_PATH", "LAKE_OVERRIDE_LEAN")
             }
             build = subprocess.run(
                 ["lake", "build"],

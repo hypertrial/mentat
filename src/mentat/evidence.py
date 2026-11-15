@@ -1,5 +1,6 @@
 """Operator records, content fingerprints, and local evidence bundles."""
 
+import fcntl
 import hashlib
 import json
 import os
@@ -56,9 +57,11 @@ def file_digest(path: Path) -> str:
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
-def status(checks: list[dict]) -> str:
-    outcomes = {check["status"] for check in checks}
+def status(checks: list[dict], *, incomplete_first: bool = False) -> str:
+    outcomes = {check.get("status") for check in checks}
     if outcomes - STATUSES or not outcomes:
+        return "incomplete"
+    if incomplete_first and "incomplete" in outcomes:
         return "incomplete"
     if "violation" in outcomes:
         return "violation"
@@ -151,8 +154,13 @@ def save_run(state: Path, record: dict, artifacts: dict[str, bytes]) -> Path:
             if Path(name).name != name or name in {".", ".."}:
                 raise ValueError("Invalid evidence filename")
             write_record(bundle / name, data)
-        bundle.rename(destination)
-    write_record(state / "receipts" / run_id, digest(manifest).encode())
+        # The bundle rename publishes the run. Serialize receipt updates with that rename.
+        with (state / ".publish.lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            if destination.exists() or destination.is_symlink():
+                raise FileExistsError(f"Evidence run already exists: {run_id}")
+            write_record(state / "receipts" / run_id, digest(manifest).encode())
+            bundle.rename(destination)
     return destination
 
 

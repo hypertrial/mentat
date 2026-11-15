@@ -3,13 +3,19 @@
 import hashlib
 import os
 import re
+import selectors
 import subprocess
+import tempfile
+import time
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 
 _PREFIX = "client/python/apache_polaris/cli/"
 _MAX_FILE = 2 * 1024 * 1024
 _MAX_TOTAL = 16 * 1024 * 1024
+_MAX_FILES = 4096
+_MAX_PATH = 512
 
 
 @dataclass(frozen=True)
@@ -19,28 +25,75 @@ class Snapshot:
     files: tuple[tuple[str, bytes], ...]
 
 
-def _git(repo: Path, *args: str) -> bytes:
-    result = subprocess.run(
-        ["git", "--no-replace-objects", "-C", str(repo), *args],
-        env={**os.environ, "GIT_NO_LAZY_FETCH": "1"},
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        timeout=30,
-        check=True,
-    )
-    return result.stdout
+def _git_env() -> dict[str, str]:
+    return {
+        **{key: value for key, value in os.environ.items() if not key.startswith("GIT_")},
+        "GIT_NO_LAZY_FETCH": "1",
+        "GIT_ALLOW_PROTOCOL": "",
+        "GIT_TERMINAL_PROMPT": "0",
+        "GIT_OPTIONAL_LOCKS": "0",
+    }
+
+
+def _git(repo: Path, *args: str, limit: int, data: bytes | None = None) -> bytes:
+    command = ["git", "--no-replace-objects", "-C", str(repo), *args]
+    with (
+        tempfile.TemporaryFile() if data is not None else nullcontext(subprocess.DEVNULL)
+    ) as source:
+        if data is not None:
+            source.write(data)
+            source.seek(0)
+        with (
+            selectors.DefaultSelector() as selector,
+            subprocess.Popen(
+                command,
+                stdin=source,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                env=_git_env(),
+            ) as process,
+        ):
+            try:
+                assert process.stdout is not None
+                selector.register(process.stdout, selectors.EVENT_READ)
+                output = bytearray()
+                deadline = time.monotonic() + 30
+                while True:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0 or not selector.select(remaining):
+                        raise subprocess.TimeoutExpired(command, 30)
+                    chunk = os.read(process.stdout.fileno(), min(65536, limit + 1 - len(output)))
+                    if not chunk:
+                        if process.wait(timeout=max(0, deadline - time.monotonic())):
+                            raise subprocess.CalledProcessError(process.returncode, command)
+                        return bytes(output)
+                    output.extend(chunk)
+                    if len(output) > limit:
+                        raise ValueError(f"Git {args[0]} output exceeds size limit")
+            finally:
+                if process.poll() is None:
+                    process.kill()
 
 
 def snapshot(repo: Path, revision: str) -> Snapshot:
     if not re.fullmatch(r"[0-9a-fA-F]{40}", revision):
         raise ValueError("revision must be a full commit SHA")
-    resolved = _git(repo, "rev-parse", "--verify", f"{revision}^{{commit}}").decode().strip()
+    resolved = (
+        _git(repo, "rev-parse", "--verify", f"{revision}^{{commit}}", limit=128).decode().strip()
+    )
     if resolved != revision.lower():
         raise ValueError("revision did not resolve to the supplied commit")
-    entries = _git(repo, "ls-tree", "-rz", "--full-tree", resolved, "--", _PREFIX)
-    files = []
-    total = 0
-    digest = hashlib.sha256()
+    entries = _git(
+        repo,
+        "ls-tree",
+        "-rz",
+        "--full-tree",
+        resolved,
+        "--",
+        _PREFIX,
+        limit=_MAX_FILES * (_MAX_PATH + 100),
+    )
+    paths = []
     for entry in entries.split(b"\0"):
         if not entry:
             continue
@@ -51,23 +104,58 @@ def snapshot(repo: Path, revision: str) -> Snapshot:
         if (
             mode != b"100644"
             or kind != b"blob"
+            or not path.startswith(_PREFIX)
+            or len(relative) > _MAX_PATH
             or not re.fullmatch(r"[A-Za-z0-9_/-]+\.py", relative)
         ):
             raise ValueError("candidate CLI contains an unsupported file")
-        size = int(_git(repo, "cat-file", "-s", object_id.decode()).strip())
-        total += size
-        if size > _MAX_FILE or total > _MAX_TOTAL:
-            raise ValueError("candidate CLI exceeds the snapshot size limit")
-        content = _git(repo, "cat-file", "blob", object_id.decode())
-        if len(content) != size:
+        paths.append((raw_path, relative, object_id))
+        if len(paths) > _MAX_FILES:
+            raise ValueError("candidate CLI has too many files")
+    if not any(path == "command/setup.py" for _, path, _ in paths):
+        raise ValueError("commit has no setup CLI source")
+    ids = b"".join(oid + b"\n" for _, _, oid in paths)
+    headers = _git(
+        repo,
+        "cat-file",
+        "--batch-check=%(objectname) %(objecttype) %(objectsize)",
+        data=ids,
+        limit=len(paths) * 100,
+    ).splitlines()
+    if len(headers) != len(paths):
+        raise ValueError("incomplete Git objects")
+    sizes = []
+    for (_, _, oid), header in zip(paths, headers, strict=True):
+        parts = header.split()
+        if len(parts) != 3 or parts[0] != oid or parts[1] != b"blob" or not parts[2].isdigit():
+            raise ValueError("invalid Git object")
+        sizes.append(int(parts[2]))
+    if any(size > _MAX_FILE for size in sizes) or sum(sizes) > _MAX_TOTAL:
+        raise ValueError("candidate CLI exceeds the snapshot size limit")
+    limit = sum(sizes) + sum(
+        len(oid) + len(str(size)) + 8 for (_, _, oid), size in zip(paths, sizes, strict=True)
+    )
+    data = _git(repo, "cat-file", "--batch", data=ids, limit=limit)
+    files = []
+    digest = hashlib.sha256()
+    offset = 0
+    for (raw_path, relative, oid), size in zip(paths, sizes, strict=True):
+        header = oid + b" blob " + str(size).encode() + b"\n"
+        if data[offset : offset + len(header)] != header:
+            raise ValueError("invalid Git batch output")
+        offset += len(header)
+        content = data[offset : offset + size]
+        offset += size
+        if len(content) != size or data[offset : offset + 1] != b"\n":
             raise ValueError("candidate blob size changed")
+        offset += 1
         digest.update(len(raw_path).to_bytes(4, "big"))
         digest.update(raw_path)
         digest.update(len(content).to_bytes(8, "big"))
         digest.update(content)
         files.append((relative, content))
-    if not files or not any(path == "command/setup.py" for path, _ in files):
-        raise ValueError("commit has no setup CLI source")
+    if offset != len(data):
+        raise ValueError("invalid Git batch output")
     return Snapshot(resolved, digest.hexdigest(), tuple(files))
 
 

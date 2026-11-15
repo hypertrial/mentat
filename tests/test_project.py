@@ -609,3 +609,35 @@ def test_snapshot_preserves_committed_unicode_path_spelling(project_repo):
     )
     rev = git(repo, "commit-tree", tree, "-m", "stored Unicode names")
     assert set(snapshot(repo, rev).files) == set(paths)
+
+
+def test_verify_prioritizes_incomplete_over_violation(project_repo, tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+
+    from mentat import cli
+
+    repo, _, manifest = project_repo
+    second = {**manifest["formal"][0], "id": "second"}
+    manifest["formal"].append(second)
+    (repo / ".mentat/contract.json").write_text(json.dumps(manifest))
+    base = commit(repo, "two formal checks")
+    monkeypatch.setattr(cli, "operator_confirm", lambda _: None)
+    monkeypatch.setattr(
+        cli,
+        "run_formal",
+        lambda *args: [
+            {"status": "violation", "kind": "z3", "detail": "failed"},
+            {"status": "incomplete", "kind": "z3", "detail": "unavailable"},
+        ],
+    )
+    scope = ["--repo", str(repo), "--base", base, "--runner", "host"]
+    prefix = ["--state", str(tmp_path / "state")]
+    runner = CliRunner()
+    checked = runner.invoke(cli.app, prefix + ["spec", "check", "--json", *scope])
+    assert checked.exit_code == 0, checked.output
+    digest = json.loads(checked.output)["contract_digest"]
+    approved = runner.invoke(cli.app, prefix + ["spec", "approve", digest, *scope])
+    assert approved.exit_code == 0, approved.output
+    result = runner.invoke(cli.app, prefix + ["verify", "--rev", base, "--json", *scope])
+    assert result.exit_code == 2, result.output
+    assert json.loads(result.output)["status"] == "incomplete"

@@ -167,13 +167,6 @@ def approve_spec(
         _error(exc, False)
 
 
-def _status(checks: list[dict]) -> str:
-    outcomes = {check["status"] for check in checks}
-    if not outcomes or outcomes - {"pass", "violation"}:
-        return "incomplete"
-    return "violation" if "violation" in outcomes else "pass"
-
-
 def _reproduce(project: Project, state: Path, revision: str, context: str | None) -> str:
     argv = ["mentat", "--state", str(state)]
     if project.runner == "docker" and context:
@@ -219,7 +212,7 @@ def verify(
         context = ctx.obj["docker"]
         if len(models) != len(project.contract.formal):
             raise ValueError("Formal runner returned incomplete check results")
-        if _status(models) == "pass":
+        if evidence.status(models, incomplete_first=True) == "pass":
             runtime = runner_info(project, context)
             behavior, artifacts = run_behavior(project, candidate, context, runtime, run_id)
             if len(behavior) != len(project.contract.behavior):
@@ -238,7 +231,7 @@ def verify(
             "run_id": run_id,
             "recorded_at": evidence.now(),
             **_scope(project),
-            "status": _status([*models, *cases]),
+            "status": evidence.status([*models, *cases], incomplete_first=True),
             "revision": candidate.revision,
             "snapshot_digest": candidate.digest,
             "approval": approved,

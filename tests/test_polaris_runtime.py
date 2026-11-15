@@ -164,9 +164,7 @@ def test_verify_reproduces_operational_replay_violation_before_emitting_artifact
     monkeypatch.setattr(cli, "contract_inputs", lambda ctx: (spec, "fingerprint"))
     monkeypatch.setattr(cli.model_evidence, "pack_digest", lambda spec: "fingerprint")
     monkeypatch.setattr(cli.model_evidence, "approval", lambda *args: {})
-    monkeypatch.setattr(
-        cli.model_evidence, "model_checks", lambda *args, **kwargs: [{"status": "pass"}]
-    )
+    monkeypatch.setattr(cli, "run_formal", lambda *args: [{"status": "pass"}])
     monkeypatch.setattr(cli, "candidate_repo", lambda repo, state: repo)
     monkeypatch.setattr(cli, "snapshot", lambda *args: candidate)
     monkeypatch.setattr(cli, "load_cases", lambda *args: [fixture])
@@ -206,3 +204,44 @@ def test_verify_reproduces_operational_replay_violation_before_emitting_artifact
     assert len(called) == 1
     assert saved[0][0]["regressions"][0]["status"] == native_status
     assert bool(saved[0][1]) == (native_status == "violation")
+
+
+def test_verify_prioritizes_violation_over_incomplete(tmp_path, monkeypatch, candidate):
+    from mentat.showcases.polaris import cli
+
+    spec = load_spec(PACK / "contract.json")
+    fixture = load_cases(PACK / "public.json", spec)[0]
+    monkeypatch.setattr(cli, "contract_inputs", lambda ctx: (spec, "fingerprint"))
+    monkeypatch.setattr(cli.model_evidence, "pack_digest", lambda spec: "fingerprint")
+    monkeypatch.setattr(cli.model_evidence, "approval", lambda *args: {})
+    monkeypatch.setattr(
+        cli,
+        "run_formal",
+        lambda *args: [
+            {"status": "violation", "kind": "z3", "detail": "failed"},
+            {"status": "incomplete", "kind": "lean", "detail": "unavailable"},
+        ],
+    )
+    monkeypatch.setattr(cli, "candidate_repo", lambda repo, state: repo)
+    monkeypatch.setattr(cli, "snapshot", lambda *args: candidate)
+    monkeypatch.setattr(cli, "load_cases", lambda *args: [fixture])
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    result = CliRunner().invoke(
+        app,
+        [
+            "--state",
+            str(tmp_path / "state"),
+            "showcase",
+            "polaris",
+            "verify",
+            "--repo",
+            str(repo),
+            "--rev",
+            candidate.revision,
+            "--fresh",
+            "--json",
+        ],
+    )
+    assert result.exit_code == 1, result.output
+    assert json.loads(result.output)["status"] == "violation"
