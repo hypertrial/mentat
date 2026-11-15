@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "claims": [{"id":"mixed-sum", "statement":"For the bounded cases, Nemo sums distinct typed values in each group with numeric type promotion.", "assumptions":["Inputs are finite exactly representable half-units, with one to three distinct typed values per group."]}],
+  "formal": [
+    {"id":"mixed-sum-mutant", "claim":"mixed-sum", "engine":"z3", "source":"mutant.smt2", "expected":"sat"},
+    {"id":"mixed-sum-corrected", "claim":"mixed-sum", "engine":"z3", "source":"ideal.smt2", "expected":"unsat", "counterexample":"ideal-counterexample.smt2"}
+  ],
+  "behavior": [{"id":"nemo-replay", "claim":"mixed-sum", "argv":["/usr/bin/python3", "{checks}/replay.py"], "timeout_seconds":600, "artifacts":["witness.json", "replay.py", "cases.json"]}],
+  "docker_image":"mentat-nemo@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "allow_host": false
+}

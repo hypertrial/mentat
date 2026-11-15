@@ -1,0 +1,6 @@
+[
+  {"name":"mixed-int-float", "grouped":false, "groups":[{"id":0, "values":[{"type":"integer", "half_units":2}, {"type":"float", "half_units":5}]}]},
+  {"name":"integers", "grouped":false, "groups":[{"id":0, "values":[{"type":"integer", "half_units":2}, {"type":"integer", "half_units":4}]}]},
+  {"name":"float-only", "grouped":false, "groups":[{"id":0, "values":[{"type":"float", "half_units":5}]}]},
+  {"name":"mixed-three-types", "grouped":false, "groups":[{"id":0, "values":[{"type":"integer", "half_units":2}, {"type":"float", "half_units":5}, {"type":"double", "half_units":1}]}]}
+]

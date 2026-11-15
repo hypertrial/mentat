@@ -49,5 +49,6 @@ mentat accept "$PASSING_RUN" --repo "$DEMO" --base "$BASE" --runner host
 
 - [Project contracts and CLI](docs/contracts.md) covers writing claims and checks, running candidates, and interpreting results.
 - [Apache Polaris showcase](docs/polaris.md) replays a real namespace round-trip bug and exports a native regression test. Mentat 0.1 Polaris commands now live under `mentat showcase polaris`.
+- [Nemo example](docs/nemo.md) catches a silent arithmetic error, verifies the historical fix, and exports a standalone replay.
 
 Run the full suite from the Mentat clone with `uv run --locked --extra polaris pytest`. Put Lean 4.31.0 on `PATH` to include the Lean checks.
