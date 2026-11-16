@@ -1,7 +1,9 @@
 import json
 import os
+import shlex
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
@@ -200,6 +202,44 @@ def test_against_requires_full_commit_and_review_is_shown_at_approval(trial, tmp
         cli.app, prefix + ["spec", "approve", digest, *args, "--against", "HEAD"]
     )
     assert invalid_approval.exit_code != 0
+
+
+def test_against_git_diff_uses_the_same_commit_objects_as_mentat(trial):
+    repo, manifest = trial
+    trusted = repo / "trusted.txt"
+    manifest["base_files"] = ["trusted.txt"]
+    trusted.write_text("original fixture\n")
+    old = save(repo, manifest)
+    trusted.write_text("changed fixture\n")
+    new = commit(repo)
+    git(repo, "replace", old, new)
+
+    result = CliRunner().invoke(
+        cli.app, ["spec", "check", *scope(repo, new), "--against", old, "--json"]
+    )
+    assert result.exit_code == 0, result.output
+    delta = json.loads(result.output)["delta"]
+    assert "trusted.txt" in delta["base_files"]
+    diff = subprocess.check_output(shlex.split(delta["git_diff"]), text=True)
+    assert "-original fixture" in diff and "+changed fixture" in diff
+
+
+def test_python_example_creates_tags_with_global_signing_enabled(tmp_path):
+    example = Path(__file__).resolve().parents[1] / "examples/python-src/create.sh"
+    repo = tmp_path / "python example"
+    subprocess.run(
+        [str(example), str(repo)],
+        env={
+            **os.environ,
+            "GIT_CONFIG_COUNT": "2",
+            "GIT_CONFIG_KEY_0": "tag.gpgSign",
+            "GIT_CONFIG_VALUE_0": "true",
+            "GIT_CONFIG_KEY_1": "gpg.program",
+            "GIT_CONFIG_VALUE_1": str(tmp_path / "unavailable-signer"),
+        },
+        check=True,
+    )
+    assert set(git(repo, "tag", "--list").splitlines()) == {"mentat-demo-base", "mentat-demo-bad"}
 
 
 def test_host_reproduce_survives_changed_outer_path(trial, tmp_path, monkeypatch):

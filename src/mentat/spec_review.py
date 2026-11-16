@@ -88,6 +88,7 @@ def compare(project: Project, current: dict, previous: Project) -> dict:
         "git_diff": shlex.join(
             [
                 "git",
+                "--no-replace-objects",
                 "-C",
                 str(project.root),
                 "diff",

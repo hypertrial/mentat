@@ -37,7 +37,7 @@ A behavior check may declare `selectors` and a single standalone `{selectors}` a
 
 For host checks, `host_requirements` can list executable names or absolute paths in `executables` and installed Python distribution names in `python_distributions`. Set `loopback` to `true` when a check needs to bind an IPv4 loopback listener. Mentat reports availability and treats missing declared prerequisites as incomplete. It inspects Python distribution metadata with the `python3` found on the runner's effective `PATH`.
 
-Compare two contracts that support the selected runner with `--base "$NEW_BASE" --against "$OLD_BASE"` on `spec check` and `spec approve`. Review the comparison and the new contract before approving its digest. Both the local and Notion Claims Specs display declared behavior selectors.
+Compare two contracts that support the selected runner with `--base "$NEW_BASE" --against "$OLD_BASE"` on `spec check` and `spec approve`. The displayed Git diff command reads the original commit objects, matching the inputs Mentat reviewed. Review the comparison and the new contract before approving its digest. Both the local and Notion Claims Specs display declared behavior selectors.
 
 ## Claims Spec
 
