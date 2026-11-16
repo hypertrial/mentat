@@ -3,6 +3,7 @@
 import json
 import os
 import re
+from io import StringIO
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qsl, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
@@ -111,7 +112,8 @@ def _section(markdown: str) -> str | None:
     fence = ""
     containers = []
     offset = 0
-    for raw in markdown.splitlines(keepends=True):
+    # Markdown defines line endings as LF, CRLF, or CR. Keep Unicode separators in prose.
+    for raw in StringIO(markdown, newline=""):
         line = raw.rstrip("\r\n")
         candidate = _FENCE.match(line)
         container = _CONTAINER.match(line)
@@ -158,7 +160,7 @@ def _body(claims: bytes) -> str:
 def _normalized(markdown: str) -> list[str]:
     # Notion can reserialize inline code and inter-block spacing.
     markdown = _CODE.sub(r"`\1`", markdown)
-    return [line for line in markdown.splitlines() if line.strip()]
+    return [line.rstrip("\r\n") for line in StringIO(markdown, newline="") if line.strip()]
 
 
 def _has_claims_layout(lines: list[str], count: int) -> bool:
@@ -211,11 +213,8 @@ def _has_claims_layout(lines: list[str], count: int) -> bool:
 def _matches(section: str | None, claims: bytes) -> bool:
     if section is None:
         return False
-    section = section.replace("\r\n", "\n")
-    source, _, body = section.partition("\n\n")
-    return bool(_SOURCE.fullmatch(_CODE.sub(r"`\1`", source))) and _normalized(
-        body.removesuffix(_END)
-    ) == _normalized(_body(claims))
+    source, *body = _normalized(section.removesuffix(_END))
+    return bool(_SOURCE.fullmatch(source)) and body == _normalized(_body(claims))
 
 
 def notion_claims(page: str, claims: bytes, base: str, *, publish: bool = False) -> bool:
@@ -227,14 +226,8 @@ def notion_claims(page: str, claims: bytes, base: str, *, publish: bool = False)
         return False
 
     body = _body(claims)
-    count = sum(
-        bool(
-            (_NUMBERED_HEADING if body.startswith("## Overview") else _CLAIM_HEADING).fullmatch(
-                line
-            )
-        )
-        for line in body.splitlines()
-    )
+    heading = _NUMBERED_HEADING if body.startswith("## Overview\n") else _CLAIM_HEADING
+    count = sum(bool(heading.fullmatch(line)) for line in _normalized(body))
     label = "claim" if count == 1 else "claims"
     desired = f"Source commit: `{base}` · {count} {label}\n\n{body}\n\n{_END}"
     if current is None:

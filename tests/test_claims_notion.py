@@ -210,12 +210,14 @@ def test_numbered_publish_migrates_existing_section_and_noops(monkeypatch, initi
     assert len(writes) == 1
 
 
-def test_numbered_round_trip_inline_code_and_link(monkeypatch):
+@pytest.mark.parametrize("line_end", ["\n", "\r\n", "\r"])
+def test_numbered_round_trip_inline_code_and_link(monkeypatch, line_end):
     body = notion._body(NUMBERED).replace("`claim.id`", "<code>claim.id</code>")
     body = body.replace("`check.id`", "<code>check.id</code>").replace(
         "`proof.id`", "<code>proof.id</code>"
     )
     contents = f"Source commit: <code>{BASE}</code> · 1 claim\n\n{body}\n\n{notion._END}"
+    contents = contents.replace("\n\n", "\n").replace("\n", line_end)
 
     def request(page_id, payload=None):
         assert payload is None
@@ -223,6 +225,26 @@ def test_numbered_round_trip_inline_code_and_link(monkeypatch):
 
     monkeypatch.setattr(notion, "_request", request)
     assert notion.notion_claims(PAGE, NUMBERED, BASE, publish=True)
+
+
+def test_numbered_unicode_separator_inside_prose_does_not_create_headings(monkeypatch):
+    overview = "A concise overview.\u2028## Examples\u2028### 1. This is still the overview."
+    claims = NUMBERED.replace(b"A concise overview.", overview.encode())
+    contents = f"{notion._START}\n\n{notion._END}"
+
+    def request(page_id, payload=None):
+        nonlocal contents
+        if payload:
+            edit = payload["update_content"]["content_updates"][0]
+            assert edit["old_str"] == contents
+            contents = edit["new_str"]
+        return contents
+
+    monkeypatch.setattr(notion, "_request", request)
+    assert notion.notion_claims(PAGE, claims, BASE, publish=True)
+    assert overview in contents
+    assert contents.startswith(f"Source commit: `{BASE}` · 1 claim\n")
+    assert notion.notion_claims(PAGE, claims, BASE)
 
 
 @pytest.mark.parametrize(

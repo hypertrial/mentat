@@ -354,7 +354,7 @@ def test_numbered_escapes_example_link_and_preserves_check_associations(project_
     result = invoke(repo, "render")
     assert result.exit_code == 0, result.output
     text = (repo / ".mentat/claims.md").read_text()
-    assert r"[Example\] text](https://example.com/a%29injected)" in text
+    assert r"[Example\] text](https://example.com/a\)injected)" in text
     assert "Claim `claim` · Behavior `behavior`, `behavior2` · Formal `proof`, `proof2`" in text
 
 
@@ -365,6 +365,7 @@ def test_numbered_markdown_preserves_literal_heading_hashes_and_link_targets(pro
     examples = manifest["review"]["examples"]
     examples[0]["url"] = "https://example.com/?a=1&copy;"
     examples.append({**examples[0], "url": "https://github.com&commat;evil.example/path"})
+    examples.append({**examples[0], "url": "https://example.com/files/guide(final).pdf?sig=hash"})
     write_contract(repo, manifest)
     result = invoke(repo, "render")
     assert result.exit_code == 0, result.output
@@ -379,3 +380,19 @@ def test_numbered_markdown_preserves_literal_heading_hashes_and_link_targets(pro
         if child.type == "link_open"
     ]
     assert links == [example["url"] for example in examples]
+
+
+def test_numbered_review_indentation_stays_prose(project_repo):
+    repo, _, manifest = project_repo
+    manifest = numbered_manifest(manifest)
+    manifest["review"]["overview"] = "    A concise overview."
+    manifest["review"]["scope_limits"] = ["\n\n    Only the supported inputs.\n  \n"]
+    manifest["review"]["examples"][0]["summary"] = "Summary.\n\n    More details."
+    write_contract(repo, manifest)
+    result = invoke(repo, "render")
+    assert result.exit_code == 0, result.output
+    html = MarkdownIt().render((repo / ".mentat/claims.md").read_text())
+    assert "<p>A concise overview.</p>" in html
+    assert "<li>Only the supported inputs.</li>" in html
+    assert "<p>More details.</p>" in html
+    assert "<pre>" not in html

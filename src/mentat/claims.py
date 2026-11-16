@@ -25,6 +25,10 @@ def _prose(value: str) -> str:
     return _ORDERED_LIST.sub(r"\1\\\2", value)
 
 
+def _review_prose(value: str) -> str:
+    return re.sub(r"^[ \t]+", "", _prose(value), flags=re.MULTILINE).strip("\n")
+
+
 def render_claims(contract: Contract) -> bytes:
     if contract.review is not None:
         review = contract.review
@@ -33,20 +37,21 @@ def render_claims(contract: Contract) -> bytes:
             "",
             "## Overview",
             "",
-            _prose(review.overview),
+            _review_prose(review.overview),
             "",
             "## Scope limits",
             "",
         ]
         for limit in review.scope_limits:
-            lines.append("- " + _prose(limit).replace("\n", "\n  "))
+            lines.append("- " + _review_prose(limit).replace("\n", "\n  "))
         if review.examples:
             lines.extend(("", "## Examples", ""))
             for example in review.examples:
-                url = quote(example.url, safe=":/?#[]@!$&'*+,;=%-._~").replace("&", "&amp;")
+                url = quote(example.url, safe=":/?#[]@!$&'()*+,;=%-._~")
+                url = url.replace("&", "&amp;").replace("(", r"\(").replace(")", r"\)")
                 lines.append(
                     f"- [{_prose(example.label)}]({url}) — "
-                    + _prose(example.summary).replace("\n", "\n  ")
+                    + _review_prose(example.summary).replace("\n", "\n  ")
                 )
         lines.extend(("", "## Claims"))
         for number, claim in enumerate(contract.claims, 1):
