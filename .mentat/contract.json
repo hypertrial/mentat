@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "claims": [
+    {"id": "contract.base-pinning", "statement": "Approved checks come from the base and candidate source comes from the exact committed revision."},
+    {"id": "verification.outcomes", "statement": "Verification exits zero for pass, one for violation, and two for incomplete, with incomplete taking precedence."},
+    {"id": "acceptance.complete-pass", "statement": "Acceptance requires operator confirmation and an intact complete pass under the current approval.", "assumptions": ["The bounded model represents status, current approval, evidence integrity, and operator confirmation as independent eligibility gates."]},
+    {"id": "evidence.integrity", "statement": "Evidence export exposes and preserves pinned provenance and rejects modified reports and artifacts."}
+  ],
+  "formal": [
+    {"id": "acceptance.eligibility", "claim": "acceptance.complete-pass", "engine": "z3", "source": "acceptance.smt2", "expected": "unsat", "counterexample": "acceptance-counterexample.smt2"}
+  ],
+  "behavior": [
+    {"id": "check.base-pinning", "claim": "contract.base-pinning", "argv": ["python3", "-I", "{checks}/selfcheck.py", "contract.base-pinning"], "timeout_seconds": 120},
+    {"id": "check.outcomes", "claim": "verification.outcomes", "argv": ["python3", "-I", "{checks}/selfcheck.py", "verification.outcomes"], "timeout_seconds": 120},
+    {"id": "check.acceptance", "claim": "acceptance.complete-pass", "argv": ["python3", "-I", "{checks}/selfcheck.py", "acceptance.complete-pass"], "timeout_seconds": 120},
+    {"id": "check.integrity", "claim": "evidence.integrity", "argv": ["python3", "-I", "{checks}/selfcheck.py", "evidence.integrity"], "timeout_seconds": 120}
+  ],
+  "allow_host": true
+}

@@ -11,6 +11,8 @@ from uuid import uuid4
 import typer
 
 from . import evidence
+from .claims import checked_claims, write_claims
+from .claims_notion import notion_claims
 from .command import emit, finish, operator_confirm
 from .project import Project, load_project, snapshot
 from .project_formal import run_formal, tool_info
@@ -19,9 +21,13 @@ from .showcases.polaris.cli import app as polaris_app
 
 app = typer.Typer(no_args_is_help=True, pretty_exceptions_enable=False)
 spec_app = typer.Typer(no_args_is_help=True)
+claims_app = typer.Typer(no_args_is_help=True)
 evidence_app = typer.Typer(no_args_is_help=True)
 showcase_app = typer.Typer(no_args_is_help=True)
 app.add_typer(spec_app, name="spec", help="Review and approve a project contract.")
+app.add_typer(
+    claims_app, name="claims", help="Render and publish review copies of contract claims."
+)
 app.add_typer(evidence_app, name="evidence", help="Inspect and export run evidence.")
 app.add_typer(showcase_app, name="showcase", help="Try Mentat on a real project.")
 showcase_app.add_typer(polaris_app, name="polaris", help="Replay a Polaris configuration bug.")
@@ -99,6 +105,63 @@ def _summary(project: Project) -> dict:
         "contract": project.contract.model_dump(mode="json", exclude_none=True),
         "approved_files": {name: evidence.digest(data) for name, data in project.files.items()},
     }
+
+
+@claims_app.command("render")
+def render_claims(repo: Repo, output_json: JsonOutput = False) -> None:
+    """Regenerate working-tree .mentat/claims.md from the contract."""
+    try:
+        write_claims(repo)
+    except _USER_ERRORS as exc:
+        _error(exc, output_json)
+        return
+    finish({"status": "pass", "detail": ".mentat/claims.md is up to date"}, output_json)
+
+
+def _review_claims(
+    repo: Path, base: str | None, notion: str | None, output_json: bool, *, publish: bool
+) -> None:
+    try:
+        if notion is not None and base is None:
+            raise ValueError("Notion Claims Spec operations require --base with a full commit ID")
+        content, local_matches = checked_claims(repo, base)
+        matches = local_matches
+        detail = ".mentat/claims.md is up to date"
+        if not local_matches:
+            detail = "missing or stale .mentat/claims.md; run mentat claims render"
+        elif notion is not None and base is not None:
+            matches = notion_claims(notion, content, base, publish=publish)
+            detail = (
+                "Notion Claims Spec is in sync"
+                if matches
+                else "Notion Claims Spec is missing or stale"
+            )
+    except _USER_ERRORS as exc:
+        _error(exc, output_json)
+        return
+    finish({"status": "pass" if matches else "violation", "detail": detail}, output_json)
+
+
+@claims_app.command("check")
+def check_claims(
+    repo: Repo,
+    base: Annotated[str | None, typer.Option(help="Full commit ID to check.")] = None,
+    notion: Annotated[str | None, typer.Option(help="Notion page URL or ID.")] = None,
+    output_json: JsonOutput = False,
+) -> None:
+    """Check the local Claims Spec and optionally its Notion copy."""
+    _review_claims(repo, base, notion, output_json, publish=False)
+
+
+@claims_app.command("publish")
+def publish_claims(
+    repo: Repo,
+    base: Base,
+    notion: Annotated[str, typer.Option(help="Notion page URL or ID.")],
+    output_json: JsonOutput = False,
+) -> None:
+    """Publish a committed Claims Spec to the selected Notion page."""
+    _review_claims(repo, base, notion, output_json, publish=True)
 
 
 @app.command()

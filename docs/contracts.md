@@ -12,7 +12,7 @@ Create `.mentat/contract.json` and commit it along with the approved models and 
 | `claims` | Entries with unique `id`, human-readable `statement`, and optional `assumptions`. |
 | `formal` | Entries with `id`, `claim`, `engine`, and the relative `source` file. |
 | `behavior` | Entries with `id`, `claim`, and `argv`. Optional `timeout_seconds` defaults to 60 and supports 1–600. Optional `violation_exit_codes` defaults to `[1]` and supports 1–124. Optional `artifacts` lists flat output filenames. |
-| `docker_image` | Prepared OCI image reference in the form `repository@sha256:<digest>`. |
+| `docker_image` | Prepared OCI image reference in the form `repository@sha256:<digest>`. Omit for a host-only contract with `allow_host: true`. |
 | `allow_host` | Boolean. Defaults to `false`. |
 
 Every claim needs a behavior check. At least one claim needs both a formal and a behavior check. Use IDs made from letters, digits, dots, underscores, and hyphens, starting with a letter, digit, or underscore. Claim and check IDs are unique across the manifest.
@@ -25,6 +25,35 @@ For behavior, the working directory is the staged candidate root. Each `argv` el
 Bare commands use absolute entries from the runner’s `PATH`. Use an explicit path such as `./tool` to run a candidate program. For approved Python tests, use `python -I -m pytest` to keep candidate modules out of the launcher’s import path.
 
 Status reflects the checks you wrote. A passing model check establishes a result about the model under its assumptions. A passing behavior check establishes that an approved command passed for the recorded snapshot and environment. For checks that use candidate-owned tests, review changes to those tests as part of the candidate.
+
+## Claims Spec
+
+Edit claim wording, assumptions, and check associations in `.mentat/contract.json`. Regenerate and commit the review copy with the contract.
+
+```sh
+mentat claims render --repo "$REPO"
+mentat claims check --repo "$REPO"
+mentat claims check --repo "$REPO" --base "$BASE" --json
+```
+
+The last command reads only the named commit. A missing or stale review copy returns exit `1`. Invalid input or an unavailable service returns `2`. For a contract that includes `claims.md`, contract loading requires the committed file to match the generated copy. Contracts without the file can still be approved and verified.
+
+### Publish to one Notion page
+
+Grant a Notion connection read and update access to the page, and provide its token in `MENTAT_NOTION_TOKEN`. Set `PAGE` to the page URL or ID and `BASE` to the full contract commit ID.
+
+On a new page, add a top-level paragraph reading `Source: working-tree draft` and a divider directly after it. Publish replaces the section from the source line through the divider in one conditional edit, so simultaneous first publications cannot create duplicate sections.
+
+```sh
+mentat claims check --repo "$REPO" --base "$BASE" --notion "$PAGE"
+mentat claims publish --repo "$REPO" --base "$BASE" --notion "$PAGE"
+```
+
+Publish writes only the managed Claims Spec section and records its source commit and claim count. Keep the divider immediately after the last claim, before any page notes. Make wording changes in the Git contract. An unchanged spec can retain the commit where it was last published. The page is a review copy. Approval and verification depend on the committed contract.
+
+### Verify Mentat itself
+
+From a commit containing the root [Claims Spec](../.mentat/claims.md), run Mentat with `uv run --locked mentat` and select `--runner host` for `spec check`, `spec approve`, and `verify`. The approved checks validate the staged console entry point and use Python and Git to exercise the candidate with isolated repositories and state. Use the host runner with trusted Mentat source.
 
 ## Runners
 

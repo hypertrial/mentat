@@ -101,7 +101,7 @@ class Contract(_Model):
     claims: list[Claim] = Field(min_length=1, max_length=128)
     formal: list[Formal] = Field(min_length=1, max_length=128)
     behavior: list[Behavior] = Field(min_length=1, max_length=128)
-    docker_image: str
+    docker_image: str | None = None
     allow_host: bool = False
 
     @field_validator("version", mode="before")
@@ -113,7 +113,10 @@ class Contract(_Model):
 
     @model_validator(mode="after")
     def relationships(self):
-        if not _IMAGE.fullmatch(self.docker_image):
+        if self.docker_image is None:
+            if not self.allow_host or "docker_image" in self.model_fields_set:
+                raise ValueError("docker_image is required unless allow_host is true")
+        elif not _IMAGE.fullmatch(self.docker_image):
             raise ValueError("docker image must be pinned by sha256 digest")
         ids = [item.id for group in (self.claims, self.formal, self.behavior) for item in group]
         if any(not _NAME.fullmatch(i) for i in ids) or len(set(ids)) != len(ids):
@@ -363,7 +366,7 @@ def snapshot(root: Path, rev: str) -> Snapshot:
     return Snapshot(revision, _digest(files), files)
 
 
-def load_project(repo: Path, base: str, runner: str) -> Project:
+def contract_inputs(repo: Path, base: str) -> tuple[Path, str, Contract, dict[str, bytes]]:
     root = _root(repo)
     revision = _revision(root, base)
     tree = _tree(root, revision, approved=True)
@@ -373,6 +376,17 @@ def load_project(repo: Path, base: str, runner: str) -> Project:
     if "contract.json" not in files:
         raise ValueError("base has no .mentat/contract.json")
     contract = Contract.model_validate(decode_json(files["contract.json"]))
+    return root, revision, contract, files
+
+
+def load_project(repo: Path, base: str, runner: str) -> Project:
+    from .claims import render_claims
+
+    root, revision, contract, files = contract_inputs(repo, base)
+    if "claims.md" in files and files["claims.md"] != render_claims(contract):
+        raise ValueError("stale .mentat/claims.md; run mentat claims render and commit it")
+    if runner == "docker" and contract.docker_image is None:
+        raise ValueError("contract allows only host execution; select --runner host")
     if runner not in ("docker", "host") or (runner == "host" and not contract.allow_host):
         raise ValueError("runner is not allowed by contract")
     for check in contract.formal:

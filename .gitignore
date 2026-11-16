@@ -1,5 +1,10 @@
 /.cache/
-/.mentat/
+/.mentat/*
+!/.mentat/contract.json
+!/.mentat/claims.md
+!/.mentat/selfcheck.py
+!/.mentat/acceptance.smt2
+!/.mentat/acceptance-counterexample.smt2
 /.venv/
 /dist/
 __pycache__/
