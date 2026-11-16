@@ -452,7 +452,11 @@ def test_historical_notion_angle_escape_is_a_noop(monkeypatch):
         rb"- Check `check.id` selects test\_app.py::test\_case\[\<value\>\]"
         b"\n\nClaim `claim.id`",
     )
-    body = notion._body(spec).replace(r"\<value\>", r"\<value>")
+    body = (
+        notion._body(spec)
+        .replace(r"\<value\>", r"\<value>")
+        .replace("`check.id`", "<code>check.id</code>")
+    )
     contents = f"Source commit: `{BASE}` · 1 claim\n\n{body}\n\n{notion._END}"
 
     def request(page_id, payload=None):
@@ -474,3 +478,34 @@ def test_grouped_selector_accepts_equivalent_backtick_delimiters(monkeypatch):
     assert notion.notion_claims(PAGE, GROUPED, BASE)
     contents = contents.replace("case[one]", "case``[one]")
     assert not notion.notion_claims(PAGE, GROUPED, BASE)
+
+
+def test_grouped_notion_prose_angle_escaping_is_a_noop(monkeypatch):
+    claims = GROUPED.replace(
+        b"### Behavior checks",
+        rb"### Coverage limits"
+        b"\n\n"
+        rb"- Only samples inside \<window\> are checked when count \> 0."
+        b"\n\n"
+        b"### Behavior checks",
+    )
+    body = notion._body(claims).replace(r"\>", ">")
+    contents = f"Source commit: `{BASE}` · 1 claim\n\n{body}\n\n{notion._END}"
+
+    def request(page_id, payload=None):
+        assert payload is None
+        return contents
+
+    monkeypatch.setattr(notion, "_request", request)
+    assert notion.notion_claims(PAGE, claims, BASE, publish=True)
+    contents = contents.replace(r"\<window>", "<https://example.com>")
+    assert not notion.notion_claims(PAGE, claims, BASE)
+
+
+@pytest.mark.parametrize("prefix", ["", "- "])
+def test_notion_prose_does_not_match_a_quote_block(monkeypatch, prefix):
+    claims = GROUPED.replace(b"The actual claim.", f"{prefix}\\> A literal comparison.".encode())
+    body = notion._body(claims).replace(r"\>", ">")
+    contents = f"Source commit: `{BASE}` · 1 claim\n\n{body}\n\n{notion._END}"
+    monkeypatch.setattr(notion, "_request", lambda page_id: contents)
+    assert not notion.notion_claims(PAGE, claims, BASE)

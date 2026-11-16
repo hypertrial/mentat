@@ -25,6 +25,7 @@ _CHECK_IDS = rf"`{_ID}`(?:, `{_ID}`)*"
 _LEGACY_SELECTOR = re.compile(rf"(- Check (?:`{_ID}`|<code>{_ID}</code>) selects )(.*)")
 _SELECTOR = "- Selector "
 _ESCAPE_OR_GREATER_THAN = re.compile(r"\\.|>")
+_BLOCK_QUOTE = re.compile(r"^[ \t]*(?:(?:[-+*]|[0-9]+[.)])[ \t]+)*>")
 _BEHAVIOR_CHECK = re.compile(rf"Check `({_ID})` · Claim `({_ID})`( · Standalone check)?")
 _FORMAL_CHECK = re.compile(rf"Formal check `({_ID})` · Claim `({_ID})` · (?:Z3|Lean)")
 _INVENTORY = re.compile(
@@ -190,6 +191,11 @@ def _selector_value(code: str) -> str | None:
     return None
 
 
+def _escape_closing_angles(text: str) -> str:
+    # Notion v2 omits the escape on literal closing angle brackets.
+    return _ESCAPE_OR_GREATER_THAN.sub(lambda token: r"\>" if token[0] == ">" else token[0], text)
+
+
 def _normalized(markdown: str) -> list[str]:
     # Notion can reserialize inline code and inter-block spacing.
     lines = []
@@ -204,13 +210,12 @@ def _normalized(markdown: str) -> list[str]:
             if value is not None:
                 selector = _prose(value)
             else:
-                # Notion v2 can leave a literal closing angle bracket unescaped.
-                selector = _ESCAPE_OR_GREATER_THAN.sub(
-                    lambda token: r"\>" if token[0] == ">" else token[0], selector
-                )
+                selector = _escape_closing_angles(selector)
             line = _CODE.sub(r"`\1`", prefix) + selector
         else:
             line = _CODE.sub(r"`\1`", line)
+            if not _BLOCK_QUOTE.match(line):
+                line = _escape_closing_angles(line)
         if line.strip():
             lines.append(line)
     return lines

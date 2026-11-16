@@ -68,7 +68,7 @@ mentat claims check --repo "$REPO" --base "$BASE" --notion "$PAGE"
 mentat claims publish --repo "$REPO" --base "$BASE" --notion "$PAGE"
 ```
 
-Publish writes only the managed Claims Spec section and records its source commit and claim count. It can update an existing managed page from either historical layout to the grouped layout. Notion may represent literal selectors as HTML code on readback. Keep the divider immediately after the last managed line, before any page notes. Make wording changes in the Git contract. An unchanged spec can retain the commit where it was last published. The page is a review copy. Approval and verification depend on the committed contract.
+Publish writes only the managed Claims Spec section and records its source commit and claim count. It can update an existing managed page from either historical layout to the grouped layout. Mentat accepts Notion's equivalent inline code and literal angle bracket escaping on readback. Keep the divider immediately after the last managed line, before any page notes. Make wording changes in the Git contract. An unchanged spec can retain the commit where it was last published. The page is a review copy. Approval and verification depend on the committed contract.
 
 ### Verify Mentat itself
 
