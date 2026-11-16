@@ -277,6 +277,22 @@ def test_host_candidate_cannot_shadow_command_through_relative_path(
             "unsat",
             "pass",
         ),
+        (
+            "(define-fun-rec f ((n Int)) Int (ite (<= n 0) 0 (+ 1 (f (- n 1)))))\n"
+            "(assert (= (f 2) 2))",
+            None,
+            "sat",
+            "pass",
+        ),
+        (
+            "(define-funs-rec ((even ((n Int)) Bool) (odd ((n Int)) Bool)) "
+            "((ite (<= n 0) true (odd (- n 1))) (ite (<= n 0) false (even (- n 1)))))\n"
+            "(assert (even 2))",
+            "(assert (not (even 2)))",
+            "unsat",
+            "pass",
+        ),
+        ("(assert true)", "(define-fun-rec f () Int 0)", "unsat", "incomplete"),
         ("(invalid command)", None, "sat", "incomplete"),
         ("(assert! false)", None, "sat", "incomplete"),
         ("(assert.foo false)", None, "sat", "incomplete"),
@@ -314,6 +330,14 @@ def test_z3_vacuity_and_expected_result(
     ("source", "theorem", "status"),
     [
         ("theorem verified : True := trivial", "verified", "pass"),
+        ("namespace Example\ntheorem α₀! : True := trivial\nend Example", "Example.α₀!", "pass"),
+        (
+            "prelude\ninductive Witness : Prop where\n  | intro\n"
+            "theorem verified : Witness := Witness.intro",
+            "verified",
+            "pass",
+        ),
+        ("theorem verified : True := trivial", "verified\n#check True", "incomplete"),
         ("theorem verified : True := trivial", "missing", "incomplete"),
         ("axiom bad : False\ntheorem verified : False := bad", "verified", "incomplete"),
         ("def verified : True := trivial", "verified", "incomplete"),

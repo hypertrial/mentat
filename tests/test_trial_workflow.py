@@ -224,11 +224,12 @@ def test_against_git_diff_uses_the_same_commit_objects_as_mentat(trial):
     assert "-original fixture" in diff and "+changed fixture" in diff
 
 
-def test_python_example_creates_tags_with_global_signing_enabled(tmp_path):
-    example = Path(__file__).resolve().parents[1] / "examples/python-src/create.sh"
-    repo = tmp_path / "python example"
+@pytest.mark.parametrize(("example", "other"), [("quickstart", "fixed"), ("python-src", "bad")])
+def test_example_creates_tags_with_global_signing_enabled(tmp_path, example, other):
+    script = Path(__file__).resolve().parents[1] / "examples" / example / "create.sh"
+    repo = tmp_path / "example repo"
     subprocess.run(
-        [str(example), str(repo)],
+        [str(script), str(repo)],
         env={
             **os.environ,
             "GIT_CONFIG_COUNT": "2",
@@ -239,7 +240,10 @@ def test_python_example_creates_tags_with_global_signing_enabled(tmp_path):
         },
         check=True,
     )
-    assert set(git(repo, "tag", "--list").splitlines()) == {"mentat-demo-base", "mentat-demo-bad"}
+    tags = {"mentat-demo-base", f"mentat-demo-{other}"}
+    assert set(git(repo, "tag", "--list").splitlines()) == tags
+    for tag in tags:
+        assert git(repo, "cat-file", "-t", f"refs/tags/{tag}") == "commit"
 
 
 def test_host_reproduce_survives_changed_outer_path(trial, tmp_path, monkeypatch):

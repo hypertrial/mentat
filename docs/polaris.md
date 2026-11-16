@@ -38,7 +38,7 @@ uv run --locked --extra polaris mentat showcase polaris accept "$PASSING_RUN"
 
 The fixture gives `["finance.us"]` and `["finance", "us"]` distinct values. The oracle reads Polaris independently over REST, and the destination receives the source CLI's exact export bytes. The evidence records per-claim differences and command failures. Mentat attempts native reproduction for supported claim violations, including failures during export, apply, and re-export. A reproduced failure with confirmed container cleanup produces a pytest file. Copy it into `client/python/tests/` in the repair workspace and run its header command against the failing and repaired revisions.
 
-An out-of-memory kill, a signal exit, or a stopped server leaves the affected replay stage incomplete. If native pytest cannot confirm container removal, its result is incomplete.
+An out-of-memory kill, a signal exit, or a stopped server leaves the affected replay stage incomplete. Native pytest confirms a violation only for a test assertion failure without collection, setup, teardown, or other test errors. Interrupted test execution, missing or inconsistent results, and unconfirmed container removal leave the result incomplete.
 
 For agents, `--json` emits a versioned result. Exit `0` means complete success, `1` means a confirmed violation, and `2` means verification is incomplete or the input is invalid. Polaris verification gives a confirmed violation precedence when another check is incomplete. The manifest retains each result. Mentat reruns Z3 and Lean for every verification. Existing commands may still pass `--fresh`. The live oracle and native regression cover the reported fixtures and revisions. A contract or verifier change requires fresh approval.
 

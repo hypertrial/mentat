@@ -85,8 +85,8 @@ SH_CLAMP
 write_candidate -1
 git -C "$repo" add .
 git -C "$repo" -c commit.gpgsign=false commit -qm "Add contract and buggy clamp"
-git -C "$repo" tag mentat-demo-base
+git -C "$repo" -c tag.gpgSign=false tag mentat-demo-base
 write_candidate 0
 git -C "$repo" add clamp
 git -C "$repo" -c commit.gpgsign=false commit -qm "Clamp negative values to zero"
-git -C "$repo" tag mentat-demo-fixed
+git -C "$repo" -c tag.gpgSign=false tag mentat-demo-fixed

@@ -21,6 +21,46 @@ _RUNTIME = Path(__file__).parent / "pack" / "runtime"
 _RECIPE_LABEL = "org.hypertrial.mentat.runner-recipe"
 _TIMEOUT = 180
 _MAX_OUTPUT = 1024 * 1024
+_PYTEST_LAUNCHER = """
+import pytest
+
+def assertion_failure(error):
+    if isinstance(error, BaseExceptionGroup):
+        return all(assertion_failure(child) for child in error.exceptions)
+    return isinstance(error, (AssertionError, pytest.fail.Exception))
+
+class Results:
+    assertions = 0
+    errors = 0
+
+    @pytest.hookimpl(hookwrapper=True)
+    def pytest_runtest_makereport(self, item, call):
+        report = (yield).get_result()
+        if report.failed:
+            if (report.when == "call" and call.excinfo is not None
+                    and assertion_failure(call.excinfo.value)):
+                self.assertions += 1
+            else:
+                self.errors += 1
+
+    def pytest_collectreport(self, report):
+        if report.failed:
+            self.errors += 1
+
+    def pytest_keyboard_interrupt(self, excinfo):
+        self.errors += 1
+
+results = Results()
+code = pytest.main(["-q", "-p", "no:cacheprovider", "/opt/test_candidate.py"], plugins=[results])
+status = "incomplete"
+if not results.errors:
+    if code == 0 and not results.assertions:
+        status = "pass"
+    elif code == 1 and results.assertions:
+        status = "violation"
+print("\\nMENTAT_PYTEST_RESULT=" + status, flush=True)
+raise SystemExit(code)
+"""
 
 
 def _docker(context: str, *args: str, timeout: int = _TIMEOUT) -> tuple[int, bytes]:
@@ -283,12 +323,8 @@ def run_pytest(
                 "PYTHONDONTWRITEBYTECODE=1",
                 result["runtime"]["client_image"],
                 "python",
-                "-m",
-                "pytest",
-                "-q",
-                "-p",
-                "no:cacheprovider",
-                "/opt/test_candidate.py",
+                "-c",
+                _PYTEST_LAUNCHER,
             )
             if code:
                 return result
@@ -301,8 +337,12 @@ def run_pytest(
             for path in support_paths:
                 if _docker(context, "cp", str(path), f"{name}:/opt/{path.name}")[0]:
                     return result
-            code, _ = _start(context, name, timeout=120)
-            result["status"] = "pass" if code == 0 else "violation" if code == 1 else "incomplete"
+            code, output = _start(context, name, timeout=120)
+            marker = output.splitlines()[-1:]  # The launcher writes its result last.
+            if code == 0 and marker == [b"MENTAT_PYTEST_RESULT=pass"]:
+                result["status"] = "pass"
+            elif code == 1 and marker == [b"MENTAT_PYTEST_RESULT=violation"]:
+                result["status"] = "violation"
             result["checks"].append({"name": "pytest", "status": result["status"]})
     except (ValueError, RuntimeError, OSError) as exc:
         if isinstance(exc, _OOMKilled):

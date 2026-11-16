@@ -15,7 +15,14 @@ from pathlib import Path
 _TIMEOUT = 15
 _OUTPUT_LIMIT = 16_384
 _LEAN_VERSION = "4.31.0"
-_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_']*(?:\.[A-Za-z_][A-Za-z0-9_']*)*\Z")
+# Match Lean 4.31's isIdFirst/isIdRest in Init.Meta.Defs before interpolating a name.
+_LEAN_FIRST = (
+    r"A-Za-z_\u00c0-\u00d6\u00d8-\u00f6\u00f8-\u017f"
+    r"\u0391-\u039f\u03a1-\u03a2\u03a4-\u03a9\u03b1-\u03ba\u03bc-\u03fb"
+    r"\u1f00-\u1ffe\u2100-\u214f\U0001d49c-\U0001d59f"
+)
+_LEAN_PART = rf"[{_LEAN_FIRST}][{_LEAN_FIRST}0-9'!?\u2080-\u2089\u2090-\u209c\u1d62-\u1d6a\u2c7c]*"
+_NAME = re.compile(rf"{_LEAN_PART}(?:\.{_LEAN_PART})*")
 _COMMAND = re.compile(r'\(\s*(?:;[^\n]*\n\s*)*([a-zA-Z][a-zA-Z0-9_-]*)(?=[ \t\r\n();"|])')
 
 
@@ -207,6 +214,8 @@ def _run_z3(check, files, tools):
             "declare-fun",
             "declare-sort",
             "define-fun",
+            "define-fun-rec",
+            "define-funs-rec",
             "define-sort",
             "assert",
         }
@@ -290,11 +299,7 @@ def _run_lean(check, files, tools):
                     "Std",
                 }
 
-            if (
-                deps.returncode
-                or not dependencies
-                or not all(standard(dep) for dep in dependencies)
-            ):
+            if deps.returncode or not all(standard(dep) for dep in dependencies):
                 result["detail"] = "Lean source must import only Lean standard library modules"
                 result["evidence"]["dependency_output"] = (deps.stdout + deps.stderr)[
                     -_OUTPUT_LIMIT:

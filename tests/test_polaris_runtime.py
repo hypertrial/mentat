@@ -1,4 +1,6 @@
 import json
+import subprocess
+import sys
 
 import pytest
 from typer.testing import CliRunner
@@ -40,7 +42,7 @@ def test_pytest_cleanup_failure_cannot_report_success_or_violation(
     def docker(_context, *args, **kwargs):
         calls.append(args)
         if args[0] == "start":
-            return pytest_exit, b""
+            return pytest_exit, f"MENTAT_PYTEST_RESULT={expected}\n".encode()
         if args[0] == "inspect":
             return 0, state(args[2], pytest_exit)
         if args[0] == "rm":
@@ -53,6 +55,114 @@ def test_pytest_cleanup_failure_cannot_report_success_or_violation(
     result = docker_runtime.run_pytest(candidate, "context", "def test_ok(): pass", "pytest")
     assert result["status"] == (expected if cleanup == "ok" else "incomplete")
     assert any(call[0] == "rm" for call in calls)
+
+
+@pytest.mark.parametrize(
+    "source,expected",
+    [
+        ("def test_ok(): pass\n", "pass"),
+        ("def test_failure(): assert False\n", "violation"),
+        (
+            "import pytest\n@pytest.fixture(autouse=True)\ndef setup(): raise RuntimeError()\n"
+            "def test_ok(): pass\n",
+            "incomplete",
+        ),
+        (
+            "import pytest\n@pytest.fixture\ndef broken(): raise RuntimeError()\n"
+            "def test_failure(): assert False\ndef test_setup(broken): pass\n",
+            "incomplete",
+        ),
+        ("def test_error(): raise ValueError()\n", "incomplete"),
+        (
+            "from hypothesis import given, settings, strategies as st\n"
+            "@settings(derandomize=True, database=None)\n"
+            "@given(reverse=st.booleans())\n"
+            "def test_failure(reverse):\n"
+            "    if reverse:\n"
+            "        assert False, 'reverse order'\n"
+            "    assert False, 'forward order'\n",
+            "violation",
+        ),
+        (
+            "def test_mixed():\n"
+            "    raise ExceptionGroup('mixed', [AssertionError(), RuntimeError()])\n",
+            "incomplete",
+        ),
+        (
+            "import pytest\ndef test_first(): assert False\n"
+            "def test_abort(): pytest.exit('interrupted', returncode=1)\n",
+            "incomplete",
+        ),
+        (
+            "import pytest\n@pytest.fixture\ndef broken(): raise RuntimeError()\n"
+            "def test_first(broken): pass\n"
+            "def test_abort(): pytest.exit('interrupted', returncode=0)\n",
+            "incomplete",
+        ),
+    ],
+)
+@pytest.mark.parametrize("drop_marker", [False, True])
+def test_pytest_launcher_classifies_real_pytest_outcomes(
+    monkeypatch, runtime, candidate, source, expected, drop_marker
+):
+    command = None
+    test_path = None
+    exit_code = None
+
+    def docker(_context, *args, **kwargs):
+        nonlocal command, test_path, exit_code
+        if args[0] == "create":
+            command = list(args[args.index("client") + 1 :])
+            assert command[:2] == ["python", "-c"]
+        elif args[0] == "cp" and args[-1].endswith(":/opt/test_candidate.py"):
+            test_path = args[1]
+        elif args[0] == "start":
+            assert command is not None and test_path is not None
+            local_command = [
+                sys.executable,
+                *(arg.replace("/opt/test_candidate.py", test_path) for arg in command[1:]),
+            ]
+            completed = subprocess.run(local_command, capture_output=True, timeout=30)
+            exit_code = completed.returncode
+            output = completed.stdout
+            if drop_marker:
+                output = b"\n".join(
+                    line
+                    for line in output.splitlines()
+                    if not line.startswith(b"MENTAT_PYTEST_RESULT=")
+                )
+            return exit_code, output
+        elif args[0] == "inspect":
+            return 0, state(args[2], exit_code)
+        return 0, b""
+
+    monkeypatch.setattr(docker_runtime, "_docker", docker)
+    result = docker_runtime.run_pytest(candidate, "context", source, "pytest")
+    assert result["status"] == ("incomplete" if drop_marker else expected), result
+
+
+@pytest.mark.parametrize(
+    "exit_code,output",
+    [
+        (0, b"MENTAT_PYTEST_RESULT=violation\n"),
+        (1, b"MENTAT_PYTEST_RESULT=pass\n"),
+        (1, b"MENTAT_PYTEST_RESULT=unknown\n"),
+        (1, b"MENTAT_PYTEST_RESULT=violation\nextra output\n"),
+    ],
+)
+def test_pytest_rejects_inconsistent_completion_marker(
+    monkeypatch, runtime, candidate, exit_code, output
+):
+    def docker(_context, *args, **kwargs):
+        if args[0] == "start":
+            return exit_code, output
+        if args[0] == "inspect":
+            return 0, state(args[2], exit_code)
+        return 0, b""
+
+    monkeypatch.setattr(docker_runtime, "_docker", docker)
+    result = docker_runtime.run_pytest(candidate, "context", "def test_ok(): pass", "pytest")
+    assert result["status"] == "incomplete"
 
 
 @pytest.mark.parametrize("create_raises", [False, True])
