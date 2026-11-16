@@ -4,19 +4,20 @@ import os
 import shlex
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Annotated, Literal
 from uuid import uuid4
 
 import typer
 
-from . import evidence
+from . import evidence, spec_review
 from .claims import checked_claims, write_claims
 from .claims_notion import notion_claims
 from .command import emit, finish, operator_confirm
 from .project import Project, load_project, snapshot
 from .project_formal import run_formal, tool_info
-from .runner import run_behavior, runner_info
+from .runner import host_diagnostics, host_path, run_behavior, runner_info
 from .showcases.polaris.cli import app as polaris_app
 
 app = typer.Typer(no_args_is_help=True, pretty_exceptions_enable=False)
@@ -34,6 +35,7 @@ showcase_app.add_typer(polaris_app, name="polaris", help="Replay a Polaris confi
 
 Repo = Annotated[Path, typer.Option(exists=True, file_okay=False, help="Local Git repository.")]
 Base = Annotated[str, typer.Option(help="Full commit ID containing the approved contract.")]
+Against = Annotated[str | None, typer.Option(help="Full commit ID to compare with the base.")]
 Runner = Annotated[
     Literal["docker", "host"], typer.Option(help="Execution mode to approve or use.")
 ]
@@ -96,15 +98,17 @@ def _error(exc: Exception, output_json: bool) -> None:
     finish({"schema_version": 2, "status": "incomplete", "detail": str(exc)}, output_json)
 
 
-def _summary(project: Project) -> dict:
-    return {
+def _summary(project: Project, against: str | None = None) -> dict:
+    result = {
         "schema_version": 2,
         "status": "pass",
         **_scope(project),
-        "lean_runs_on_host": any(check.engine == "lean" for check in project.contract.formal),
-        "contract": project.contract.model_dump(mode="json", exclude_none=True),
-        "approved_files": {name: evidence.digest(data) for name, data in project.files.items()},
+        **spec_review.summary(project),
     }
+    if against is not None:
+        previous = load_project(project.root, against, project.runner)
+        result["delta"] = spec_review.compare(project, result, previous)
+    return result
 
 
 @claims_app.command("render")
@@ -176,14 +180,22 @@ def doctor(
     try:
         project = load_project(repo, base, runner)
         runtime = runner_info(project, ctx.obj["docker"])
-        tools = tool_info(project)
+        problems = host_diagnostics(runtime) if runner == "host" else []
+        try:
+            tools = tool_info(project)
+        except _USER_ERRORS as exc:
+            tools = {}
+            problems.append(str(exc))
         result = {
             "schema_version": 2,
-            "status": "pass",
+            "status": "incomplete" if problems else "pass",
             **_scope(project),
             "runtime": runtime,
             "tools": tools,
         }
+        if problems:
+            result["diagnostics"] = problems
+            result["detail"] = "\n".join(problems)
         if not output_json:
             typer.echo(evidence.json_bytes({"runtime": runtime, "tools": tools}).decode().rstrip())
         finish(result, output_json)
@@ -193,13 +205,17 @@ def doctor(
 
 @spec_app.command("check")
 def check_spec(
-    repo: Repo, base: Base, runner: Runner = "docker", output_json: JsonOutput = False
+    repo: Repo,
+    base: Base,
+    runner: Runner = "docker",
+    output_json: JsonOutput = False,
+    against: Against = None,
 ) -> None:
     """Show the committed contract and the digest to approve."""
     try:
-        result = _summary(load_project(repo, base, runner))
+        result = _summary(load_project(repo, base, runner), against)
         if not output_json:
-            typer.echo(evidence.json_bytes(result).decode().rstrip())
+            spec_review.show(result)
         finish(result, output_json)
     except _USER_ERRORS as exc:
         _error(exc, output_json)
@@ -207,7 +223,12 @@ def check_spec(
 
 @spec_app.command("approve")
 def approve_spec(
-    ctx: typer.Context, digest: str, repo: Repo, base: Base, runner: Runner = "docker"
+    ctx: typer.Context,
+    digest: str,
+    repo: Repo,
+    base: Base,
+    runner: Runner = "docker",
+    against: Against = None,
 ) -> None:
     """Approve the exact contract reviewed in the terminal."""
     try:
@@ -215,8 +236,8 @@ def approve_spec(
         if digest != project.fingerprint:
             raise ValueError("Approval must name the digest displayed by spec check")
         state = _state(ctx, project)
-        summary = _summary(project)
-        typer.echo(evidence.json_bytes(summary).decode().rstrip())
+        summary = _summary(project, against)
+        spec_review.show(summary)
         decision = f"Approve contract {digest} for {runner} candidate execution"
         if summary["lean_runs_on_host"]:
             decision += " and allow the reviewed Lean source to execute on this host"
@@ -284,6 +305,11 @@ def verify(
                 {"case_id": check["id"], "status": check["status"], "checks": [check]}
                 for check in behavior
             ]
+        if runner == "host":
+            runtime.setdefault("path", host_path())
+            runtime["mentat_python"] = sys.executable
+            runtime["invocation_path"] = os.environ.get("PATH", os.defpath)
+            runtime["invocation_directory"] = str(Path.cwd())
         if load_project(repo, base, runner).fingerprint != project.fingerprint:
             raise ValueError("Contract or verifier changed during the run. Repeat after approval")
         if _approval(state, project) != approved:
@@ -309,6 +335,13 @@ def verify(
             "tools": tools,
             "reproduce": _reproduce(project, state, candidate.revision, runtime.get("context")),
         }
+        if runner == "host":
+            args = shlex.split(record["reproduce"])[1:]
+            launcher = [sys.executable, "-P", "-c", "from mentat.cli import app; app()"]
+            record["host_reproduce"] = (
+                f"cd {shlex.quote(runtime['invocation_directory'])} && "
+                f"PATH={shlex.quote(runtime['invocation_path'])} {shlex.join([*launcher, *args])}"
+            )
         bundle = evidence.save_run(state, record, artifacts)
         finish({**record, "bundle": str(bundle)}, output_json)
     except _USER_ERRORS as exc:

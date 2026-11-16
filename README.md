@@ -45,6 +45,30 @@ PASSING_RUN='paste the passing run ID'
 mentat accept "$PASSING_RUN" --repo "$DEMO" --base "$BASE" --runner host
 ```
 
+## Try approved pytest checks on a src-layout project
+
+This example requires pytest in the `python3` environment on `PATH`. It creates a fresh Git repository with a working base and a bad candidate that also weakens its own test. The contract runs the base's approved tests and fixture against the candidate's `src` directory.
+
+```sh
+DEMO="$(mktemp -d)/python-src"
+./examples/python-src/create.sh "$DEMO"
+BASE=$(git -C "$DEMO" rev-parse mentat-demo-base)
+BAD=$(git -C "$DEMO" rev-parse mentat-demo-bad)
+mentat doctor --repo "$DEMO" --base "$BASE" --runner host
+mentat spec check --repo "$DEMO" --base "$BASE" --runner host
+```
+
+Review the contract and selected base files, then approve the displayed digest. The bad revision returns exit `1`; the base returns exit `0`.
+
+```sh
+DIGEST='paste the contract digest'
+mentat spec approve "$DIGEST" --repo "$DEMO" --base "$BASE" --runner host
+mentat verify --repo "$DEMO" --base "$BASE" --rev "$BAD" --runner host --json
+mentat verify --repo "$DEMO" --base "$BASE" --rev "$BASE" --runner host --json
+```
+
+See [approved base files and selectors](docs/contracts.md#approved-base-files-and-selectors) for the launcher, host prerequisites, and evidence reproduction details.
+
 ## Use Mentat on your project
 
 - [Project contracts and CLI](docs/contracts.md) covers writing claims and checks, running candidates, and interpreting results.

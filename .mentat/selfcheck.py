@@ -135,14 +135,30 @@ class Fixture:
 
 def base_pinning(root):
     f = Fixture(root)
+    manifest_path = f.repo / ".mentat/contract.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["base_files"] = ["approved-fixture.txt"]
+    manifest["behavior"][0]["argv"].append("{selectors}")
+    manifest["behavior"][0]["selectors"] = ["{checks}/base/approved-fixture.txt"]
+    manifest_path.write_text(json.dumps(manifest))
+    check_path = f.repo / ".mentat/check0.py"
+    check_path.write_text(
+        "import sys\nfrom pathlib import Path\n"
+        "assert Path(sys.argv[1]).read_text() == 'approved fixture'\n" + check_path.read_text()
+    )
+    fixture = f.repo / "approved-fixture.txt"
+    fixture.write_text("approved fixture")
+    f.base = f.commit("select committed fixture")
     digest = f.approve()
     (f.repo / "candidate.txt").write_text("committed candidate")
     (f.repo / ".mentat/check0.py").write_text("raise SystemExit(1)\n")
     (f.repo / ".mentat/model.smt2").write_text("(assert false)\n")
     (f.repo / ".mentat/contract.json").write_text("invalid candidate contract")
+    fixture.write_text("candidate fixture")
     candidate = f.commit("candidate")
     (f.repo / "candidate.txt").write_text("dirty candidate")
     (f.repo / ".mentat/check0.py").write_text("raise SystemExit(2)\n")
+    fixture.write_text("dirty fixture")
     (f.repo / "untracked.txt").write_text("dirty")
     result, record = f.verify(candidate)
     assert result.exit_code == 0, result.output
@@ -225,9 +241,16 @@ def integrity(root):
     assert exported.exit_code == 0, exported.output
     manifest = json.loads((destination / "manifest.json").read_text())
     report = (destination / "report.md").read_text()
-    for key in ("base", "revision", "contract_digest", "snapshot_digest", "reproduce"):
+    for key in (
+        "base",
+        "revision",
+        "contract_digest",
+        "snapshot_digest",
+        "reproduce",
+        "host_reproduce",
+    ):
         assert manifest[key] == record[key], (key, manifest)
-    for key in ("base", "revision", "contract_digest", "reproduce"):
+    for key in ("base", "revision", "contract_digest", "host_reproduce"):
         assert record[key] in report, (key, report)
     assert {p.name: p.read_bytes() for p in destination.iterdir()} == {
         p.name: p.read_bytes() for p in bundle.iterdir()
@@ -337,6 +360,11 @@ def approval_scope(root):
     manifest["docker_image"] = "example/test@sha256:" + "a" * 64
     (f.repo / ".mentat/contract.json").write_text(json.dumps(manifest))
     next_base = f.commit("next base")
+    reviewed = f.invoke("spec", "check", *f.scope(next_base), "--against", f.base, "--json")
+    assert reviewed.exit_code == 0, reviewed.output
+    delta = json.loads(reviewed.output)["delta"]
+    assert delta["against_digest"] == digest
+    assert delta["settings"]["docker_image"]["after"] == manifest["docker_image"]
     assert f.verify(f.base, next_base)[0].exit_code == 2
     f.approve(next_base)
     with patch.object(cli, "runner_info") as runtime:
@@ -477,6 +505,9 @@ def runner_execution(root):
     f = Fixture(root)
     manifest = json.loads((f.repo / ".mentat/contract.json").read_text())
     manifest["docker_image"] = "example/test@sha256:" + "a" * 64
+    manifest["base_files"] = ["candidate.txt"]
+    manifest["behavior"][0]["argv"].append("{selectors}")
+    manifest["behavior"][0]["selectors"] = ["{checks}/base/candidate.txt"]
     (f.repo / ".mentat/contract.json").write_text(json.dumps(manifest))
     base = f.commit("docker enabled")
     project = load_project(f.repo, base, "docker")
@@ -490,6 +521,11 @@ def runner_execution(root):
             return 0, b"linux/amd64 1 true true true", b""
         if args[0] == "inspect":
             return 0, b'{"Status":"exited","ExitCode":0}', b""
+        if args[0] == "cp" and "input_file" in kwargs:
+            import tarfile
+
+            with tarfile.open(fileobj=kwargs["input_file"]) as archive:
+                assert archive.extractfile("mentat/checks/base/candidate.txt").read() == b"base"
         return 0, b"", b""
 
     with (
@@ -501,12 +537,19 @@ def runner_execution(root):
     local.assert_called_once_with("local")
     create = next(c for c in calls if c[0] == "create")
     assert checks[0]["status"] == "pass", checks
+    assert "/mentat/checks/base/candidate.txt" in create
     assert create[create.index("--network") + 1] == "none"
     assert create[create.index("--pull") + 1] == "never"
     assert info["image_id"] in create and not any(
         x in create for x in ("--mount", "--volume", "-v")
     )
     assert any(c[:2] == ("image", "inspect") and c[2] == manifest["docker_image"] for c in calls)
+    manifest["host_requirements"] = {"executables": ["mentat-nonexistent-test-command"]}
+    (f.repo / ".mentat/contract.json").write_text(json.dumps(manifest))
+    host_base = f.commit("host prerequisites")
+    inspected = f.invoke("doctor", *f.scope(host_base), "--json")
+    assert inspected.exit_code == 2, inspected.output
+    assert "mentat-nonexistent-test-command" in inspected.output
     for response in (
         (1, b"", b"missing"),
         (
@@ -586,6 +629,11 @@ def provenance(root):
     assert record["revision"] == revision and record["contract_digest"] == digest
     assert record["snapshot_digest"] == snapshot(f.repo, revision).digest
     assert record["runtime"]["runner"] == "host" and record["runtime"]["platform"]
+    assert record["runtime"]["path"] and record["runtime"]["mentat_python"]
+    host_replay = shlex.split(record["host_reproduce"])
+    assert host_replay[:3] == ["cd", record["runtime"]["invocation_directory"], "&&"]
+    assert host_replay[3] == "PATH=" + record["runtime"]["invocation_path"]
+    assert host_replay[4] == record["runtime"]["mentat_python"]
     assert record["tools"]["z3"]["version"]
     assert [(model["id"], model["status"]) for model in record["model_checks"]] == [
         ("model", "pass")
@@ -618,11 +666,14 @@ def review_sync(root):
         ],
     }
     manifest["claims"][0]["title"] = "Short title"
+    manifest["behavior"][0]["argv"].append("{selectors}")
+    manifest["behavior"][0]["selectors"] = ["test_app.py::test_case"]
     path.write_text(json.dumps(manifest))
     first = f.invoke("claims", "render", "--repo", str(f.repo))
     assert first.exit_code == 0, first.output
     content = (f.repo / ".mentat/claims.md").read_bytes()
     assert b"### 1. Short title" in content
+    assert rb"Check `behavior0` selects test\_app.py::test\_case" in content
     assert f.invoke("claims", "render", "--repo", str(f.repo)).exit_code == 0
     assert (f.repo / ".mentat/claims.md").read_bytes() == content
     base = f.commit("review copy")

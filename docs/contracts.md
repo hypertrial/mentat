@@ -12,9 +12,11 @@ Create `.mentat/contract.json` and commit it along with the approved models and 
 | `claims` | Entries with unique `id`, human-readable `statement`, and optional `assumptions`. |
 | `review` | Optional reviewer-facing overview, scope limits, and example links. Requires a short `title` on each claim. |
 | `formal` | Entries with `id`, `claim`, `engine`, and the relative `source` file. |
-| `behavior` | Entries with `id`, `claim`, and `argv`. Optional `timeout_seconds` defaults to 60 and supports 1–600. Optional `violation_exit_codes` defaults to `[1]` and supports 1–124. Optional `artifacts` lists flat output filenames. |
+| `behavior` | Entries with `id`, `claim`, and `argv`. Optional `timeout_seconds` defaults to 60 and supports 1–600. Optional `violation_exit_codes` defaults to `[1]` and supports 1–124. Optional `artifacts` lists flat output filenames. Optional `selectors` is a list of arguments expanded at a standalone `{selectors}` element in `argv`. |
 | `docker_image` | Prepared OCI image reference in the form `repository@sha256:<digest>`. Omit for a host-only contract with `allow_host: true`. |
 | `allow_host` | Boolean. Defaults to `false`. |
+| `base_files` | Optional list of tracked file paths outside `.mentat/` to load from the base commit. |
+| `host_requirements` | Optional host prerequisites: `executables`, `python_distributions`, and `loopback`. |
 
 Every claim needs a behavior check. At least one claim needs both a formal and a behavior check. Use IDs made from letters, digits, dots, underscores, and hyphens, starting with a letter, digit, or underscore. Claim and check IDs are unique across the manifest.
 
@@ -23,9 +25,19 @@ Every claim needs a behavior check. At least one claim needs both a formal and a
 
 For behavior, the working directory is the staged candidate root. Each `argv` element is one argument and may be empty after the command name. A leading `{checks}/` selects an approved file relative to `.mentat/`. For example, use `["/bin/sh", "{checks}/check.sh"]`. The runner sets `MENTAT_CANDIDATE_DIR`, `MENTAT_CHECKS_DIR`, and `MENTAT_ARTIFACTS_DIR`. Write optional diagnostic files to the artifacts directory.
 
-Bare commands use absolute entries from the runner’s `PATH`. Use an explicit path such as `./tool` to run a candidate program. For approved Python tests, use `python -I -m pytest` to keep candidate modules out of the launcher’s import path.
+Bare commands use absolute entries from the runner’s `PATH`. Use an explicit path such as `./tool` to run a candidate program. For approved Python tests, use an isolated launcher such as the [src-layout example](../examples/python-src/create.sh).
 
 Status reflects the checks you wrote. A passing model check establishes a result about the model under its assumptions. A passing behavior check establishes that an approved command passed for the recorded snapshot and environment. For checks that use candidate-owned tests, review changes to those tests as part of the candidate.
+
+## Approved base files and selectors
+
+List exact tracked paths in `base_files` to stage their base-commit contents under `{checks}/base/<path>`. Review these files with the rest of the contract before approval. Paths must name regular files outside `.mentat/`. The example stages `tests/conftest.py`, a test, and its JSON fixture from the base. The launcher adds the staged candidate's `src` directory for application imports.
+
+A behavior check may declare `selectors` and a single standalone `{selectors}` argument in `argv`. Mentat expands the list in place, preserving argument boundaries. The example passes pytest node IDs. Its isolated Python launcher disables third-party plugin autoload and restricts config and conftest discovery to the settings and files it explicitly selects. Pytest exit `1` is a violation. Collection errors, no tests collected, and other nonzero exit codes are incomplete by default.
+
+For host checks, `host_requirements` can list executable names or absolute paths in `executables` and installed Python distribution names in `python_distributions`. Set `loopback` to `true` when a check needs to bind an IPv4 loopback listener. Mentat reports availability and treats missing declared prerequisites as incomplete. It inspects Python distribution metadata with the `python3` found on the runner's effective `PATH`.
+
+Compare two contracts that support the selected runner with `--base "$NEW_BASE" --against "$OLD_BASE"` on `spec check` and `spec approve`. Review the comparison and the new contract before approving its digest. Both the local and Notion Claims Specs display declared behavior selectors.
 
 ## Claims Spec
 
@@ -87,7 +99,7 @@ Mentat accepts regular Git blobs with executable bits preserved. Symlinks, submo
 
 1. Run `mentat spec check --repo "$REPO" --base "$BASE"`. Review the manifest and supporting files at that commit, then approve the displayed digest with `mentat spec approve DIGEST --repo "$REPO" --base "$BASE"`.
 2. Run `mentat verify --repo "$REPO" --base "$BASE" --rev "$CANDIDATE" --json`. Formal checks run first. Behavior checks run after they pass. Use a new approval when the base, verifier, repository path, or runner mode changes.
-3. Export with `mentat evidence export RUN_ID --out NEW_DIRECTORY`. The bundle contains a Markdown report and a JSON manifest with the commit IDs, check results and provenance, artifact hashes, and reproduction command. Logs and artifacts can contain untrusted or sensitive text. Review them before sharing.
+3. Export with `mentat evidence export RUN_ID --out NEW_DIRECTORY`. The bundle contains a Markdown report and a JSON manifest with the commit IDs, check results and provenance, artifact hashes, and reproduction command. For host runs, `host_reproduce` uses the recorded working directory, interpreter, and invocation `PATH` on the same host. The report also records the filtered behavior `PATH` and discovered prerequisites. Replay uses the tools currently installed in those locations. Review logs, local paths, and artifacts before sharing the evidence.
 4. Run `mentat accept RUN_ID --repo "$REPO" --base "$BASE"` to accept a complete passing run under the matching approval. Both approval and acceptance require a terminal.
 
 Verification exits `0` for pass, `1` for a confirmed violation in a completed run, and `2` for invalid input or an incomplete run. An incomplete check takes precedence in the exit status when another check reports a violation. The manifest retains each result. A model violation can prevent behavior execution. Timeouts, missing tools, and resource kills are incomplete. Behavior output is capped at 1 MiB per stream and 16 MiB per run across logs and artifacts. The manifest records any omitted logs or optional files.

@@ -29,6 +29,17 @@ def _review_prose(value: str) -> str:
     return re.sub(r"^[ \t]+", "", _prose(value), flags=re.MULTILINE).strip("\n")
 
 
+def _append_selectors(lines: list[str], contract: Contract, claim_id: str) -> None:
+    selectors = [
+        f"- Check `{check.id}` selects {_prose(selector)}"
+        for check in contract.behavior
+        if check.claim == claim_id
+        for selector in (check.selectors or [])
+    ]
+    if selectors:
+        lines.extend(("", *selectors))
+
+
 def render_claims(contract: Contract) -> bytes:
     if contract.review is not None:
         review = contract.review
@@ -61,6 +72,7 @@ def render_claims(contract: Contract) -> bytes:
                 lines.extend(("", "Assumptions", ""))
                 for assumption in claim.assumptions:
                     lines.append("- " + _prose(assumption).replace("\n", "\n  "))
+            _append_selectors(lines, contract, claim.id)
             behavior = ", ".join(
                 f"`{check.id}`" for check in contract.behavior if check.claim == claim.id
             )
@@ -84,6 +96,7 @@ def render_claims(contract: Contract) -> bytes:
             for assumption in claim.assumptions:
                 lines.append("- " + _prose(assumption).replace("\n", "\n  "))
             lines.extend(("", "Checks"))
+        _append_selectors(lines, contract, claim.id)
         lines.append("")
         for label, checks in (("Formal", contract.formal), ("Behavior", contract.behavior)):
             ids = ", ".join(f"`{check.id}`" for check in checks if check.claim == claim.id)

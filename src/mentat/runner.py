@@ -9,7 +9,9 @@ import platform
 import re
 import secrets
 import selectors
+import shutil
 import signal
+import socket
 import stat
 import subprocess
 import tarfile
@@ -114,9 +116,99 @@ def _local_context(context):
         raise ValueError("Docker runner requires Linux or an unshared Colima VM")
 
 
+def host_path():
+    return _absolute_search_path(os.environ.get("PATH", os.defpath), os.defpath)
+
+
+def host_diagnostics(info):
+    prerequisites = info.get("prerequisites", {})
+    diagnostics = [
+        f"Host prerequisite {group}: {name!r} is unavailable. {hint}"
+        for group, hint in (
+            ("executables", "Check the declared path or the recorded PATH."),
+            ("python_distributions", "Check the python3 environment on the recorded PATH."),
+        )
+        for name, item in prerequisites.get(group, {}).items()
+        if item["status"] != "available"
+    ]
+    if prerequisites.get("loopback") and prerequisites["loopback"]["status"] != "available":
+        diagnostics.append(
+            "Host prerequisite loopback is unavailable. Check local bind permissions."
+        )
+    for command, item in info.get("executables", {}).items():
+        if item["status"] == "missing" and item.get("checks"):
+            diagnostics.append(
+                f"Host executable {command!r} is unavailable for checks: "
+                + ", ".join(item["checks"])
+            )
+    return diagnostics
+
+
+def _executable(command, path):
+    if not os.path.isabs(command) and ("/" in command or command.startswith("{checks}/")):
+        return {"status": "deferred", "path": None}
+    resolved = shutil.which(command, path=path)
+    return {"status": "available" if resolved else "missing", "path": resolved}
+
+
+def _host_info(project):
+    path = host_path()
+    requirements = getattr(project.contract, "host_requirements", None)
+    declared = requirements.executables if requirements else []
+    commands = [check.effective_argv()[0] for check in project.contract.behavior]
+    executables = {command: _executable(command, path) for command in [*commands, *declared]}
+    for check, command in zip(project.contract.behavior, commands):
+        executables[command].setdefault("checks", []).append(check.id)
+    distributions = requirements.python_distributions if requirements else []
+    packages = {name: {"status": "unavailable"} for name in distributions}
+    python = shutil.which("python3", path=path)
+    if python and distributions:
+        script = (
+            "import importlib.metadata as m,json,sys\n"
+            "result={}\n"
+            "for name in sys.argv[1:]:\n"
+            " try: result[name]={'status':'available','version':m.version(name)}\n"
+            " except m.PackageNotFoundError: result[name]={'status':'missing'}\n"
+            "print(json.dumps(result))\n"
+        )
+        try:
+            with tempfile.TemporaryDirectory(prefix="mentat-host-inspect-") as temp:
+                code, output, _ = _process(
+                    [python, "-I", "-c", script, *distributions],
+                    cwd=temp,
+                    env={"PATH": path, "HOME": temp},
+                    timeout=30,
+                )
+            if code == 0:
+                packages = json.loads(output)
+        except (OSError, subprocess.SubprocessError, TimeoutError, RuntimeError, ValueError):
+            pass
+    loopback = None
+    if requirements and requirements.loopback:
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+                listener.bind(("127.0.0.1", 0))
+                listener.listen(1)
+            loopback = {"status": "available"}
+        except OSError:
+            loopback = {"status": "missing"}
+    return {
+        "runner": "host",
+        "platform": f"{platform.system()}/{platform.machine()}",
+        "path": path,
+        "executables": executables,
+        "prerequisites": {
+            "executables": {name: executables[name] for name in declared},
+            "python_distributions": packages,
+            "python_executable": python if distributions else None,
+            "loopback": loopback,
+        },
+    }
+
+
 def runner_info(project, context: str | None) -> dict:
     if project.runner == "host":
-        return {"runner": "host", "platform": f"{platform.system()}/{platform.machine()}"}
+        return _host_info(project)
     if project.runner != "docker":
         raise ValueError("unsupported runner")
     context = context or ("colima-mentat" if platform.system() == "Darwin" else None)
@@ -306,6 +398,17 @@ def run_behavior(project, snapshot, context, info, run_id) -> tuple[list[dict], 
     remaining = _MAX_RUN_OUTPUT
     if project.runner == "docker":
         context = info["context"]
+    elif "path" not in info:
+        info = runner_info(project, context)
+    prerequisites = info.get("prerequisites", {})
+    missing = [
+        name
+        for group in ("executables", "python_distributions")
+        for name, item in prerequisites.get(group, {}).items()
+        if item["status"] != "available"
+    ]
+    if prerequisites.get("loopback") and prerequisites["loopback"]["status"] != "available":
+        missing.append("loopback")
     for index, check in enumerate(project.contract.behavior, start=1):
         prefix = f"check-{index:03d}"
         result = {
@@ -316,6 +419,15 @@ def run_behavior(project, snapshot, context, info, run_id) -> tuple[list[dict], 
             "exit_code": None,
         }
         results.append(result)
+        if project.runner == "host":
+            if missing:
+                result["detail"] = "Missing host prerequisites. Run mentat doctor for details."
+                continue
+            command = check.effective_argv()[0]
+            executable = info["executables"].get(command)
+            if executable and executable["status"] == "missing":
+                result["detail"] = f"Host executable not found: {command!r}"
+                continue
         name = "mentat-" + secrets.token_hex(16)
         created = False
         try:
@@ -332,21 +444,19 @@ def run_behavior(project, snapshot, context, info, run_id) -> tuple[list[dict], 
                     home = root / "home"
                     home.mkdir()
                     env = {
-                        "PATH": _absolute_search_path(
-                            os.environ.get("PATH", os.defpath), os.defpath
-                        ),
+                        "PATH": info["path"],
                         "HOME": str(home),
                         "MENTAT_CANDIDATE_DIR": str(candidate),
                         "MENTAT_CHECKS_DIR": str(checks),
                         "MENTAT_ARTIFACTS_DIR": str(artifacts),
                     }
-                    argv = _arguments(check.argv, str(checks))
+                    argv = _arguments(check.effective_argv(), str(checks))
                     code, stdout, stderr = _process(
                         argv, cwd=candidate, env=env, timeout=check.timeout_seconds
                     )
                     oom = False
                 else:
-                    argv = _arguments(check.argv, "/mentat/checks")
+                    argv = _arguments(check.effective_argv(), "/mentat/checks")
                     command = [
                         "create",
                         "--name",

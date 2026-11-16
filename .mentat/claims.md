@@ -27,7 +27,9 @@ Claim `contract.validation` · Behavior `check.contract.validation`
 
 ### 2. Use the approved base
 
-Mentat loads the contract, formal inputs, and approved check scripts from the exact base commit selected by the reviewer.
+Mentat loads the contract, formal inputs, approved check scripts, and explicitly referenced test and fixture files from the exact base commit selected by the reviewer.
+
+- Check `check.base-pinning` selects contract.base-pinning
 
 Claim `contract.base-pinning` · Behavior `check.base-pinning`
 
@@ -39,7 +41,9 @@ Claim `verification.candidate-pinning` · Behavior `check.verification.candidate
 
 ### 4. Approve a specific contract
 
-A reviewer confirms the displayed digest in a terminal. Verification requires approval for the same repository path, base commit, runner mode, and verifier fingerprint.
+A reviewer sees which checks and declared test selectors support each claim, can compare two committed contracts, and confirms the displayed digest in a terminal. Verification requires approval for the same repository path, base commit, runner mode, and verifier fingerprint.
+
+- Check `check.approval.scope` selects approval.scope
 
 Claim `approval.scope` · Behavior `check.approval.scope`
 
@@ -57,7 +61,9 @@ Claim `formal.lean-audit` · Behavior `check.formal.lean-audit`
 
 ### 7. Apply the selected runner's settings
 
-Docker behavior checks use a prepared, digest-pinned image without networking or host mounts. Host behavior checks require contract opt-in and separate approval and run with the operator's permissions.
+Docker behavior checks use a prepared, digest-pinned image without networking or host mounts. Host behavior checks require separate approval and run with the operator's permissions. Host preflight reports unavailable executables and declared prerequisites.
+
+- Check `check.runner.execution` selects runner.execution
 
 Claim `runner.execution` · Behavior `check.runner.execution`
 
@@ -75,7 +81,9 @@ Claim `verification.outcomes` · Behavior `check.outcomes`
 
 ### 10. Record how to reproduce the run
 
-The evidence records the base and candidate commits, contract and snapshot digests, recorded tools and runner, check results, and a reproduction command.
+The evidence records the base and candidate commits, contract and snapshot digests, recorded tools and runner, check results, and a reproduction command. Host evidence also records the effective tool search path, prerequisite results when inspected, and a same-host replay command.
+
+- Check `check.evidence.provenance` selects evidence.provenance
 
 Claim `evidence.provenance` · Behavior `check.evidence.provenance`
 

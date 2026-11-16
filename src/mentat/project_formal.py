@@ -76,6 +76,7 @@ def tool_info(project) -> dict:
         if not executable:
             result["lean"] = {"error": "Install Lean 4.31.0 and put its bin directory on PATH."}
         else:
+            executable = os.path.abspath(executable)
             try:
                 p = _run([executable, "--version"], timeout=5)
                 match = re.search(r"\bversion (\d+\.\d+\.\d+)\b", p.stdout)

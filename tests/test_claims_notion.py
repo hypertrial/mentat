@@ -210,6 +210,33 @@ def test_numbered_publish_migrates_existing_section_and_noops(monkeypatch, initi
     assert len(writes) == 1
 
 
+def test_numbered_publish_adds_selectors_and_reads_them_back(monkeypatch):
+    old = f"Source commit: `{BASE}` · 1 claim\n\n{notion._body(NUMBERED)}\n\n{notion._END}"
+    contents = f"Before\n\n{old}\n\nAfter"
+    updated = NUMBERED.replace(
+        b"Claim `claim.id`",
+        b"- Check `check.id` selects test\\_app.py::test\\_case\n\nClaim `claim.id`",
+    )
+    new_base = "b" * 40
+
+    def request(page_id, payload=None):
+        nonlocal contents
+        if payload:
+            edit = payload["update_content"]["content_updates"][0]
+            assert edit["old_str"] == old
+            contents = contents.replace(
+                old, edit["new_str"].replace("`check.id`", "<code>check.id</code>")
+            )
+        return contents
+
+    monkeypatch.setattr(notion, "_request", request)
+    assert not notion.notion_claims(PAGE, updated, new_base)
+    assert notion.notion_claims(PAGE, updated, new_base, publish=True)
+    assert notion.notion_claims(PAGE, updated, new_base)
+    assert "selects test\\_app.py::test\\_case" in contents
+    assert contents.startswith("Before\n\n") and contents.endswith("\n\nAfter")
+
+
 @pytest.mark.parametrize("line_end", ["\n", "\r\n", "\r"])
 def test_numbered_round_trip_inline_code_and_link(monkeypatch, line_end):
     body = notion._body(NUMBERED).replace("`claim.id`", "<code>claim.id</code>")

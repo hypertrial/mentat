@@ -6,6 +6,7 @@ import re
 import selectors
 import subprocess
 import time
+import unicodedata
 from collections.abc import Iterable, Iterator
 from contextlib import closing
 from dataclasses import dataclass
@@ -136,6 +137,29 @@ class Behavior(_Model):
         default_factory=lambda: [1], min_length=1, max_length=124
     )
     artifacts: list[str] = Field(default_factory=list, max_length=128)
+    selectors: list[str] | None = Field(default=None, max_length=128)
+
+    @model_validator(mode="after")
+    def selector_arguments(self):
+        if self.selectors is None:
+            return self
+        if self.argv.count("{selectors}") != 1:
+            raise ValueError("selectors require one standalone {selectors} argument")
+        if any(
+            not value or len(value) > 4096 or any(unicodedata.category(c) == "Cc" for c in value)
+            for value in self.selectors
+        ):
+            raise ValueError("invalid selector")
+        return self
+
+    def effective_argv(self) -> list[str]:
+        if self.selectors is None:
+            return self.argv
+        return [
+            value
+            for arg in self.argv
+            for value in (self.selectors if arg == "{selectors}" else [arg])
+        ]
 
     @field_validator("violation_exit_codes")
     @classmethod
@@ -152,6 +176,43 @@ class Behavior(_Model):
         return value
 
 
+class HostRequirements(_Model):
+    executables: list[str] = Field(default_factory=list, max_length=128)
+    python_distributions: list[str] = Field(default_factory=list, max_length=128)
+    loopback: bool = False
+
+    @field_validator("executables")
+    @classmethod
+    def executable_names(cls, value):
+        if len(set(value)) != len(value) or any(
+            name in ("", ".", "..", "/")
+            or len(name) > _MAX_PATH
+            or any(unicodedata.category(c) == "Cc" for c in name)
+            or (
+                "/" in name
+                and (
+                    not name.startswith("/")
+                    or str(PurePosixPath(name)) != name
+                    or any(part in (".", "..") for part in name.split("/"))
+                )
+            )
+            or "\\" in name
+            for name in value
+        ):
+            raise ValueError("executables must be bare names or absolute paths")
+        return value
+
+    @field_validator("python_distributions")
+    @classmethod
+    def distribution_names(cls, value):
+        if len(set(value)) != len(value) or any(
+            not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9])?", name)
+            for name in value
+        ):
+            raise ValueError("invalid Python distribution name")
+        return value
+
+
 class Contract(_Model):
     version: Literal[1]
     claims: list[Claim] = Field(min_length=1, max_length=128)
@@ -160,6 +221,21 @@ class Contract(_Model):
     docker_image: str | None = None
     allow_host: bool = False
     review: Review | None = None
+    base_files: list[str] = Field(default_factory=list, max_length=_MAX_FILES)
+    host_requirements: HostRequirements | None = None
+
+    @field_validator("base_files")
+    @classmethod
+    def base_file_paths(cls, value):
+        if len(set(value)) != len(value):
+            raise ValueError("duplicate base file")
+        for path in value:
+            _path(path)
+            if any(unicodedata.category(c) == "Cc" for c in path):
+                raise ValueError("invalid base file path")
+            if path.split("/", 1)[0].casefold() == ".mentat":
+                raise ValueError("base files must be outside .mentat")
+        return value
 
     @field_validator("version", mode="before")
     @classmethod
@@ -372,6 +448,10 @@ def _tree_entries(records: Iterable[bytes]) -> dict[str, tuple[int, bytes]]:
 def _tree(root: Path, revision: str, *, approved: bool) -> dict[str, tuple[int, bytes]]:
     with closing(_tree_records(root, revision, approved=approved)) as listing:
         entries = _tree_entries(listing)
+    return _read_blobs(root, entries)
+
+
+def _read_blobs(root: Path, entries: dict[str, tuple[int, bytes]]) -> dict[str, tuple[int, bytes]]:
     if not entries:
         return {}
     ids = b"".join(oid + b"\n" for _, oid in entries.values())
@@ -425,6 +505,19 @@ def snapshot(root: Path, rev: str) -> Snapshot:
     return Snapshot(revision, _digest(files), files)
 
 
+def _selected_entries(
+    root: Path, revision: str, scope: list[bytes], deadline: float, entries: dict
+):
+    with closing(_ls_tree(root, revision, "-z", scope, deadline)) as records:
+        for record in records:
+            meta, raw_path = record.split(b"\t", 1)
+            mode, kind, oid = meta.split(b" ")
+            path = _git_path(raw_path)
+            if mode not in (b"100644", b"100755") or kind != b"blob" or path in entries:
+                raise ValueError(f"unsupported base file: {path}")
+            entries[path] = (int(mode, 8) & 0o777, oid)
+
+
 def contract_inputs(repo: Path, base: str) -> tuple[Path, str, Contract, dict[str, bytes]]:
     root = _root(repo)
     revision = _revision(root, base)
@@ -435,6 +528,31 @@ def contract_inputs(repo: Path, base: str) -> tuple[Path, str, Contract, dict[st
     if "contract.json" not in files:
         raise ValueError("base has no .mentat/contract.json")
     contract = Contract.model_validate(decode_json(files["contract.json"]))
+    if contract.base_files:
+        if any(path.split("/", 1)[0].casefold() == "base" for path in files):
+            raise ValueError(".mentat/base conflicts with base files")
+        entries = {}
+        deadline = time.monotonic() + 60
+        scope = []
+        weight = 0
+        for path in contract.base_files:
+            spec = b":(literal)" + path.encode("utf-8")
+            if weight + len(spec) + 9 > 32_768:
+                _selected_entries(root, revision, scope, deadline, entries)
+                scope, weight = [], 0
+            scope.append(spec)
+            weight += len(spec) + 9
+        _selected_entries(root, revision, scope, deadline, entries)
+        if set(entries) != set(contract.base_files):
+            raise ValueError("base file is absent or not a regular tracked file")
+        selected = _read_blobs(root, entries)
+        if (
+            len(files) + len(selected) > _MAX_FILES
+            or sum(map(len, files.values())) + sum(len(data) for _, data in selected.values())
+            > _MAX_TOTAL
+        ):
+            raise ValueError("combined Git inputs exceed size limit")
+        files.update({f"base/{path}": data for path, (_, data) in selected.items()})
     return root, revision, contract, files
 
 
@@ -453,9 +571,10 @@ def load_project(repo: Path, base: str, runner: str) -> Project:
             if name is not None and _path(name) not in files:
                 raise ValueError(f"missing approved file: {name}")
     for check in contract.behavior:
-        if not check.argv[0]:
+        argv = check.effective_argv()
+        if not argv or not argv[0]:
             raise ValueError("behavior command must not be empty")
-        for arg in check.argv:
+        for arg in argv:
             if len(arg) > 4096 or "\x00" in arg:
                 raise ValueError("invalid behavior argument")
             if (

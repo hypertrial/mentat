@@ -132,7 +132,16 @@ def report(record: dict) -> bytes:
         lines.append(
             f"- Native historical and repaired regression · {' / '.join(record['native_regression'])}"
         )
-    lines += ["", "## Reproduce", "", f"`{record['reproduce']}`", ""]
+    lines += ["", "## Reproduce", ""]
+    if record.get("host_reproduce"):
+        lines.extend(f"    {line}" for line in record["host_reproduce"].split("\n"))
+        lines += ["", "### Recorded host environment", ""]
+        runtime = json.dumps(record["runtime"], ensure_ascii=True, indent=2, sort_keys=True)
+        lines.extend(f"    {line}" for line in runtime.splitlines())
+        lines += ["", "Replay uses the tools currently installed at the recorded locations."]
+    else:
+        lines.append(f"`{record['reproduce']}`")
+    lines.append("")
     return "\n".join(lines).encode()
 
 

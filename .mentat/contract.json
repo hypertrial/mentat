@@ -35,7 +35,7 @@
     {
       "id": "contract.base-pinning",
       "title": "Use the approved base",
-      "statement": "Mentat loads the contract, formal inputs, and approved check scripts from the exact base commit selected by the reviewer."
+      "statement": "Mentat loads the contract, formal inputs, approved check scripts, and explicitly referenced test and fixture files from the exact base commit selected by the reviewer."
     },
     {
       "id": "verification.candidate-pinning",
@@ -45,7 +45,7 @@
     {
       "id": "approval.scope",
       "title": "Approve a specific contract",
-      "statement": "A reviewer confirms the displayed digest in a terminal. Verification requires approval for the same repository path, base commit, runner mode, and verifier fingerprint."
+      "statement": "A reviewer sees which checks and declared test selectors support each claim, can compare two committed contracts, and confirms the displayed digest in a terminal. Verification requires approval for the same repository path, base commit, runner mode, and verifier fingerprint."
     },
     {
       "id": "formal.z3-vacuity",
@@ -60,7 +60,7 @@
     {
       "id": "runner.execution",
       "title": "Apply the selected runner's settings",
-      "statement": "Docker behavior checks use a prepared, digest-pinned image without networking or host mounts. Host behavior checks require contract opt-in and separate approval and run with the operator's permissions."
+      "statement": "Docker behavior checks use a prepared, digest-pinned image without networking or host mounts. Host behavior checks require separate approval and run with the operator's permissions. Host preflight reports unavailable executables and declared prerequisites."
     },
     {
       "id": "verification.formal-gate",
@@ -75,7 +75,7 @@
     {
       "id": "evidence.provenance",
       "title": "Record how to reproduce the run",
-      "statement": "The evidence records the base and candidate commits, contract and snapshot digests, recorded tools and runner, check results, and a reproduction command."
+      "statement": "The evidence records the base and candidate commits, contract and snapshot digests, recorded tools and runner, check results, and a reproduction command. Host evidence also records the effective tool search path, prerequisite results when inspected, and a same-host replay command."
     },
     {
       "id": "evidence.integrity",
@@ -125,9 +125,12 @@
         "python3",
         "-I",
         "{checks}/selfcheck.py",
-        "contract.base-pinning"
+        "{selectors}"
       ],
-      "timeout_seconds": 120
+      "timeout_seconds": 120,
+      "selectors": [
+        "contract.base-pinning"
+      ]
     },
     {
       "id": "check.verification.candidate-pinning",
@@ -147,9 +150,12 @@
         "python3",
         "-I",
         "{checks}/selfcheck.py",
-        "approval.scope"
+        "{selectors}"
       ],
-      "timeout_seconds": 120
+      "timeout_seconds": 120,
+      "selectors": [
+        "approval.scope"
+      ]
     },
     {
       "id": "check.formal.z3-vacuity",
@@ -180,9 +186,12 @@
         "python3",
         "-I",
         "{checks}/selfcheck.py",
-        "runner.execution"
+        "{selectors}"
       ],
-      "timeout_seconds": 120
+      "timeout_seconds": 120,
+      "selectors": [
+        "runner.execution"
+      ]
     },
     {
       "id": "check.verification.formal-gate",
@@ -213,9 +222,12 @@
         "python3",
         "-I",
         "{checks}/selfcheck.py",
-        "evidence.provenance"
+        "{selectors}"
       ],
-      "timeout_seconds": 120
+      "timeout_seconds": 120,
+      "selectors": [
+        "evidence.provenance"
+      ]
     },
     {
       "id": "check.integrity",

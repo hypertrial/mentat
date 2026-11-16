@@ -20,6 +20,22 @@ def write_contract(repo, contract):
     (repo / ".mentat/contract.json").write_text(json.dumps(contract, ensure_ascii=False))
 
 
+@pytest.mark.parametrize("numbered", [False, True])
+def test_claims_render_exposes_exact_selectors(project_repo, numbered):
+    repo, _, manifest = project_repo
+    if numbered:
+        manifest["review"] = {"overview": "An app.", "scope_limits": ["Only recorded cases."]}
+        manifest["claims"][0]["title"] = "Review the app"
+    manifest["behavior"][0]["argv"].append("{selectors}")
+    manifest["behavior"][0]["selectors"] = ["tests/test_app.py::test_case[one]", "two `ticks`"]
+    write_contract(repo, manifest)
+    result = invoke(repo, "render")
+    assert result.exit_code == 0, result.output
+    content = (repo / ".mentat/claims.md").read_text()
+    assert r"Check `behavior` selects tests/test\_app.py::test\_case\[one\]" in content
+    assert r"Check `behavior` selects two \`ticks\`" in content
+
+
 def test_render_is_deterministic_and_check_detects_drift(project_repo):
     repo, _, manifest = project_repo
     missing = invoke(repo, "check", "--json")
