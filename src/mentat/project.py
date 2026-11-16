@@ -92,15 +92,57 @@ class ReviewExample(_Model):
         return value
 
 
+class ReviewGroup(_Model):
+    title: str = Field(min_length=1, max_length=256)
+    claim_ids: list[str] = Field(min_length=1, max_length=128)
+
+    @field_validator("title")
+    @classmethod
+    def title_line(cls, value):
+        if not value.strip() or len(value.splitlines()) != 1 or any(ord(c) < 32 for c in value):
+            raise ValueError("group title must be a nonempty single line")
+        return value.strip()
+
+
 class Review(_Model):
     overview: str = Field(pattern=r"\S", max_length=4096)
     scope_limits: list[str] = Field(min_length=1, max_length=128)
     examples: list[ReviewExample] = Field(default_factory=list, max_length=128)
+    groups: list[ReviewGroup] | None = Field(default=None, min_length=1, max_length=128)
+    verification_limits: list[str] | None = Field(default=None, min_length=1, max_length=128)
 
-    @field_validator("scope_limits")
+    @field_validator("groups", "verification_limits", mode="before")
+    @classmethod
+    def present_list(cls, value):
+        if value is None:
+            raise ValueError("must be a list when present")
+        return value
+
+    @model_validator(mode="after")
+    def grouped_layout(self):
+        if self.groups is None:
+            if "verification_limits" in self.model_fields_set:
+                raise ValueError("verification limits require groups")
+            return self
+        reserved = {
+            "claims spec",
+            "what the app does",
+            "product limits",
+            "examples",
+            "verification coverage and limits",
+            "coverage limits",
+            "behavior checks",
+            "formal checks and assumptions",
+        }
+        titles = [group.title.casefold() for group in self.groups]
+        if len(set(titles)) != len(titles) or reserved.intersection(titles):
+            raise ValueError("group titles must be unique and not collide with generated headings")
+        return self
+
+    @field_validator("scope_limits", "verification_limits")
     @classmethod
     def limits(cls, value):
-        if any(not item.strip() or len(item) > 4096 for item in value):
+        if value is not None and any(not item.strip() or len(item) > 4096 for item in value):
             raise ValueError("invalid scope limit")
         return value
 
@@ -257,6 +299,10 @@ class Contract(_Model):
         if any(not _NAME.fullmatch(i) for i in ids) or len(set(ids)) != len(ids):
             raise ValueError("IDs must be safe and unique")
         claims = {item.id for item in self.claims}
+        if self.review is not None and self.review.groups is not None:
+            grouped_ids = [claim_id for group in self.review.groups for claim_id in group.claim_ids]
+            if len(grouped_ids) != len(claims) or set(grouped_ids) != claims:
+                raise ValueError("groups must include every claim ID exactly once")
         formal = {item.claim for item in self.formal}
         behavior = {item.claim for item in self.behavior}
         if not formal <= claims or behavior != claims or not formal & behavior:

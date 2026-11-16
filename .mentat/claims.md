@@ -1,13 +1,12 @@
 # Claims Spec
 
-## Overview
+## What the app does
 
-Mentat is a local CLI for reviewing a committed software change. A reviewer approves a contract from a Git base commit and selects an exact candidate commit. Mentat runs the declared formal and behavior checks, saves the results and a reproduction command, and lets the reviewer record acceptance of a complete passing run.
+Mentat is a local CLI for reviewers who need evidence about a committed software change. A reviewer approves the requirements and checks from a Git base commit, then selects the exact candidate to verify. Mentat runs the declared formal and behavior checks, saves the results and a reproduction command, and lets the reviewer record acceptance of a complete passing run.
 
-## Scope limits
+## Product limits
 
 - Reviewers supply and review the requirements, formal models, and behavior checks.
-- A model result applies to the approved model and its assumptions. A passing run covers the selected commit, approved checks, and recorded environment.
 - Whole-program correctness, automatic repair, merging, and deployment are outside Mentat's scope. Acceptance records a local decision.
 - Docker behavior checks use a local, prepared runner. Host behavior checks and Lean source execute with the operator's permissions.
 
@@ -17,7 +16,7 @@ Mentat is a local CLI for reviewing a committed software change. A reviewer appr
 - [Nemo](https://github.com/hypertrial/mentat/blob/main/docs/nemo.md) — Build two historical revisions and replay a mixed-type sum that returned the wrong value and numeric type.
 - [Apache Polaris](https://github.com/hypertrial/mentat/blob/main/docs/polaris.md) — Replay a namespace round-trip bug and export a native pytest regression when the failure reproduces. This showcase gives a confirmed violation precedence over an incomplete check.
 
-## Claims
+## Reviewing and approving a change
 
 ### 1. Validate the contract
 
@@ -29,43 +28,39 @@ Claim `contract.validation` · Behavior `check.contract.validation`
 
 Mentat loads the contract, formal inputs, approved check scripts, and explicitly referenced test and fixture files from the exact base commit selected by the reviewer.
 
-- Check `check.base-pinning` selects contract.base-pinning
-
 Claim `contract.base-pinning` · Behavior `check.base-pinning`
 
-### 3. Stage the exact candidate
+### 3. Approve a specific contract
+
+A reviewer sees which checks and declared test selectors support each claim, can compare two committed contracts, and confirms the displayed digest in a terminal. Verification requires approval for the same repository path, base commit, runner mode, and verifier fingerprint.
+
+Claim `approval.scope` · Behavior `check.approval.scope`
+
+## Verifying a candidate
+
+### 4. Stage the exact candidate
 
 Checks see the exact candidate commit, excluding Git metadata, uncommitted files, and the candidate's root .mentat entry. Unsupported selected Git entries make verification incomplete.
 
 Claim `verification.candidate-pinning` · Behavior `check.verification.candidate-pinning`
 
-### 4. Approve a specific contract
+### 5. Apply the selected runner's settings
 
-A reviewer sees which checks and declared test selectors support each claim, can compare two committed contracts, and confirms the displayed digest in a terminal. Verification requires approval for the same repository path, base commit, runner mode, and verifier fingerprint.
+Docker behavior checks use a prepared, digest-pinned image without networking or host mounts. Host behavior checks require separate approval and run with the operator's permissions. Host preflight reports unavailable executables and declared prerequisites.
 
-- Check `check.approval.scope` selects approval.scope
+Claim `runner.execution` · Behavior `check.runner.execution`
 
-Claim `approval.scope` · Behavior `check.approval.scope`
-
-### 5. Check the Z3 model before its counterexample
+### 6. Check the Z3 model before its counterexample
 
 An UNSAT check requires a satisfiable base model. A satisfiable counterexample violates the claim, and an inconsistent base model makes the check incomplete.
 
 Claim `formal.z3-vacuity` · Behavior `check.formal.z3-vacuity`
 
-### 6. Check the named Lean theorem and its axioms
+### 7. Check the named Lean theorem and its axioms
 
 Mentat checks that the named theorem is declared by the approved Lean source and audits its transitive axioms. Approval discloses that Lean runs on the host.
 
 Claim `formal.lean-audit` · Behavior `check.formal.lean-audit`
-
-### 7. Apply the selected runner's settings
-
-Docker behavior checks use a prepared, digest-pinned image without networking or host mounts. Host behavior checks require separate approval and run with the operator's permissions. Host preflight reports unavailable executables and declared prerequisites.
-
-- Check `check.runner.execution` selects runner.execution
-
-Claim `runner.execution` · Behavior `check.runner.execution`
 
 ### 8. Require formal checks to pass before behavior runs
 
@@ -79,11 +74,11 @@ Core verification exits 0 for pass, 1 for a confirmed violation, and 2 for an in
 
 Claim `verification.outcomes` · Behavior `check.outcomes`
 
+## Inspecting evidence and accepting a run
+
 ### 10. Record how to reproduce the run
 
 The evidence records the base and candidate commits, contract and snapshot digests, recorded tools and runner, check results, and a reproduction command. Host evidence also records the effective tool search path, prerequisite results when inspected, and a same-host replay command.
-
-- Check `check.evidence.provenance` selects evidence.provenance
 
 Claim `evidence.provenance` · Behavior `check.evidence.provenance`
 
@@ -97,14 +92,62 @@ Claim `evidence.integrity` · Behavior `check.integrity`
 
 Acceptance requires an intact passing run under the current approval and a separate operator confirmation in a terminal.
 
-Assumptions
-
-- The bounded model represents status, current approval, evidence integrity, and operator confirmation as independent eligibility gates.
-
 Claim `acceptance.complete-pass` · Behavior `check.acceptance` · Formal `acceptance.eligibility`
+
+## Maintaining the Claims Spec
 
 ### 13. Keep the local and Notion specs in sync
 
 Mentat renders the local spec deterministically and detects drift. Explicit Notion publication mirrors the committed spec in one selected page section and requires a matching local spec at that commit.
 
 Claim `claims.review-sync` · Behavior `check.claims.review-sync`
+
+## Verification coverage and limits
+
+### Coverage limits
+
+- A model result applies to the approved model and its assumptions. A passing run covers the selected commit, approved checks, and recorded environment.
+
+### Behavior checks
+
+Check `check.contract.validation` · Claim `contract.validation` · Standalone check
+
+Check `check.base-pinning` · Claim `contract.base-pinning`
+
+- Selector `contract.base-pinning`
+
+Check `check.verification.candidate-pinning` · Claim `verification.candidate-pinning` · Standalone check
+
+Check `check.approval.scope` · Claim `approval.scope`
+
+- Selector `approval.scope`
+
+Check `check.formal.z3-vacuity` · Claim `formal.z3-vacuity` · Standalone check
+
+Check `check.formal.lean-audit` · Claim `formal.lean-audit` · Standalone check
+
+Check `check.runner.execution` · Claim `runner.execution`
+
+- Selector `runner.execution`
+
+Check `check.verification.formal-gate` · Claim `verification.formal-gate` · Standalone check
+
+Check `check.outcomes` · Claim `verification.outcomes` · Standalone check
+
+Check `check.evidence.provenance` · Claim `evidence.provenance`
+
+- Selector `evidence.provenance`
+
+Check `check.integrity` · Claim `evidence.integrity` · Standalone check
+
+Check `check.acceptance` · Claim `acceptance.complete-pass` · Standalone check
+
+Check `check.claims.review-sync` · Claim `claims.review-sync` · Standalone check
+
+### Formal checks and assumptions
+
+Formal check `acceptance.eligibility` · Claim `acceptance.complete-pass` · Z3
+
+- Assumption The bounded model represents status, current approval, evidence integrity, and operator confirmation as independent eligibility gates.
+
+Inventory · 13 behavior checks · 1 formal check · 4 declared selectors

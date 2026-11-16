@@ -661,6 +661,8 @@ def review_sync(root):
     manifest["review"] = {
         "overview": "Overview",
         "scope_limits": ["Scope"],
+        "groups": [{"title": "Capability", "claim_ids": [manifest["claims"][0]["id"]]}],
+        "verification_limits": ["Only the staged fixture."],
         "examples": [
             {"label": "Example", "summary": "Example summary", "url": "https://example.com/demo"}
         ],
@@ -673,7 +675,11 @@ def review_sync(root):
     assert first.exit_code == 0, first.output
     content = (f.repo / ".mentat/claims.md").read_bytes()
     assert b"### 1. Short title" in content
-    assert rb"Check `behavior0` selects test\_app.py::test\_case" in content
+    assert b"## Capability" in content
+    assert (
+        b"- Selector `test_app.py::test_case`"
+        in content.split(b"## Verification coverage and limits")[1]
+    )
     assert f.invoke("claims", "render", "--repo", str(f.repo)).exit_code == 0
     assert (f.repo / ".mentat/claims.md").read_bytes() == content
     base = f.commit("review copy")
@@ -687,7 +693,10 @@ def review_sync(root):
         if payload:
             update = payload["update_content"]["content_updates"]
             assert len(update) == 1
-            text = text.replace(update[0]["old_str"], update[0]["new_str"])
+            published = update[0]["new_str"].replace(
+                "`test_app.py::test_case`", "<code>test_app.py::test_case</code>"
+            )
+            text = text.replace(update[0]["old_str"], published)
         return text
 
     with patch.object(claims_notion, "_request", side_effect=request):

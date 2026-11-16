@@ -10,7 +10,7 @@ Create `.mentat/contract.json` and commit it along with the approved models and 
 | --- | --- |
 | `version` | Manifest version `1`. |
 | `claims` | Entries with unique `id`, human-readable `statement`, and optional `assumptions`. |
-| `review` | Optional reviewer-facing overview, scope limits, and example links. Requires a short `title` on each claim. |
+| `review` | Optional reviewer-facing overview, scope limits, example links, and capability groups. Requires a short `title` on each claim. |
 | `formal` | Entries with `id`, `claim`, `engine`, and the relative `source` file. |
 | `behavior` | Entries with `id`, `claim`, and `argv`. Optional `timeout_seconds` defaults to 60 and supports 1–600. Optional `violation_exit_codes` defaults to `[1]` and supports 1–124. Optional `artifacts` lists flat output filenames. Optional `selectors` is a list of arguments expanded at a standalone `{selectors}` element in `argv`. |
 | `docker_image` | Prepared OCI image reference in the form `repository@sha256:<digest>`. Omit for a host-only contract with `allow_host: true`. |
@@ -37,13 +37,17 @@ A behavior check may declare `selectors` and a single standalone `{selectors}` a
 
 For host checks, `host_requirements` can list executable names or absolute paths in `executables` and installed Python distribution names in `python_distributions`. Set `loopback` to `true` when a check needs to bind an IPv4 loopback listener. Mentat reports availability and treats missing declared prerequisites as incomplete. It inspects Python distribution metadata with the `python3` found on the runner's effective `PATH`.
 
-Compare two contracts that support the selected runner with `--base "$NEW_BASE" --against "$OLD_BASE"` on `spec check` and `spec approve`. The displayed Git diff command reads the original commit objects, matching the inputs Mentat reviewed. Review the comparison and the new contract before approving its digest. Both the local and Notion Claims Specs display declared behavior selectors.
+Compare two contracts that support the selected runner with `--base "$NEW_BASE" --against "$OLD_BASE"` on `spec check` and `spec approve`. The displayed Git diff command reads the original commit objects, matching the inputs Mentat reviewed. Review the comparison and the new contract before approving its digest. Both the local and Notion Claims Specs display declared behavior selectors. The grouped layout lists them in a verification appendix.
 
 ## Claims Spec
 
 Edit claim wording, assumptions, and check associations in `.mentat/contract.json`. Regenerate and commit the review copy with the contract.
 
-To present the numbered layout, add a `review` object with an `overview` paragraph and a `scope_limits` list. Optionally add an `examples` list whose entries contain `label`, `summary`, and an HTTPS `url`. Add a short `title` to every claim. The review copy displays claims in contract order and shows their stable claim and check IDs. Contracts using `review` require a Mentat version that supports this layout. Existing version-1 contracts without `review` retain their original rendering.
+Add a `review` object with an `overview` paragraph and a `scope_limits` list, and give every claim a short `title`. Optional `examples` contain a `label`, `summary`, and HTTPS `url`.
+
+For a capability-based reading order, add `review.groups`. Each entry has a unique `title` and an ordered `claim_ids` list. Assign each claim ID exactly once. Group and ID order set the visible claim numbers. Claim and check IDs are the stable references. Keep product boundaries in `scope_limits` and put fixture or environment boundaries in the optional `review.verification_limits` list.
+
+The grouped spec places behavior selectors, standalone checks, and formal checks and assumptions in a verification appendix. Read the run evidence for commands, outcomes, and candidate provenance. Contracts with `review` but without `groups` keep the original numbered layout. Contracts without `review` keep the original ID-based layout. A change to the base contract or verifier can require a new approval for verification.
 
 ```sh
 mentat claims render --repo "$REPO"
@@ -64,7 +68,7 @@ mentat claims check --repo "$REPO" --base "$BASE" --notion "$PAGE"
 mentat claims publish --repo "$REPO" --base "$BASE" --notion "$PAGE"
 ```
 
-Publish writes only the managed Claims Spec section and records its source commit and claim count. It can update an existing page from the original layout to the numbered layout. Keep the divider immediately after the last claim, before any page notes. Make wording changes in the Git contract. An unchanged spec can retain the commit where it was last published. The page is a review copy. Approval and verification depend on the committed contract.
+Publish writes only the managed Claims Spec section and records its source commit and claim count. It can update an existing managed page from either historical layout to the grouped layout. Notion may represent literal selectors as HTML code on readback. Keep the divider immediately after the last managed line, before any page notes. Make wording changes in the Git contract. An unchanged spec can retain the commit where it was last published. The page is a review copy. Approval and verification depend on the committed contract.
 
 ### Verify Mentat itself
 

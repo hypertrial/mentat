@@ -9,7 +9,7 @@ from urllib.parse import quote
 from uuid import uuid4
 
 from .evidence import decode_json
-from .project import _MAX_FILE, Contract, _root, contract_inputs
+from .project import _MAX_FILE, Claim, Contract, Review, _root, contract_inputs
 
 _FILENAME = "claims.md"
 _MARKUP = re.compile(r"([\\`*_\[\]<>~$&|])")
@@ -29,6 +29,23 @@ def _review_prose(value: str) -> str:
     return re.sub(r"^[ \t]+", "", _prose(value), flags=re.MULTILINE).strip("\n")
 
 
+def _inline_prose(value: str) -> str:
+    # Grouped list entries represent one paragraph in both Git and Notion.
+    paragraphs = re.split(r"\r\n?|\n", value)
+    return _prose(" ".join(line.strip(" \t") for line in paragraphs if line.strip(" \t")))
+
+
+def _code_span(value: str) -> str:
+    delimiter = "`" * (max((len(run) for run in re.findall(r"`+", value)), default=0) + 1)
+    if (
+        value.startswith("`")
+        or value.endswith("`")
+        or (value.startswith(" ") and value.endswith(" ") and value.strip(" "))
+    ):
+        value = " " + value + " "
+    return delimiter + value + delimiter
+
+
 def _append_selectors(lines: list[str], contract: Contract, claim_id: str) -> None:
     selectors = [
         f"- Check `{check.id}` selects {_prose(selector)}"
@@ -40,49 +57,115 @@ def _append_selectors(lines: list[str], contract: Contract, claim_id: str) -> No
         lines.extend(("", *selectors))
 
 
+def _review_intro(review: Review) -> list[str]:
+    lines = [
+        "# Claims Spec",
+        "",
+        "## What the app does" if review.groups else "## Overview",
+        "",
+        _review_prose(review.overview),
+        "",
+        "## Product limits" if review.groups else "## Scope limits",
+        "",
+    ]
+    for limit in review.scope_limits:
+        text = _inline_prose(limit) if review.groups else _review_prose(limit).replace("\n", "\n  ")
+        lines.append("- " + text)
+    if review.examples:
+        lines.extend(("", "## Examples", ""))
+        for example in review.examples:
+            url = quote(example.url, safe=":/?#[]@!$&'()*+,;=%-._~")
+            url = url.replace("&", "&amp;").replace("(", r"\(").replace(")", r"\)")
+            summary = (
+                _inline_prose(example.summary)
+                if review.groups
+                else _review_prose(example.summary).replace("\n", "\n  ")
+            )
+            lines.append(f"- [{_prose(example.label)}]({url}) — {summary}")
+    return lines
+
+
+def _append_review_claim(
+    lines: list[str], contract: Contract, number: int, claim: Claim, *, grouped: bool
+) -> None:
+    title = _HEADING_END.sub(r"\\\g<0>", _prose(claim.title.rstrip()))
+    lines.extend(("", f"### {number}. {title}", "", _prose(claim.statement)))
+    behavior = ", ".join(f"`{check.id}`" for check in contract.behavior if check.claim == claim.id)
+    formal = ", ".join(f"`{check.id}`" for check in contract.formal if check.claim == claim.id)
+    if claim.assumptions and not (grouped and formal):
+        lines.extend(("", "Assumptions", ""))
+        for item in claim.assumptions:
+            text = _inline_prose(item) if grouped else _prose(item).replace("\n", "\n  ")
+            lines.append("- " + text)
+    if not grouped:
+        _append_selectors(lines, contract, claim.id)
+    trace = f"Claim `{claim.id}` · Behavior {behavior}"
+    if formal:
+        trace += f" · Formal {formal}"
+    lines.extend(("", trace))
+
+
+def _grouped_claims(contract: Contract) -> bytes:
+    review = contract.review
+    lines = _review_intro(review)
+    claims = {claim.id: claim for claim in contract.claims}
+    number = 0
+    for group in review.groups:
+        title = _HEADING_END.sub(r"\\\g<0>", _prose(group.title))
+        lines.extend(("", f"## {title}"))
+        for claim_id in group.claim_ids:
+            number += 1
+            _append_review_claim(lines, contract, number, claims[claim_id], grouped=True)
+    lines.extend(("", "## Verification coverage and limits"))
+    if review.verification_limits:
+        lines.extend(("", "### Coverage limits", ""))
+        lines.extend("- " + _inline_prose(item) for item in review.verification_limits)
+    lines.extend(("", "### Behavior checks"))
+    for check in contract.behavior:
+        row = f"Check {_code_span(check.id)} · Claim {_code_span(check.claim)}"
+        if not check.selectors:
+            row += " · Standalone check"
+        lines.extend(("", row))
+        if check.selectors:
+            lines.append("")
+            lines.extend(f"- Selector {_code_span(selector)}" for selector in check.selectors)
+    lines.extend(("", "### Formal checks and assumptions"))
+    shown = set()
+    for check in contract.formal:
+        lines.extend(
+            (
+                "",
+                f"Formal check {_code_span(check.id)} · Claim {_code_span(check.claim)} · "
+                + ("Z3" if check.engine == "z3" else "Lean"),
+            )
+        )
+        if check.claim not in shown and (assumptions := claims[check.claim].assumptions):
+            lines.append("")
+            lines.extend("- Assumption " + _inline_prose(item) for item in assumptions)
+            shown.add(check.claim)
+    counts = (
+        (len(contract.behavior), "behavior check"),
+        (len(contract.formal), "formal check"),
+        (sum(len(check.selectors or []) for check in contract.behavior), "declared selector"),
+    )
+    lines.extend(
+        (
+            "",
+            "Inventory · "
+            + " · ".join(f"{count} {name}{'' if count == 1 else 's'}" for count, name in counts),
+        )
+    )
+    return ("\n".join(lines) + "\n").encode()
+
+
 def render_claims(contract: Contract) -> bytes:
+    if contract.review is not None and contract.review.groups is not None:
+        return _grouped_claims(contract)
     if contract.review is not None:
-        review = contract.review
-        lines = [
-            "# Claims Spec",
-            "",
-            "## Overview",
-            "",
-            _review_prose(review.overview),
-            "",
-            "## Scope limits",
-            "",
-        ]
-        for limit in review.scope_limits:
-            lines.append("- " + _review_prose(limit).replace("\n", "\n  "))
-        if review.examples:
-            lines.extend(("", "## Examples", ""))
-            for example in review.examples:
-                url = quote(example.url, safe=":/?#[]@!$&'()*+,;=%-._~")
-                url = url.replace("&", "&amp;").replace("(", r"\(").replace(")", r"\)")
-                lines.append(
-                    f"- [{_prose(example.label)}]({url}) — "
-                    + _review_prose(example.summary).replace("\n", "\n  ")
-                )
+        lines = _review_intro(contract.review)
         lines.extend(("", "## Claims"))
         for number, claim in enumerate(contract.claims, 1):
-            title = _HEADING_END.sub(r"\\\g<0>", _prose(claim.title.rstrip()))
-            lines.extend(("", f"### {number}. {title}", "", _prose(claim.statement)))
-            if claim.assumptions:
-                lines.extend(("", "Assumptions", ""))
-                for assumption in claim.assumptions:
-                    lines.append("- " + _prose(assumption).replace("\n", "\n  "))
-            _append_selectors(lines, contract, claim.id)
-            behavior = ", ".join(
-                f"`{check.id}`" for check in contract.behavior if check.claim == claim.id
-            )
-            formal = ", ".join(
-                f"`{check.id}`" for check in contract.formal if check.claim == claim.id
-            )
-            trace = f"Claim `{claim.id}` · Behavior {behavior}"
-            if formal:
-                trace += f" · Formal {formal}"
-            lines.extend(("", trace))
+            _append_review_claim(lines, contract, number, claim, grouped=False)
         return ("\n".join(lines) + "\n").encode()
     lines = [
         "# Claims Spec",

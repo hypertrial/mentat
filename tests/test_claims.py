@@ -412,3 +412,137 @@ def test_numbered_review_indentation_stays_prose(project_repo):
     assert "<li>Only the supported inputs.</li>" in html
     assert "<p>More details.</p>" in html
     assert "<pre>" not in html
+
+
+def grouped_manifest(manifest):
+    manifest = numbered_manifest(manifest)
+    manifest["claims"].append(
+        {"id": "other", "title": "Another capability", "statement": "Another claim."}
+    )
+    manifest["review"]["groups"] = [
+        {"title": "First capability", "claim_ids": ["other"]},
+        {"title": "Second capability", "claim_ids": ["claim"]},
+    ]
+    manifest["review"]["verification_limits"] = ["Only sampled inputs are checked."]
+    manifest["behavior"].append(
+        {**copy.deepcopy(manifest["behavior"][0]), "id": "other.check", "claim": "other"}
+    )
+    manifest["behavior"][0]["argv"].append("{selectors}")
+    manifest["behavior"][0]["selectors"] = [
+        "tests/test_app.py::test_case[one]",
+        "two `ticks`",
+        "  café {checks}/x  ",
+    ]
+    manifest["claims"][0]["assumptions"] = ["Given a valid input"]
+    return manifest
+
+
+def test_grouped_render_order_coverage_literals_and_history(project_repo):
+    repo, _, manifest = project_repo
+    manifest = grouped_manifest(manifest)
+    write_contract(repo, manifest)
+    result = invoke(repo, "render")
+    assert result.exit_code == 0, result.output
+    path = repo / ".mentat/claims.md"
+    original = path.read_bytes()
+    text = original.decode()
+    assert [line for line in text.splitlines() if line.startswith("#")] == [
+        "# Claims Spec",
+        "## What the app does",
+        "## Product limits",
+        "## Examples",
+        "## First capability",
+        "### 1. Another capability",
+        "## Second capability",
+        "### 2. Validate the candidate",
+        "## Verification coverage and limits",
+        "### Coverage limits",
+        "### Behavior checks",
+        "### Formal checks and assumptions",
+    ]
+    assert "Claim `claim` · Behavior `behavior` · Formal `proof`" in text
+    assert "Check `behavior` · Claim `claim`\n\n- Selector" in text
+    assert "Formal check `proof` · Claim `claim` · Z3\n\n- Assumption Given a valid input" in text
+    assert "Only sampled inputs are checked." in text
+    assert text.rstrip().endswith(
+        "Inventory · 2 behavior checks · 1 formal check · 3 declared selectors"
+    )
+    tokens = MarkdownIt().parse(text)
+    code = [
+        child.content
+        for token in tokens
+        for child in token.children or []
+        if child.type == "code_inline"
+    ]
+    for selector in manifest["behavior"][0]["selectors"]:
+        assert selector in code
+    assert invoke(repo, "render").exit_code == 0
+    assert path.read_bytes() == original
+    base = commit(repo, "grouped claims")
+    load_project(repo, base, "host")
+    manifest["review"]["groups"].reverse()
+    write_contract(repo, manifest)
+    assert invoke(repo, "check").exit_code == 1
+    assert invoke(repo, "check", "--base", base).exit_code == 0
+    assert invoke(repo, "render").exit_code == 0
+    assert path.read_bytes() != original
+    load_project(repo, base, "host")
+
+
+@pytest.mark.parametrize(
+    "groups",
+    [
+        [],
+        [{"title": "A", "claim_ids": ["claim", "claim", "other"]}],
+        [{"title": "A", "claim_ids": ["claim", "missing", "other"]}],
+        [{"title": "A", "claim_ids": ["claim"]}],
+        [{"title": "", "claim_ids": ["claim", "other"]}],
+        [{"title": " ", "claim_ids": ["claim", "other"]}],
+        [{"title": "Same", "claim_ids": ["claim"]}, {"title": "Same", "claim_ids": ["other"]}],
+        [{"title": "Verification coverage and limits", "claim_ids": ["claim", "other"]}],
+        [{"title": "What the app does", "claim_ids": ["claim", "other"]}],
+    ],
+)
+def test_invalid_group_partition_never_overwrites(project_repo, groups):
+    repo, _, manifest = project_repo
+    assert invoke(repo, "render").exit_code == 0
+    path = repo / ".mentat/claims.md"
+    original = path.read_bytes()
+    manifest = grouped_manifest(manifest)
+    manifest["review"]["groups"] = groups
+    write_contract(repo, manifest)
+    result = invoke(repo, "render", "--json")
+    assert result.exit_code == 2, result.output
+    assert path.read_bytes() == original
+
+
+def test_grouped_standalone_and_optional_coverage_limits(project_repo):
+    repo, _, manifest = project_repo
+    manifest = grouped_manifest(manifest)
+    del manifest["review"]["verification_limits"]
+    del manifest["behavior"][0]["selectors"]
+    manifest["behavior"][0]["argv"].remove("{selectors}")
+    write_contract(repo, manifest)
+    result = invoke(repo, "render")
+    assert result.exit_code == 0, result.output
+    text = (repo / ".mentat/claims.md").read_text()
+    assert "### Coverage limits" not in text
+    assert "Check `behavior` · Claim `claim` · Standalone check" in text
+    assert text.rstrip().endswith(
+        "Inventory · 2 behavior checks · 1 formal check · 0 declared selectors"
+    )
+
+
+def test_grouped_multiline_bullets_stay_single_paragraphs(project_repo):
+    repo, _, manifest = project_repo
+    manifest = grouped_manifest(manifest)
+    manifest["review"]["scope_limits"] = ["Only recorded cases.\n\nGaps remain."]
+    manifest["review"]["verification_limits"] = ["Only synthetic cases.\n\nProduction is excluded."]
+    manifest["claims"][0]["assumptions"] = ["Given a valid input.\r\nThe clock is fixed."]
+    write_contract(repo, manifest)
+    result = invoke(repo, "render")
+    assert result.exit_code == 0, result.output
+    text = (repo / ".mentat/claims.md").read_text()
+    assert "- Only recorded cases. Gaps remain.\n" in text
+    assert "- Only synthetic cases. Production is excluded.\n" in text
+    assert "- Assumption Given a valid input. The clock is fixed.\n" in text

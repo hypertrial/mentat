@@ -233,7 +233,7 @@ def test_numbered_publish_adds_selectors_and_reads_them_back(monkeypatch):
     assert not notion.notion_claims(PAGE, updated, new_base)
     assert notion.notion_claims(PAGE, updated, new_base, publish=True)
     assert notion.notion_claims(PAGE, updated, new_base)
-    assert "selects test\\_app.py::test\\_case" in contents
+    assert "selects `test_app.py::test_case`" in contents
     assert contents.startswith("Before\n\n") and contents.endswith("\n\nAfter")
 
 
@@ -339,3 +339,138 @@ def test_numbered_lost_write_response_reads_back_without_retry(monkeypatch):
     monkeypatch.setattr(notion, "_request", request)
     assert notion.notion_claims(PAGE, NUMBERED, BASE, publish=True)
     assert len(writes) == 1
+
+
+GROUPED = (
+    "# Claims Spec\n\n## What the app does\n\nA concise overview.\n\n"
+    "## Product limits\n\n- Only supported inputs.\n\n"
+    "## Capability\n\n### 1. Validate the candidate\n\nThe actual claim.\n\n"
+    "Claim `claim.id` · Behavior `check.id` · Formal `proof.id`\n\n"
+    "## Verification coverage and limits\n\n### Behavior checks\n\n"
+    "Check `check.id` · Claim `claim.id`\n\n- Selector `tests/test_app.py::test_case[one]`\n\n"
+    "### Formal checks and assumptions\n\nFormal check `proof.id` · Claim `claim.id` · Z3\n\n"
+    "Inventory · 1 behavior check · 1 formal check · 1 declared selector\n"
+).encode()
+
+
+@pytest.mark.parametrize("prior", [CLAIMS, NUMBERED])
+def test_grouped_migrates_prior_layout_preserving_notes_and_noops(monkeypatch, prior):
+    section = f"Source commit: `{BASE}` · 1 claim\n\n{notion._body(prior)}\n\n{notion._END}"
+    contents = f"Before notes\n\n{section}\n\nAfter notes"
+    writes = []
+
+    def request(page_id, payload=None):
+        nonlocal contents
+        if payload:
+            writes.append(payload)
+            edit = payload["update_content"]["content_updates"][0]
+            assert contents.count(edit["old_str"]) == 1
+            contents = contents.replace(edit["old_str"], edit["new_str"], 1)
+        return contents
+
+    monkeypatch.setattr(notion, "_request", request)
+    assert notion.notion_claims(PAGE, GROUPED, BASE, publish=True)
+    assert contents.startswith("Before notes\n\n") and contents.endswith("\n\nAfter notes")
+    assert "## Verification coverage and limits" in contents
+    assert notion.notion_claims(PAGE, GROUPED, BASE, publish=True)
+    assert len(writes) == 1
+
+
+def test_grouped_accepts_exact_notion_code_selector_but_not_changed_selector(monkeypatch):
+    body = notion._body(GROUPED).replace(
+        "`tests/test_app.py::test_case[one]`", "<code>tests/test_app.py::test_case[one]</code>"
+    )
+    contents = f"Source commit: `{BASE}` · 1 claim\n\n{body}\n\n{notion._END}"
+    monkeypatch.setattr(notion, "_request", lambda page_id: contents)
+    assert notion.notion_claims(PAGE, GROUPED, BASE)
+    contents = contents.replace("test_case[one]", "test_case[two]")
+    assert not notion.notion_claims(PAGE, GROUPED, BASE)
+
+
+def test_grouped_trailing_notes_inside_section_are_not_replaced(monkeypatch):
+    contents = (
+        f"Source commit: `{BASE}` · 1 claim\n\n{notion._body(GROUPED)}"
+        f"\n\n## Release notes\n\nDo not delete.\n\n{notion._END}"
+    )
+
+    def request(page_id, payload=None):
+        assert payload is None
+        return contents
+
+    monkeypatch.setattr(notion, "_request", request)
+    with pytest.raises(ValueError):
+        notion.notion_claims(PAGE, GROUPED.replace(b"actual", b"updated"), BASE, publish=True)
+
+
+def test_grouped_lost_write_response_is_read_back_without_retry(monkeypatch):
+    contents = f"{notion._START}\n\n{notion._END}"
+    writes = []
+
+    def request(page_id, payload=None):
+        nonlocal contents
+        if payload:
+            writes.append(payload)
+            contents = payload["update_content"]["content_updates"][0]["new_str"]
+            raise ValueError("connection lost")
+        return contents
+
+    monkeypatch.setattr(notion, "_request", request)
+    assert notion.notion_claims(PAGE, GROUPED, BASE, publish=True)
+    assert len(writes) == 1
+
+
+def test_grouped_concurrent_edit_is_not_retried(monkeypatch):
+    original = f"Source commit: `{BASE}` · 1 claim\n\n{notion._body(GROUPED)}\n\n{notion._END}"
+    calls = []
+
+    def request(page_id, payload=None):
+        calls.append(payload)
+        if payload:
+            assert payload["update_content"]["content_updates"][0]["old_str"] == original
+            raise ValueError("edit no longer matches")
+        return original if len(calls) == 1 else original.replace("actual claim", "concurrent edit")
+
+    monkeypatch.setattr(notion, "_request", request)
+    with pytest.raises(ValueError, match="no longer matches"):
+        notion.notion_claims(PAGE, GROUPED.replace(b"actual", b"updated"), BASE, publish=True)
+    assert len(calls) == 3
+
+
+def test_grouped_selector_link_is_not_equivalent_to_code(monkeypatch):
+    body = notion._body(GROUPED).replace(
+        "`tests/test_app.py::test_case[one]`",
+        "[tests/test_app.py::test_case[one]](https://example.com)",
+    )
+    contents = f"Source commit: `{BASE}` · 1 claim\n\n{body}\n\n{notion._END}"
+    monkeypatch.setattr(notion, "_request", lambda page_id: contents)
+    assert not notion.notion_claims(PAGE, GROUPED, BASE)
+
+
+def test_historical_notion_angle_escape_is_a_noop(monkeypatch):
+    spec = NUMBERED.replace(
+        b"Claim `claim.id`",
+        rb"- Check `check.id` selects test\_app.py::test\_case\[\<value\>\]"
+        b"\n\nClaim `claim.id`",
+    )
+    body = notion._body(spec).replace(r"\<value\>", r"\<value>")
+    contents = f"Source commit: `{BASE}` · 1 claim\n\n{body}\n\n{notion._END}"
+
+    def request(page_id, payload=None):
+        assert payload is None
+        return contents
+
+    monkeypatch.setattr(notion, "_request", request)
+    assert notion.notion_claims(PAGE, spec, BASE, publish=True)
+    contents = contents.replace(r"\<value>", "<https://example.com>")
+    assert not notion.notion_claims(PAGE, spec, BASE)
+
+
+def test_grouped_selector_accepts_equivalent_backtick_delimiters(monkeypatch):
+    body = notion._body(GROUPED).replace(
+        "`tests/test_app.py::test_case[one]`", "``tests/test_app.py::test_case[one]``"
+    )
+    contents = f"Source commit: `{BASE}` · 1 claim\n\n{body}\n\n{notion._END}"
+    monkeypatch.setattr(notion, "_request", lambda page_id: contents)
+    assert notion.notion_claims(PAGE, GROUPED, BASE)
+    contents = contents.replace("case[one]", "case``[one]")
+    assert not notion.notion_claims(PAGE, GROUPED, BASE)
