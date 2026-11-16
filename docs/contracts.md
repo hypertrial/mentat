@@ -10,6 +10,7 @@ Create `.mentat/contract.json` and commit it along with the approved models and 
 | --- | --- |
 | `version` | Manifest version `1`. |
 | `claims` | Entries with unique `id`, human-readable `statement`, and optional `assumptions`. |
+| `review` | Optional reviewer-facing overview, scope limits, and example links. Requires a short `title` on each claim. |
 | `formal` | Entries with `id`, `claim`, `engine`, and the relative `source` file. |
 | `behavior` | Entries with `id`, `claim`, and `argv`. Optional `timeout_seconds` defaults to 60 and supports 1–600. Optional `violation_exit_codes` defaults to `[1]` and supports 1–124. Optional `artifacts` lists flat output filenames. |
 | `docker_image` | Prepared OCI image reference in the form `repository@sha256:<digest>`. Omit for a host-only contract with `allow_host: true`. |
@@ -30,6 +31,8 @@ Status reflects the checks you wrote. A passing model check establishes a result
 
 Edit claim wording, assumptions, and check associations in `.mentat/contract.json`. Regenerate and commit the review copy with the contract.
 
+To present the numbered layout, add a `review` object with an `overview` paragraph and a `scope_limits` list. Optionally add an `examples` list whose entries contain `label`, `summary`, and an HTTPS `url`. Add a short `title` to every claim. The review copy displays claims in contract order and shows their stable claim and check IDs. Contracts using `review` require a Mentat version that supports this layout. Existing version-1 contracts without `review` retain their original rendering.
+
 ```sh
 mentat claims render --repo "$REPO"
 mentat claims check --repo "$REPO"
@@ -49,7 +52,7 @@ mentat claims check --repo "$REPO" --base "$BASE" --notion "$PAGE"
 mentat claims publish --repo "$REPO" --base "$BASE" --notion "$PAGE"
 ```
 
-Publish writes only the managed Claims Spec section and records its source commit and claim count. Keep the divider immediately after the last claim, before any page notes. Make wording changes in the Git contract. An unchanged spec can retain the commit where it was last published. The page is a review copy. Approval and verification depend on the committed contract.
+Publish writes only the managed Claims Spec section and records its source commit and claim count. It can update an existing page from the original layout to the numbered layout. Keep the divider immediately after the last claim, before any page notes. Make wording changes in the Git contract. An unchanged spec can retain the commit where it was last published. The page is a review copy. Approval and verification depend on the committed contract.
 
 ### Verify Mentat itself
 

@@ -1,19 +1,255 @@
 {
   "version": 1,
+  "review": {
+    "overview": "Mentat is a local CLI for reviewing a committed software change. A reviewer approves a contract from a Git base commit and selects an exact candidate commit. Mentat runs the declared formal and behavior checks, saves the results and a reproduction command, and lets the reviewer record acceptance of a complete passing run.",
+    "scope_limits": [
+      "Reviewers supply and review the requirements, formal models, and behavior checks.",
+      "A model result applies to the approved model and its assumptions. A passing run covers the selected commit, approved checks, and recorded environment.",
+      "Whole-program correctness, automatic repair, merging, and deployment are outside Mentat's scope. Acceptance records a local decision.",
+      "Docker behavior checks use a local, prepared runner. Host behavior checks and Lean source execute with the operator's permissions."
+    ],
+    "examples": [
+      {
+        "label": "Quickstart",
+        "summary": "Create a small Git repository, catch a broken clamp command, and verify the fix.",
+        "url": "https://github.com/hypertrial/mentat#try-it-on-a-git-repo"
+      },
+      {
+        "label": "Nemo",
+        "summary": "Build two historical revisions and replay a mixed-type sum that returned the wrong value and numeric type.",
+        "url": "https://github.com/hypertrial/mentat/blob/main/docs/nemo.md"
+      },
+      {
+        "label": "Apache Polaris",
+        "summary": "Replay a namespace round-trip bug and export a native pytest regression when the failure reproduces. This showcase gives a confirmed violation precedence over an incomplete check.",
+        "url": "https://github.com/hypertrial/mentat/blob/main/docs/polaris.md"
+      }
+    ]
+  },
   "claims": [
-    {"id": "contract.base-pinning", "statement": "Approved checks come from the base and candidate source comes from the exact committed revision."},
-    {"id": "verification.outcomes", "statement": "Verification exits zero for pass, one for violation, and two for incomplete, with incomplete taking precedence."},
-    {"id": "acceptance.complete-pass", "statement": "Acceptance requires operator confirmation and an intact complete pass under the current approval.", "assumptions": ["The bounded model represents status, current approval, evidence integrity, and operator confirmation as independent eligibility gates."]},
-    {"id": "evidence.integrity", "statement": "Evidence export exposes and preserves pinned provenance and rejects modified reports and artifacts."}
+    {
+      "id": "contract.validation",
+      "title": "Validate the contract",
+      "statement": "The contract must declare at least one formal check. Every claim needs a behavior check, and each check must reference a declared claim using a unique check ID."
+    },
+    {
+      "id": "contract.base-pinning",
+      "title": "Use the approved base",
+      "statement": "Mentat loads the contract, formal inputs, and approved check scripts from the exact base commit selected by the reviewer."
+    },
+    {
+      "id": "verification.candidate-pinning",
+      "title": "Stage the exact candidate",
+      "statement": "Checks see the exact candidate commit, excluding Git metadata, uncommitted files, and the candidate's root .mentat entry. Unsupported selected Git entries make verification incomplete."
+    },
+    {
+      "id": "approval.scope",
+      "title": "Approve a specific contract",
+      "statement": "A reviewer confirms the displayed digest in a terminal. Verification requires approval for the same repository path, base commit, runner mode, and verifier fingerprint."
+    },
+    {
+      "id": "formal.z3-vacuity",
+      "title": "Check the Z3 model before its counterexample",
+      "statement": "An UNSAT check requires a satisfiable base model. A satisfiable counterexample violates the claim, and an inconsistent base model makes the check incomplete."
+    },
+    {
+      "id": "formal.lean-audit",
+      "title": "Check the named Lean theorem and its axioms",
+      "statement": "Mentat checks that the named theorem is declared by the approved Lean source and audits its transitive axioms. Approval discloses that Lean runs on the host."
+    },
+    {
+      "id": "runner.execution",
+      "title": "Apply the selected runner's settings",
+      "statement": "Docker behavior checks use a prepared, digest-pinned image without networking or host mounts. Host behavior checks require contract opt-in and separate approval and run with the operator's permissions."
+    },
+    {
+      "id": "verification.formal-gate",
+      "title": "Require formal checks to pass before behavior runs",
+      "statement": "Behavior checks begin only after every formal check passes. A saved run records when behavior checks were skipped."
+    },
+    {
+      "id": "verification.outcomes",
+      "title": "Distinguish pass, violation, and incomplete",
+      "statement": "Core verification exits 0 for pass, 1 for a confirmed violation, and 2 for an incomplete run or invalid input. Incomplete takes precedence in mixed results. Saved runs retain the individual outcomes."
+    },
+    {
+      "id": "evidence.provenance",
+      "title": "Record how to reproduce the run",
+      "statement": "The evidence records the base and candidate commits, contract and snapshot digests, recorded tools and runner, check results, and a reproduction command."
+    },
+    {
+      "id": "evidence.integrity",
+      "title": "Check the bundle before export",
+      "statement": "Evidence export validates the saved manifest against its local receipt and checks the file set and artifact hashes before copying the bundle."
+    },
+    {
+      "id": "acceptance.complete-pass",
+      "title": "Accept only a complete pass",
+      "statement": "Acceptance requires an intact passing run under the current approval and a separate operator confirmation in a terminal.",
+      "assumptions": [
+        "The bounded model represents status, current approval, evidence integrity, and operator confirmation as independent eligibility gates."
+      ]
+    },
+    {
+      "id": "claims.review-sync",
+      "title": "Keep the local and Notion specs in sync",
+      "statement": "Mentat renders the local spec deterministically and detects drift. Explicit Notion publication mirrors the committed spec in one selected page section and requires a matching local spec at that commit."
+    }
   ],
   "formal": [
-    {"id": "acceptance.eligibility", "claim": "acceptance.complete-pass", "engine": "z3", "source": "acceptance.smt2", "expected": "unsat", "counterexample": "acceptance-counterexample.smt2"}
+    {
+      "id": "acceptance.eligibility",
+      "claim": "acceptance.complete-pass",
+      "engine": "z3",
+      "source": "acceptance.smt2",
+      "expected": "unsat",
+      "counterexample": "acceptance-counterexample.smt2"
+    }
   ],
   "behavior": [
-    {"id": "check.base-pinning", "claim": "contract.base-pinning", "argv": ["python3", "-I", "{checks}/selfcheck.py", "contract.base-pinning"], "timeout_seconds": 120},
-    {"id": "check.outcomes", "claim": "verification.outcomes", "argv": ["python3", "-I", "{checks}/selfcheck.py", "verification.outcomes"], "timeout_seconds": 120},
-    {"id": "check.acceptance", "claim": "acceptance.complete-pass", "argv": ["python3", "-I", "{checks}/selfcheck.py", "acceptance.complete-pass"], "timeout_seconds": 120},
-    {"id": "check.integrity", "claim": "evidence.integrity", "argv": ["python3", "-I", "{checks}/selfcheck.py", "evidence.integrity"], "timeout_seconds": 120}
+    {
+      "id": "check.contract.validation",
+      "claim": "contract.validation",
+      "argv": [
+        "python3",
+        "-I",
+        "{checks}/selfcheck.py",
+        "contract.validation"
+      ],
+      "timeout_seconds": 120
+    },
+    {
+      "id": "check.base-pinning",
+      "claim": "contract.base-pinning",
+      "argv": [
+        "python3",
+        "-I",
+        "{checks}/selfcheck.py",
+        "contract.base-pinning"
+      ],
+      "timeout_seconds": 120
+    },
+    {
+      "id": "check.verification.candidate-pinning",
+      "claim": "verification.candidate-pinning",
+      "argv": [
+        "python3",
+        "-I",
+        "{checks}/selfcheck.py",
+        "verification.candidate-pinning"
+      ],
+      "timeout_seconds": 120
+    },
+    {
+      "id": "check.approval.scope",
+      "claim": "approval.scope",
+      "argv": [
+        "python3",
+        "-I",
+        "{checks}/selfcheck.py",
+        "approval.scope"
+      ],
+      "timeout_seconds": 120
+    },
+    {
+      "id": "check.formal.z3-vacuity",
+      "claim": "formal.z3-vacuity",
+      "argv": [
+        "python3",
+        "-I",
+        "{checks}/selfcheck.py",
+        "formal.z3-vacuity"
+      ],
+      "timeout_seconds": 120
+    },
+    {
+      "id": "check.formal.lean-audit",
+      "claim": "formal.lean-audit",
+      "argv": [
+        "python3",
+        "-I",
+        "{checks}/selfcheck.py",
+        "formal.lean-audit"
+      ],
+      "timeout_seconds": 120
+    },
+    {
+      "id": "check.runner.execution",
+      "claim": "runner.execution",
+      "argv": [
+        "python3",
+        "-I",
+        "{checks}/selfcheck.py",
+        "runner.execution"
+      ],
+      "timeout_seconds": 120
+    },
+    {
+      "id": "check.verification.formal-gate",
+      "claim": "verification.formal-gate",
+      "argv": [
+        "python3",
+        "-I",
+        "{checks}/selfcheck.py",
+        "verification.formal-gate"
+      ],
+      "timeout_seconds": 120
+    },
+    {
+      "id": "check.outcomes",
+      "claim": "verification.outcomes",
+      "argv": [
+        "python3",
+        "-I",
+        "{checks}/selfcheck.py",
+        "verification.outcomes"
+      ],
+      "timeout_seconds": 120
+    },
+    {
+      "id": "check.evidence.provenance",
+      "claim": "evidence.provenance",
+      "argv": [
+        "python3",
+        "-I",
+        "{checks}/selfcheck.py",
+        "evidence.provenance"
+      ],
+      "timeout_seconds": 120
+    },
+    {
+      "id": "check.integrity",
+      "claim": "evidence.integrity",
+      "argv": [
+        "python3",
+        "-I",
+        "{checks}/selfcheck.py",
+        "evidence.integrity"
+      ],
+      "timeout_seconds": 120
+    },
+    {
+      "id": "check.acceptance",
+      "claim": "acceptance.complete-pass",
+      "argv": [
+        "python3",
+        "-I",
+        "{checks}/selfcheck.py",
+        "acceptance.complete-pass"
+      ],
+      "timeout_seconds": 120
+    },
+    {
+      "id": "check.claims.review-sync",
+      "claim": "claims.review-sync",
+      "argv": [
+        "python3",
+        "-I",
+        "{checks}/selfcheck.py",
+        "claims.review-sync"
+      ],
+      "timeout_seconds": 120
+    }
   ],
   "allow_host": true
 }

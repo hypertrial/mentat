@@ -138,6 +138,8 @@ def base_pinning(root):
     digest = f.approve()
     (f.repo / "candidate.txt").write_text("committed candidate")
     (f.repo / ".mentat/check0.py").write_text("raise SystemExit(1)\n")
+    (f.repo / ".mentat/model.smt2").write_text("(assert false)\n")
+    (f.repo / ".mentat/contract.json").write_text("invalid candidate contract")
     candidate = f.commit("candidate")
     (f.repo / "candidate.txt").write_text("dirty candidate")
     (f.repo / ".mentat/check0.py").write_text("raise SystemExit(2)\n")
@@ -230,20 +232,452 @@ def integrity(root):
     assert {p.name: p.read_bytes() for p in destination.iterdir()} == {
         p.name: p.read_bytes() for p in bundle.iterdir()
     }
-    for name in ("report.md", record["cases"][0]["checks"][0]["artifacts"]["result0.txt"]):
+    for name in (
+        "manifest.json",
+        "report.md",
+        record["cases"][0]["checks"][0]["artifacts"]["result0.txt"],
+    ):
         path = bundle / name
         original = path.read_bytes()
         path.write_bytes(b"tampered")
         rejected = f.invoke("evidence", "export", run_id, "--json")
         assert rejected.exit_code == 2, rejected.output
         path.write_bytes(original)
+    extra = bundle / "unexpected.txt"
+    extra.write_text("extra")
+    assert f.invoke("evidence", "export", run_id, "--json").exit_code == 2
+    extra.unlink()
+    missing = bundle / "report.md"
+    original = missing.read_bytes()
+    missing.unlink()
+    assert f.invoke("evidence", "export", run_id, "--json").exit_code == 2
+    missing.write_bytes(original)
+
+
+def validation(root):
+    import copy
+
+    f = Fixture(root)
+    original = json.loads((f.repo / ".mentat/contract.json").read_text())
+    mutations = [
+        lambda m: m.update(version=2),
+        lambda m: m.update(formal=[]),
+        lambda m: m["behavior"][0].update(claim="unknown"),
+        lambda m: m["formal"][0].update(claim="unknown"),
+        lambda m: m["behavior"][0].update(id="model"),
+        lambda m: m["formal"][0].update(source="../escape"),
+        lambda m: m["formal"][0].update(source="missing"),
+        lambda m: m["formal"][0].update(expected="unsat"),
+        lambda m: m["behavior"][0].update(argv=["{checks}/../escape"]),
+        lambda m: m["claims"].append({"id": "uncovered", "statement": "uncovered"}),
+    ]
+    for i, mutate in enumerate(mutations):
+        manifest = copy.deepcopy(original)
+        mutate(manifest)
+        (f.repo / ".mentat/contract.json").write_text(json.dumps(manifest))
+        bad = f.commit(f"invalid {i}")
+        result = f.invoke("spec", "check", *f.scope(bad), "--json")
+        assert result.exit_code == 2, result.output
+    (f.repo / ".mentat/contract.json").write_text('{"version":1,"version":1}')
+    bad = f.commit("duplicate key")
+    assert f.invoke("spec", "check", *f.scope(bad), "--json").exit_code == 2
+
+
+def candidate_pinning(root):
+    from mentat.project import snapshot
+
+    f = Fixture(root)
+    f.approve()
+    (f.repo / "candidate.txt").write_text("committed")
+    (f.repo / ".mentat/model.smt2").write_text("(assert false)")
+    (f.repo / ".mentat/check0.py").unlink()
+    (f.repo / ".mentat/check0.py").symlink_to("/etc/passwd")
+    candidate = f.commit("candidate")
+    (f.repo / "candidate.txt").write_text("dirty")
+    (f.repo / "untracked.txt").write_text("dirty")
+    captured = snapshot(f.repo, candidate)
+    assert captured.files["candidate.txt"][1] == b"committed"
+    assert "untracked.txt" not in captured.files
+    assert not any(p.startswith(".mentat/") for p in captured.files)
+    result, _ = f.verify(candidate)
+    assert result.exit_code == 0, result.output
+    (f.repo / "outside-link").symlink_to("/etc/passwd")
+    bad = f.commit("unsupported candidate entry")
+    result, _ = f.verify(bad)
+    assert result.exit_code == 2, result.output
+
+
+def approval_scope(root):
+    from unittest.mock import patch
+
+    from mentat import project
+
+    f = Fixture(root)
+    checked = f.invoke("spec", "check", *f.scope(), "--json")
+    digest = json.loads(checked.output)["contract_digest"]
+    assert f.invoke("spec", "approve", "0" * 64, *f.scope()).exit_code == 2
+    assert f.invoke("spec", "approve", digest, *f.scope()).exit_code == 2
+    f.approve()
+    clone = root / "clone"
+    subprocess.run(["git", "clone", "-q", str(f.repo), str(clone)], check=True)
+    result = f.invoke(
+        "verify",
+        "--repo",
+        str(clone),
+        "--base",
+        f.base,
+        "--runner",
+        "host",
+        "--rev",
+        f.base,
+        "--json",
+    )
+    assert result.exit_code == 2, result.output
+    manifest = json.loads((f.repo / ".mentat/contract.json").read_text())
+    manifest["docker_image"] = "example/test@sha256:" + "a" * 64
+    (f.repo / ".mentat/contract.json").write_text(json.dumps(manifest))
+    next_base = f.commit("next base")
+    assert f.verify(f.base, next_base)[0].exit_code == 2
+    f.approve(next_base)
+    with patch.object(cli, "runner_info") as runtime:
+        result = f.invoke(
+            "verify",
+            "--repo",
+            str(f.repo),
+            "--base",
+            next_base,
+            "--runner",
+            "docker",
+            "--rev",
+            f.base,
+            "--json",
+        )
+    assert result.exit_code == 2 and "approve" in result.output.lower(), result.output
+    runtime.assert_not_called()
+    original = project._digest
+    with patch.object(
+        project,
+        "_digest",
+        side_effect=lambda files: "changed" if "cli.py" in files else original(files),
+    ):
+        assert f.verify(f.base, next_base)[0].exit_code == 2
+
+
+def z3_vacuity(root):
+    from dataclasses import replace
+
+    from mentat.project import load_project
+    from mentat.project_formal import run_formal, tool_info
+
+    f = Fixture(root)
+    project = load_project(f.repo, f.base, "host")
+    tools = tool_info(project)
+    for source, counter, expected, status in [
+        ("(assert true)", None, "sat", "pass"),
+        ("(assert false)", None, "sat", "violation"),
+        ("(declare-const x Int) (assert (> x 0))", "(assert (<= x 0))", "unsat", "pass"),
+        ("(declare-const x Int) (assert (> x 0))", "(assert (> x 1))", "unsat", "violation"),
+        ("(assert false)", "(assert false)", "unsat", "incomplete"),
+        ("(invalid command)", None, "sat", "incomplete"),
+    ]:
+        check = project.contract.formal[0].model_copy(
+            update={"expected": expected, "counterexample": "counter.smt2" if counter else None}
+        )
+        modified = replace(
+            project,
+            contract=project.contract.model_copy(update={"formal": [check]}),
+            files={
+                **project.files,
+                "model.smt2": source.encode(),
+                "counter.smt2": (counter or "").encode(),
+            },
+        )
+        result = run_formal(modified, tools)[0]
+        assert result["status"] == status, result
+
+
+def lean_audit(root):
+    from dataclasses import replace
+    from unittest.mock import patch
+
+    from mentat import project_formal
+    from mentat.project import load_project
+
+    f = Fixture(root)
+    project = load_project(f.repo, f.base, "host")
+    check = project.contract.formal[0].model_copy(
+        update={
+            "engine": "lean",
+            "source": "Model.lean",
+            "theorem": "verified",
+            "expected": None,
+            "counterexample": None,
+        }
+    )
+    project = replace(
+        project,
+        contract=project.contract.model_copy(update={"formal": [check]}),
+        files={**project.files, "Model.lean": b"theorem verified : True := trivial"},
+    )
+    tools = {"lean": {"version": "4.31.0", "executable": "lean", "libdir": str(root)}}
+    for theorem, audit, code, status in [
+        ("verified", "'verified' does not depend on any axioms", 0, "pass"),
+        ("verified", "'verified' depends on axioms: [bad]", 0, "incomplete"),
+        ("verified", "ambiguous", 0, "incomplete"),
+        ("missing", "missing theorem", 1, "incomplete"),
+    ]:
+
+        def run(args, **kwargs):
+            if "--deps" in args:
+                return subprocess.CompletedProcess(args, 0, str(root / "Init.olean"), "")
+            if "-o" in args:
+                return subprocess.CompletedProcess(args, 0, "", "")
+            audit_source = Path(args[-1]).read_text()
+            assert f"let decl := `{theorem}" in audit_source
+            assert "env.getModuleIdxFor? decl == env.getModuleIdx? `Model" in audit_source
+            assert "match info with" in audit_source and ".thmInfo" in audit_source
+            assert f"#print axioms {theorem}" in audit_source
+            return subprocess.CompletedProcess(args, code, audit, "")
+
+        target = project.contract.model_copy(
+            update={"formal": [check.model_copy(update={"theorem": theorem})]}
+        )
+        with patch.object(project_formal, "_run", side_effect=run):
+            result = project_formal.run_formal(replace(project, contract=target), tools)[0]
+        assert result["status"] == status, result
+    manifest = json.loads((f.repo / ".mentat/contract.json").read_text())
+    manifest["formal"] = [
+        {
+            "id": "model",
+            "claim": "fixture",
+            "engine": "lean",
+            "source": "Model.lean",
+            "theorem": "verified",
+        }
+    ]
+    manifest["docker_image"] = "example/test@sha256:" + "a" * 64
+    (f.repo / ".mentat/contract.json").write_text(json.dumps(manifest))
+    (f.repo / ".mentat/Model.lean").write_text("theorem verified : True := trivial")
+    base = f.commit("lean contract")
+    scope = ["--repo", str(f.repo), "--base", base, "--runner", "docker"]
+    checked = f.invoke("spec", "check", *scope, "--json")
+    assert json.loads(checked.output)["lean_runs_on_host"] is True
+    prompts = []
+    with patch.object(cli, "operator_confirm", side_effect=prompts.append):
+        result = f.invoke("spec", "approve", json.loads(checked.output)["contract_digest"], *scope)
+    assert result.exit_code == 0 and "host" in prompts[0].lower(), result.output
+
+
+def runner_execution(root):
+    from unittest.mock import patch
+
+    from mentat import runner
+    from mentat.project import load_project, snapshot
+
+    f = Fixture(root)
+    manifest = json.loads((f.repo / ".mentat/contract.json").read_text())
+    manifest["docker_image"] = "example/test@sha256:" + "a" * 64
+    (f.repo / ".mentat/contract.json").write_text(json.dumps(manifest))
+    base = f.commit("docker enabled")
+    project = load_project(f.repo, base, "docker")
+    calls = []
+
+    def docker(context, *args, **kwargs):
+        calls.append(args)
+        if args[:2] == ("image", "inspect"):
+            return 0, json.dumps([{"Id": "sha256:" + "b" * 64, "Config": {}}]).encode(), b""
+        if args[0] == "info":
+            return 0, b"linux/amd64 1 true true true", b""
+        if args[0] == "inspect":
+            return 0, b'{"Status":"exited","ExitCode":0}', b""
+        return 0, b"", b""
+
+    with (
+        patch.object(runner, "_local_context") as local,
+        patch.object(runner, "_docker", side_effect=docker),
+    ):
+        info = runner.runner_info(project, "local")
+        checks, _ = runner.run_behavior(project, snapshot(f.repo, base), "local", info, "test")
+    local.assert_called_once_with("local")
+    create = next(c for c in calls if c[0] == "create")
+    assert checks[0]["status"] == "pass", checks
+    assert create[create.index("--network") + 1] == "none"
+    assert create[create.index("--pull") + 1] == "never"
+    assert info["image_id"] in create and not any(
+        x in create for x in ("--mount", "--volume", "-v")
+    )
+    assert any(c[:2] == ("image", "inspect") and c[2] == manifest["docker_image"] for c in calls)
+    for response in (
+        (1, b"", b"missing"),
+        (
+            0,
+            json.dumps(
+                [{"Id": "sha256:" + "b" * 64, "Config": {"Volumes": {"/data": {}}}}]
+            ).encode(),
+            b"",
+        ),
+    ):
+        with (
+            patch.object(runner, "_local_context"),
+            patch.object(runner, "_docker", return_value=response),
+        ):
+            try:
+                runner.runner_info(project, "local")
+            except ValueError:
+                pass
+            else:
+                raise AssertionError("unavailable image or image volumes must be rejected")
+    for context in (None, "default", "remote/context"):
+        try:
+            runner._local_context(context)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("unsafe Docker context accepted")
+    manifest["allow_host"] = False
+    (f.repo / ".mentat/contract.json").write_text(json.dumps(manifest))
+    restricted = f.commit("host disabled")
+    assert f.invoke("spec", "check", *f.scope(restricted), "--json").exit_code == 2
+
+
+def formal_gate(root):
+    from unittest.mock import patch
+
+    f = Fixture(root)
+    manifest = json.loads((f.repo / ".mentat/contract.json").read_text())
+    manifest["formal"].append({**manifest["formal"][0], "id": "second"})
+    (f.repo / ".mentat/contract.json").write_text(json.dumps(manifest))
+    f.base = f.commit("two models")
+    f.approve()
+    for status in ("violation", "incomplete"):
+        models = [
+            {"id": name, "claim": "fixture", "kind": "z3", "status": value, "detail": value}
+            for name, value in [("model", "pass"), ("second", status)]
+        ]
+        with (
+            patch.object(cli, "run_formal", return_value=models),
+            patch.object(cli, "run_behavior") as behavior,
+        ):
+            result, record = f.verify()
+        assert result.exit_code == (1 if status == "violation" else 2), result.output
+        assert record["behavior_skipped"] and not record["cases"]
+        behavior.assert_not_called()
+    with (
+        patch.object(cli, "run_formal", return_value=[]),
+        patch.object(cli, "run_behavior") as behavior,
+    ):
+        result, _ = f.verify()
+    assert result.exit_code == 2
+    behavior.assert_not_called()
+
+
+def provenance(root):
+    import shlex
+
+    from mentat.project import snapshot
+
+    f = Fixture(root)
+    digest = f.approve()
+    (f.repo / "candidate.txt").write_text("candidate")
+    revision = f.commit("candidate")
+    result, record = f.verify(revision)
+    assert result.exit_code == 0, result.output
+    assert record["repo"] == str(f.repo.resolve()) and record["base"] == f.base
+    assert record["revision"] == revision and record["contract_digest"] == digest
+    assert record["snapshot_digest"] == snapshot(f.repo, revision).digest
+    assert record["runtime"]["runner"] == "host" and record["runtime"]["platform"]
+    assert record["tools"]["z3"]["version"]
+    assert [(model["id"], model["status"]) for model in record["model_checks"]] == [
+        ("model", "pass")
+    ]
+    assert [(case["case_id"], case["status"]) for case in record["cases"]] == [
+        ("behavior0", "pass")
+    ]
+    args = shlex.split(record["reproduce"])
+    assert args[0] == "mentat"
+    replay = f.runner.invoke(cli.app, args[1:])
+    assert replay.exit_code == 0, replay.output
+    again = json.loads(replay.output)
+    for key in ("base", "revision", "contract_digest", "snapshot_digest", "status"):
+        assert again[key] == record[key], key
+
+
+def review_sync(root):
+    from unittest.mock import patch
+
+    from mentat import claims_notion
+
+    f = Fixture(root)
+    path = f.repo / ".mentat/contract.json"
+    manifest = json.loads(path.read_text())
+    manifest["review"] = {
+        "overview": "Overview",
+        "scope_limits": ["Scope"],
+        "examples": [
+            {"label": "Example", "summary": "Example summary", "url": "https://example.com/demo"}
+        ],
+    }
+    manifest["claims"][0]["title"] = "Short title"
+    path.write_text(json.dumps(manifest))
+    first = f.invoke("claims", "render", "--repo", str(f.repo))
+    assert first.exit_code == 0, first.output
+    content = (f.repo / ".mentat/claims.md").read_bytes()
+    assert b"### 1. Short title" in content
+    assert f.invoke("claims", "render", "--repo", str(f.repo)).exit_code == 0
+    assert (f.repo / ".mentat/claims.md").read_bytes() == content
+    base = f.commit("review copy")
+    page = "a" * 32
+    text = "Before\n\n" + claims_notion._START + "\n\n---\n\nAfter"
+    calls = []
+
+    def request(page_id, payload=None):
+        nonlocal text
+        calls.append((page_id, payload))
+        if payload:
+            update = payload["update_content"]["content_updates"]
+            assert len(update) == 1
+            text = text.replace(update[0]["old_str"], update[0]["new_str"])
+        return text
+
+    with patch.object(claims_notion, "_request", side_effect=request):
+        result = f.invoke(
+            "claims", "publish", "--repo", str(f.repo), "--base", base, "--notion", page
+        )
+        assert result.exit_code == 0, result.output
+        assert text.startswith("Before\n\n") and text.endswith("\n\nAfter")
+        assert (
+            f.invoke(
+                "claims", "check", "--repo", str(f.repo), "--base", base, "--notion", page
+            ).exit_code
+            == 0
+        )
+        (f.repo / ".mentat/claims.md").write_text("stale")
+        assert f.invoke("claims", "check", "--repo", str(f.repo)).exit_code == 1
+        stale = f.commit("stale review copy")
+        before = len(calls)
+        assert (
+            f.invoke(
+                "claims", "publish", "--repo", str(f.repo), "--base", stale, "--notion", page
+            ).exit_code
+            == 1
+        )
+        assert len(calls) == before
 
 
 SCENARIOS = {
+    "contract.validation": validation,
     "contract.base-pinning": base_pinning,
+    "verification.candidate-pinning": candidate_pinning,
+    "approval.scope": approval_scope,
+    "formal.z3-vacuity": z3_vacuity,
+    "formal.lean-audit": lean_audit,
+    "runner.execution": runner_execution,
+    "verification.formal-gate": formal_gate,
     "verification.outcomes": outcomes,
-    "acceptance.complete-pass": acceptance,
+    "evidence.provenance": provenance,
     "evidence.integrity": integrity,
+    "acceptance.complete-pass": acceptance,
+    "claims.review-sync": review_sync,
 }
 
 if __name__ == "__main__":

@@ -11,6 +11,7 @@ from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Literal
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -46,6 +47,61 @@ class Claim(_Model):
     id: str
     statement: str = Field(min_length=1, max_length=4096)
     assumptions: list[str] = Field(default_factory=list, max_length=128)
+    title: str | None = Field(default=None, min_length=1, max_length=256)
+
+    @field_validator("title")
+    @classmethod
+    def title_line(cls, value):
+        if value is not None and (
+            not value.strip() or len(value.splitlines()) != 1 or any(ord(c) < 32 for c in value)
+        ):
+            raise ValueError("claim title must be a nonempty single line")
+        return value
+
+
+class ReviewExample(_Model):
+    label: str = Field(min_length=1, max_length=256)
+    summary: str = Field(pattern=r"\S", max_length=4096)
+    url: str = Field(min_length=1, max_length=4096)
+
+    @field_validator("label")
+    @classmethod
+    def label_line(cls, value):
+        if not value.strip() or len(value.splitlines()) != 1 or any(ord(c) < 32 for c in value):
+            raise ValueError("example label must be a nonempty single line")
+        return value
+
+    @field_validator("url")
+    @classmethod
+    def https_url(cls, value):
+        try:
+            url = urlsplit(value)
+            if (
+                url.scheme != "https"
+                or not url.hostname
+                or url.username is not None
+                or url.password is not None
+                or any(c.isspace() or ord(c) < 32 for c in value)
+                or "\\" in value
+            ):
+                raise ValueError("example URL must be an HTTPS URL")
+            _ = url.port
+        except ValueError:
+            raise ValueError("example URL must be an HTTPS URL") from None
+        return value
+
+
+class Review(_Model):
+    overview: str = Field(pattern=r"\S", max_length=4096)
+    scope_limits: list[str] = Field(min_length=1, max_length=128)
+    examples: list[ReviewExample] = Field(default_factory=list, max_length=128)
+
+    @field_validator("scope_limits")
+    @classmethod
+    def limits(cls, value):
+        if any(not item.strip() or len(item) > 4096 for item in value):
+            raise ValueError("invalid scope limit")
+        return value
 
 
 class Formal(_Model):
@@ -103,6 +159,7 @@ class Contract(_Model):
     behavior: list[Behavior] = Field(min_length=1, max_length=128)
     docker_image: str | None = None
     allow_host: bool = False
+    review: Review | None = None
 
     @field_validator("version", mode="before")
     @classmethod
@@ -113,6 +170,8 @@ class Contract(_Model):
 
     @model_validator(mode="after")
     def relationships(self):
+        if self.review is not None and any(claim.title is None for claim in self.claims):
+            raise ValueError("every claim requires a title when review is present")
         if self.docker_image is None:
             if not self.allow_host or "docker_image" in self.model_fields_set:
                 raise ValueError("docker_image is required unless allow_host is true")

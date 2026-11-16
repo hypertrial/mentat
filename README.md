@@ -48,7 +48,7 @@ mentat accept "$PASSING_RUN" --repo "$DEMO" --base "$BASE" --runner host
 ## Use Mentat on your project
 
 - [Project contracts and CLI](docs/contracts.md) covers writing claims and checks, running candidates, and interpreting results.
-- [Mentat Claims Spec](.mentat/claims.md) lists the CLI's own verification requirements and checks.
+- [Mentat Claims Spec](.mentat/claims.md) explains what Mentat covers and links its numbered requirements to executable checks.
 - [Apache Polaris showcase](docs/polaris.md) replays a real namespace round-trip bug and exports a native regression test. Mentat 0.1 Polaris commands now live under `mentat showcase polaris`.
 - [Nemo example](docs/nemo.md) catches a silent arithmetic error, verifies the historical fix, and exports a standalone replay.
 

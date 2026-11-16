@@ -5,6 +5,7 @@ import re
 import stat
 from contextlib import contextmanager
 from pathlib import Path
+from urllib.parse import quote
 from uuid import uuid4
 
 from .evidence import decode_json
@@ -14,6 +15,7 @@ _FILENAME = "claims.md"
 _MARKUP = re.compile(r"([\\`*_\[\]<>~$&|])")
 _LINE_MARKUP = re.compile(r"^([ \t]*)(?=(?:#{1,6}|[+-])(?:[ \t]|$)|[-=]{2,}[ \t]*$)", re.MULTILINE)
 _ORDERED_LIST = re.compile(r"^([ \t]*\d+)([.)])(?=[ \t]|$)", re.MULTILINE)
+_HEADING_END = re.compile(r"(?<!\S)#+$")
 
 
 def _prose(value: str) -> str:
@@ -24,6 +26,47 @@ def _prose(value: str) -> str:
 
 
 def render_claims(contract: Contract) -> bytes:
+    if contract.review is not None:
+        review = contract.review
+        lines = [
+            "# Claims Spec",
+            "",
+            "## Overview",
+            "",
+            _prose(review.overview),
+            "",
+            "## Scope limits",
+            "",
+        ]
+        for limit in review.scope_limits:
+            lines.append("- " + _prose(limit).replace("\n", "\n  "))
+        if review.examples:
+            lines.extend(("", "## Examples", ""))
+            for example in review.examples:
+                url = quote(example.url, safe=":/?#[]@!$&'*+,;=%-._~").replace("&", "&amp;")
+                lines.append(
+                    f"- [{_prose(example.label)}]({url}) — "
+                    + _prose(example.summary).replace("\n", "\n  ")
+                )
+        lines.extend(("", "## Claims"))
+        for number, claim in enumerate(contract.claims, 1):
+            title = _HEADING_END.sub(r"\\\g<0>", _prose(claim.title.rstrip()))
+            lines.extend(("", f"### {number}. {title}", "", _prose(claim.statement)))
+            if claim.assumptions:
+                lines.extend(("", "Assumptions", ""))
+                for assumption in claim.assumptions:
+                    lines.append("- " + _prose(assumption).replace("\n", "\n  "))
+            behavior = ", ".join(
+                f"`{check.id}`" for check in contract.behavior if check.claim == claim.id
+            )
+            formal = ", ".join(
+                f"`{check.id}`" for check in contract.formal if check.claim == claim.id
+            )
+            trace = f"Claim `{claim.id}` · Behavior {behavior}"
+            if formal:
+                trace += f" · Formal {formal}"
+            lines.extend(("", trace))
+        return ("\n".join(lines) + "\n").encode()
     lines = [
         "# Claims Spec",
         "",

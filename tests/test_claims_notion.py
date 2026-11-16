@@ -170,3 +170,123 @@ def test_auth_and_target_validation(monkeypatch):
             notion.notion_claims(target, CLAIMS, BASE, publish=True)
     with pytest.raises(ValueError, match="direct Notion page URL"):
         notion.notion_claims(f"{URL}?p={'b' * 32}", CLAIMS, BASE, publish=True)
+
+
+NUMBERED = (
+    "# Claims Spec\n\n"
+    "## Overview\n\nA concise overview.\n\n"
+    "## Scope limits\n\n- Only supported inputs.\n\n"
+    "## Examples\n\n- [Example](https://example.com/demo) — A useful example.\n\n"
+    "## Claims\n\n### 1. Validate the candidate\n\nThe actual claim.\n\n"
+    "Claim `claim.id` · Behavior `check.id` · Formal `proof.id`\n"
+).encode()
+
+
+@pytest.mark.parametrize("initial", ["seed", "legacy"])
+def test_numbered_publish_migrates_existing_section_and_noops(monkeypatch, initial):
+    section = (
+        f"{notion._START}\n\n{notion._END}"
+        if initial == "seed"
+        else f"Source commit: `{BASE}` · 1 claim\n\n{notion._body(CLAIMS)}\n\n{notion._END}"
+    )
+    contents = f"Before notes\n\n{section}\n\nAfter notes"
+    writes = []
+
+    def request(page_id, payload=None):
+        nonlocal contents
+        if payload:
+            writes.append(payload)
+            edit = payload["update_content"]["content_updates"][0]
+            assert contents.count(edit["old_str"]) == 1
+            contents = contents.replace(edit["old_str"], edit["new_str"], 1)
+        return contents
+
+    monkeypatch.setattr(notion, "_request", request)
+    assert notion.notion_claims(PAGE, NUMBERED, BASE, publish=True)
+    assert contents.startswith("Before notes\n\n")
+    assert contents.endswith("\n\nAfter notes")
+    assert "### 1. Validate the candidate" in contents
+    assert notion.notion_claims(PAGE, NUMBERED, BASE, publish=True)
+    assert len(writes) == 1
+
+
+def test_numbered_round_trip_inline_code_and_link(monkeypatch):
+    body = notion._body(NUMBERED).replace("`claim.id`", "<code>claim.id</code>")
+    body = body.replace("`check.id`", "<code>check.id</code>").replace(
+        "`proof.id`", "<code>proof.id</code>"
+    )
+    contents = f"Source commit: <code>{BASE}</code> · 1 claim\n\n{body}\n\n{notion._END}"
+
+    def request(page_id, payload=None):
+        assert payload is None
+        return contents
+
+    monkeypatch.setattr(notion, "_request", request)
+    assert notion.notion_claims(PAGE, NUMBERED, BASE, publish=True)
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        "\n\n## Unrelated\n\nDo not delete this.",
+        "\n\n## Claims\n\n### 2. Extra claim\n\nExtra.\n\nClaim `extra` · Behavior `extra.check`",
+    ],
+)
+def test_numbered_unknown_content_before_divider_is_never_replaced(monkeypatch, extra):
+    contents = (
+        f"Source commit: `{BASE}` · 1 claim\n\n{notion._body(NUMBERED)}{extra}\n\n{notion._END}"
+    )
+
+    def request(page_id, payload=None):
+        assert payload is None
+        return contents
+
+    monkeypatch.setattr(notion, "_request", request)
+    with pytest.raises(ValueError):
+        notion.notion_claims(PAGE, NUMBERED.replace(b"actual", b"updated"), BASE, publish=True)
+
+
+def test_numbered_duplicate_sections_are_never_replaced(monkeypatch):
+    section = f"Source commit: `{BASE}` · 1 claim\n\n{notion._body(NUMBERED)}\n\n{notion._END}"
+
+    def request(page_id, payload=None):
+        assert payload is None
+        return f"{section}\n\n{section}"
+
+    monkeypatch.setattr(notion, "_request", request)
+    with pytest.raises(ValueError, match="ambiguous"):
+        notion.notion_claims(PAGE, NUMBERED, BASE, publish=True)
+
+
+def test_numbered_concurrent_edit_is_not_retried(monkeypatch):
+    original = f"Source commit: `{BASE}` · 1 claim\n\n{notion._body(NUMBERED)}\n\n{notion._END}"
+    calls = []
+
+    def request(page_id, payload=None):
+        calls.append(payload)
+        if payload:
+            assert payload["update_content"]["content_updates"][0]["old_str"] == original
+            raise ValueError("edit no longer matches")
+        return original if len(calls) == 1 else original.replace("actual claim", "concurrent edit")
+
+    monkeypatch.setattr(notion, "_request", request)
+    with pytest.raises(ValueError, match="no longer matches"):
+        notion.notion_claims(PAGE, NUMBERED.replace(b"actual", b"updated"), BASE, publish=True)
+    assert len(calls) == 3
+
+
+def test_numbered_lost_write_response_reads_back_without_retry(monkeypatch):
+    contents = f"{notion._START}\n\n{notion._END}"
+    writes = []
+
+    def request(page_id, payload=None):
+        nonlocal contents
+        if payload:
+            writes.append(payload)
+            contents = payload["update_content"]["content_updates"][0]["new_str"]
+            raise ValueError("connection lost")
+        return contents
+
+    monkeypatch.setattr(notion, "_request", request)
+    assert notion.notion_claims(PAGE, NUMBERED, BASE, publish=True)
+    assert len(writes) == 1

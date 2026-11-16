@@ -2,6 +2,7 @@ import copy
 import json
 
 import pytest
+from markdown_it import MarkdownIt
 from test_project import commit
 from typer.testing import CliRunner
 
@@ -220,3 +221,161 @@ def test_selfcheck_detects_broken_console_entry_point(tmp_path):
     )
     assert result.returncode == 1
     assert "mentat console command" in result.stderr
+
+
+def numbered_manifest(manifest):
+    manifest = copy.deepcopy(manifest)
+    manifest["review"] = {
+        "overview": "A concise overview.",
+        "scope_limits": ["Only the supported inputs."],
+        "examples": [
+            {"label": "Example", "summary": "A useful example.", "url": "https://example.com/demo"}
+        ],
+    }
+    manifest["claims"][0]["title"] = "Validate the candidate"
+    return manifest
+
+
+def test_legacy_render_bytes_are_unchanged(project_repo):
+    repo, _, _ = project_repo
+    result = invoke(repo, "render")
+    assert result.exit_code == 0, result.output
+    assert (repo / ".mentat/claims.md").read_bytes() == (
+        b"# Claims Spec\n\nGenerated from `contract.json`. Edit the contract and regenerate.\n"
+        b"\n## claim\n\ncandidate is valid\n\n- Formal checks: `proof`\n"
+        b"- Behavior checks: `behavior`\n"
+    )
+
+
+def test_numbered_render_order_ids_and_committed_drift(project_repo):
+    repo, _, manifest = project_repo
+    manifest = numbered_manifest(manifest)
+    manifest["claims"].append(
+        {"id": "other", "title": "Second claim", "statement": "Another statement."}
+    )
+    manifest["behavior"].append({**manifest["behavior"][0], "id": "other.check", "claim": "other"})
+    write_contract(repo, manifest)
+    result = invoke(repo, "render")
+    assert result.exit_code == 0, result.output
+    path = repo / ".mentat/claims.md"
+    original = path.read_bytes()
+    text = original.decode()
+    headings = [line for line in text.splitlines() if line.startswith("#")]
+    assert headings == [
+        "# Claims Spec",
+        "## Overview",
+        "## Scope limits",
+        "## Examples",
+        "## Claims",
+        "### 1. Validate the candidate",
+        "### 2. Second claim",
+    ]
+    assert "A concise overview." in text and "Only the supported inputs." in text
+    assert "Example" in text and "A useful example." in text and "https://example.com/demo" in text
+    assert "Claim `claim` · Behavior `behavior` · Formal `proof`" in text
+    assert "Claim `other` · Behavior `other.check`" in text
+    assert invoke(repo, "render").exit_code == 0
+    assert path.read_bytes() == original
+    base = commit(repo, "numbered claims")
+    manifest["claims"].reverse()
+    write_contract(repo, manifest)
+    assert invoke(repo, "check").exit_code == 1
+    assert invoke(repo, "check", "--base", base).exit_code == 0
+    assert invoke(repo, "render").exit_code == 0
+    changed = path.read_text()
+    assert changed.index("### 1. Second claim") < changed.index("### 2. Validate the candidate")
+    assert "Claim `other` · Behavior `other.check`" in changed
+    stale = commit(repo, "changed numbered claims")
+    path.write_bytes(original)
+    assert invoke(repo, "check", "--base", stale).exit_code == 0
+    assert invoke(repo, "check").exit_code == 1
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        lambda m: m["claims"][0].pop("title"),
+        lambda m: m["claims"][0].update(title=""),
+        lambda m: m["review"].pop("overview"),
+        lambda m: m["review"].pop("scope_limits"),
+        lambda m: m["review"].update(overview=""),
+        lambda m: m["review"].update(overview=" \n "),
+        lambda m: m["review"].update(scope_limits=[]),
+        lambda m: m["review"].update(scope_limits=["  "]),
+        lambda m: m["review"].update(
+            examples=[{"label": "x", "summary": "s", "url": "http://example.com"}]
+        ),
+        lambda m: m["review"].update(
+            examples=[{"label": "x", "summary": "s", "url": "javascript:alert(1)"}]
+        ),
+        lambda m: m["review"].update(
+            examples=[{"label": "x", "summary": "s", "url": "https://example.com/)\n## injected"}]
+        ),
+        lambda m: m["review"].update(examples=[{"label": "x", "summary": "s"}]),
+    ],
+)
+def test_invalid_numbered_metadata_never_overwrites(project_repo, change):
+    repo, _, manifest = project_repo
+    assert invoke(repo, "render").exit_code == 0
+    path = repo / ".mentat/claims.md"
+    original = path.read_bytes()
+    manifest = numbered_manifest(manifest)
+    change(manifest)
+    write_contract(repo, manifest)
+    result = invoke(repo, "render", "--json")
+    assert result.exit_code == 2, result.output
+    assert path.read_bytes() == original
+
+
+def test_numbered_optional_examples_and_assumptions(project_repo):
+    repo, _, manifest = project_repo
+    manifest = numbered_manifest(manifest)
+    del manifest["review"]["examples"]
+    manifest["claims"][0]["assumptions"] = ["Given a valid input"]
+    write_contract(repo, manifest)
+    result = invoke(repo, "render")
+    assert result.exit_code == 0, result.output
+    text = (repo / ".mentat/claims.md").read_text()
+    assert "## Examples" not in text
+    assert "Given a valid input" in text
+    assert "Claim `claim` · Behavior `behavior` · Formal `proof`" in text
+
+
+def test_numbered_escapes_example_link_and_preserves_check_associations(project_repo):
+    repo, _, manifest = project_repo
+    manifest = numbered_manifest(manifest)
+    manifest["review"]["examples"][0].update(
+        label="Example] text",
+        url="https://example.com/a)injected",
+    )
+    manifest["formal"].append({**manifest["formal"][0], "id": "proof2"})
+    manifest["behavior"].append({**manifest["behavior"][0], "id": "behavior2"})
+    write_contract(repo, manifest)
+    result = invoke(repo, "render")
+    assert result.exit_code == 0, result.output
+    text = (repo / ".mentat/claims.md").read_text()
+    assert r"[Example\] text](https://example.com/a%29injected)" in text
+    assert "Claim `claim` · Behavior `behavior`, `behavior2` · Formal `proof`, `proof2`" in text
+
+
+def test_numbered_markdown_preserves_literal_heading_hashes_and_link_targets(project_repo):
+    repo, _, manifest = project_repo
+    manifest = numbered_manifest(manifest)
+    manifest["claims"][0]["title"] = "Literal hashes ###"
+    examples = manifest["review"]["examples"]
+    examples[0]["url"] = "https://example.com/?a=1&copy;"
+    examples.append({**examples[0], "url": "https://github.com&commat;evil.example/path"})
+    write_contract(repo, manifest)
+    result = invoke(repo, "render")
+    assert result.exit_code == 0, result.output
+    text = (repo / ".mentat/claims.md").read_text()
+    parsed = MarkdownIt().parse(text)
+    heading_index = next(i for i, token in enumerate(parsed) if token.tag == "h3")
+    assert parsed[heading_index + 1].children[0].content == "1. Literal hashes ###"
+    links = [
+        child.attrGet("href")
+        for token in parsed
+        for child in token.children or []
+        if child.type == "link_open"
+    ]
+    assert links == [example["url"] for example in examples]

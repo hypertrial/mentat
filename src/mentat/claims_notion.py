@@ -17,6 +17,14 @@ _LIMIT = 4_000_000
 _CODE = re.compile(r"<code>([A-Za-z0-9_.-]+)</code>")
 _CLAIM_HEADING = re.compile(r"## (?:[A-Za-z0-9_.-]|\\_)+")
 _CHECK_IDS = r"`[A-Za-z0-9_][A-Za-z0-9_.-]*`(?:, `[A-Za-z0-9_][A-Za-z0-9_.-]*`)*"
+_NUMBERED_HEADING = re.compile(r"### ([1-9][0-9]*)\. .+")
+_TRACE = re.compile(
+    r"Claim `[A-Za-z0-9_][A-Za-z0-9_.-]*` · Behavior "
+    + _CHECK_IDS
+    + r"(?: · Formal "
+    + _CHECK_IDS
+    + r")?"
+)
 _FORMAL_ROW = re.compile(r"- Formal checks: (?:None|" + _CHECK_IDS + ")")
 _BEHAVIOR_ROW = re.compile(r"- Behavior checks: " + _CHECK_IDS)
 _INTRO = "Generated from `contract.json`. Edit the contract and regenerate."
@@ -154,6 +162,36 @@ def _normalized(markdown: str) -> list[str]:
 
 
 def _has_claims_layout(lines: list[str], count: int) -> bool:
+    if lines and lines[0] == "## Overview":
+        sections = [(i, line) for i, line in enumerate(lines) if line.startswith("## ")]
+        names = [line for _, line in sections]
+        if names not in (
+            ["## Overview", "## Scope limits", "## Claims"],
+            ["## Overview", "## Scope limits", "## Examples", "## Claims"],
+        ):
+            return False
+        claims_start = sections[-1][0]
+        headings = [
+            (i, match)
+            for i, line in enumerate(lines)
+            if (match := _NUMBERED_HEADING.fullmatch(line))
+        ]
+        if (
+            len(headings) != count
+            or headings[0][0] != claims_start + 1
+            or any(int(match[1]) != n for n, (_, match) in enumerate(headings, 1))
+        ):
+            return False
+        for (start, _), end in zip(
+            headings, [*(i for i, _ in headings[1:]), len(lines)], strict=True
+        ):
+            if (
+                end - start < 3
+                or not _TRACE.fullmatch(lines[end - 1])
+                or any(_TRACE.fullmatch(line) for line in lines[start + 1 : end - 1])
+            ):
+                return False
+        return True
     if not lines or lines[0] != _INTRO:
         return False
     headings = [i for i, line in enumerate(lines) if _CLAIM_HEADING.fullmatch(line)]
@@ -189,7 +227,14 @@ def notion_claims(page: str, claims: bytes, base: str, *, publish: bool = False)
         return False
 
     body = _body(claims)
-    count = sum(bool(_CLAIM_HEADING.fullmatch(line)) for line in body.splitlines())
+    count = sum(
+        bool(
+            (_NUMBERED_HEADING if body.startswith("## Overview") else _CLAIM_HEADING).fullmatch(
+                line
+            )
+        )
+        for line in body.splitlines()
+    )
     label = "claim" if count == 1 else "claims"
     desired = f"Source commit: `{base}` · {count} {label}\n\n{body}\n\n{_END}"
     if current is None:

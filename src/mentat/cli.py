@@ -298,7 +298,10 @@ def verify(
             "revision": candidate.revision,
             "snapshot_digest": candidate.digest,
             "approval": approved,
-            "claims": [claim.model_dump(mode="json") for claim in project.contract.claims],
+            "claims": [
+                claim.model_dump(mode="json", exclude={"title"})
+                for claim in project.contract.claims
+            ],
             "model_checks": models,
             "behavior_skipped": not bool(cases),
             "cases": cases,
