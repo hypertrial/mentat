@@ -11,6 +11,16 @@ trap 'rm -rf -- "$artifact_dir"' EXIT
 
 for artifact in "$dist_dir/"*.whl "$dist_dir/"*.tar.gz; do
     [[ -f "$artifact" ]]
+    if [[ "$artifact" == *.tar.gz ]]; then
+        tar -tzf "$artifact" | awk -F/ '
+            $2 == ".git" { found = 1 }
+            END {
+                if (found) {
+                    print "Source distribution contains Git metadata." > "/dev/stderr"
+                    exit 1
+                }
+            }'
+    fi
     venv="$artifact_dir/$(basename "$artifact").venv"
     UV_PROJECT_ENVIRONMENT="$venv" uv sync --locked --no-dev --no-install-project
     uv pip install --python "$venv/bin/python" --no-deps "$artifact"
