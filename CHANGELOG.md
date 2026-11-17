@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.1.2
+
+- Inspect compiled Lean theorem metadata from a trusted runtime driver without
+  loading model-defined command extensions. Keep the theorem-origin, checked
+  declaration, axiom allowlist, and process limits in force.
+- Reject extra audit output and add real Lean regressions for command shadowing,
+  private and opaque proof dependencies, Unicode names, and failed drivers.
+- Record opt-in formal process diagnostics in the Iceberg CI integration.
+
 ## v0.1.1
 
 - Preserve confined candidate symlinks to tracked regular files in snapshots

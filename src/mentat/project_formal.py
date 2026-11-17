@@ -319,29 +319,36 @@ def _run_lean(check, files, tools):
             if compile_result.returncode:
                 result["detail"] = "Lean source did not compile"
                 return result
-            audit = f"""import Lean
-import Model
-open Lean Elab Command
-run_cmd do
+            # Parse trusted audit code before loading any model-defined syntax or extensions.
+            audit = f"""import Lean.CoreM
+import Lean.Util.CollectAxioms
+open Lean
+
+def main : IO Unit := do
+  let env ← importModules #[{{module := `Model}}] {{}} (loadExts := false) (level := .private)
   let decl := `{check.theorem}
-  let info ← getConstInfo decl
-  let env ← getEnv
-  unless env.getModuleIdxFor? decl == env.getModuleIdx? `Model do
-    throwError "Mentat: expected a theorem declared in the approved source"
-  match info with
-  | .thmInfo _ => pure ()
-  | _ => throwError "Mentat: expected a theorem declaration"
-#print axioms {check.theorem}
+  let some idx := env.getModuleIdx? `Model | throw <| IO.userError "Missing Model"
+  unless env.getModuleIdxFor? decl == some idx do
+    throw <| IO.userError "Expected a theorem declared in Model"
+  match env.checked.get.find? decl with
+  | some (.thmInfo _) => pure ()
+  | _ => throw <| IO.userError "Expected a checked theorem"
+  let axioms ← (collectAxioms decl : CoreM (Array Name)).toIO'
+    {{fileName := "Audit.lean", fileMap := default}} {{env := env}}
+  if axioms.isEmpty then
+    IO.println s!"'{{decl}}' does not depend on any axioms"
+  else
+    IO.println s!"'{{decl}}' depends on axioms: [{{String.intercalate ", " (axioms.toList.map toString)}}]"
 """
             (root / "Audit.lean").write_text(audit)
-            p = _run([tool["executable"], str(root / "Audit.lean")], cwd=root, env=env)
+            p = _run([tool["executable"], "--run", str(root / "Audit.lean")], cwd=root, env=env)
             output = p.stdout + p.stderr
             result["evidence"]["audit_output"] = output[-_OUTPUT_LIMIT:]
             if p.returncode:
                 result["detail"] = "Lean theorem audit failed"
                 return result
             prefix = f"'{check.theorem}' "
-            lines = [line.strip() for line in output.splitlines() if line.startswith(prefix)]
+            lines = [line.strip() for line in output.splitlines() if line.strip()]
             allowed = {"propext", "Classical.choice", "Quot.sound"}
             if len(lines) != 1:
                 result["detail"] = "Lean did not produce an unambiguous theorem axiom audit"
@@ -354,7 +361,10 @@ run_cmd do
                 if not match:
                     result["detail"] = "Lean produced an unrecognized theorem axiom audit"
                     return result
-                axioms = [name.strip() for name in match.group(1).split(",") if name.strip()]
+                axioms = [name.strip() for name in match.group(1).split(",")]
+                if not all(axioms):
+                    result["detail"] = "Lean produced an unrecognized theorem axiom audit"
+                    return result
             result["evidence"]["axioms"] = axioms
             if set(axioms) - allowed:
                 result["detail"] = "The theorem uses disallowed axioms"
