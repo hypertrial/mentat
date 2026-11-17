@@ -11,6 +11,7 @@ distribution is `hypertrial-mentat` and provides the `mentat` command.
 ```sh
 uv tool install --python 3.12 \
   'hypertrial-mentat @ git+https://github.com/hypertrial/mentat.git@v0.1.0'
+export PATH="$(uv tool dir --bin):$PATH"
 mentat --version
 ```
 

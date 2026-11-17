@@ -42,7 +42,17 @@ assert "LICENSE" in dist.metadata.get_all("License-File")
 licenses = [dist.locate_file(path) for path in dist.files if str(path).endswith("/licenses/LICENSE")]
 assert len(licenses) == 1 and "Hypertrial" in licenses[0].read_text()
 assert PACK.is_relative_to(Path(sys.prefix))
-for path in ("contract.json", "public.json", "lean/Main.lean", "runtime/Dockerfile"):
+for path in (
+    "contract.json",
+    "public.json",
+    "lean/Check.lean",
+    "lean/Main.lean",
+    "lean/lakefile.toml",
+    "lean/lean-toolchain",
+    "runtime/Dockerfile",
+    "runtime/oracle_cli.py",
+    "runtime/requirements.txt",
+):
     assert (PACK / path).is_file(), path
 PY
     )
