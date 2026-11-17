@@ -44,11 +44,32 @@ class _Model(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
 
+class ClaimCitation(_Model):
+    commit: str = Field(pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+    blob: str = Field(pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+    path: str
+    start_line: int = Field(ge=1)
+    end_line: int = Field(ge=1)
+
+    @model_validator(mode="after")
+    def valid_reference(self):
+        _path(self.path)
+        if len(self.commit) != len(self.blob) or self.end_line < self.start_line:
+            raise ValueError("invalid citation object IDs or line range")
+        return self
+
+
+class ClaimProvenance(_Model):
+    origin: Literal["declared", "inferred"]
+    citations: list[ClaimCitation] = Field(min_length=1, max_length=16)
+
+
 class Claim(_Model):
     id: str
     statement: str = Field(min_length=1, max_length=4096)
     assumptions: list[str] = Field(default_factory=list, max_length=128)
     title: str | None = Field(default=None, min_length=1, max_length=256)
+    provenance: ClaimProvenance | None = None
 
     @field_validator("title")
     @classmethod

@@ -9,7 +9,7 @@ Create `.mentat/contract.json` and commit it along with the approved models and 
 | Field | Contents |
 | --- | --- |
 | `version` | Manifest version `1`. |
-| `claims` | Entries with unique `id`, human-readable `statement`, and optional `assumptions`. |
+| `claims` | Entries with unique `id`, human-readable `statement`, and optional `assumptions` and `provenance`. |
 | `review` | Optional reviewer-facing overview, scope limits, example links, and capability groups. Requires a short `title` on each claim. |
 | `formal` | Entries with `id`, `claim`, `engine`, and the relative `source` file. |
 | `behavior` | Entries with `id`, `claim`, and `argv`. Optional `timeout_seconds` defaults to 60 and supports 1–600. Optional `violation_exit_codes` defaults to `[1]` and supports 1–124. Optional `artifacts` lists flat output filenames. Optional `selectors` is a list of arguments expanded at a standalone `{selectors}` element in `argv`. See [named cases and negative controls](#named-cases-and-negative-controls) for the optional evidence settings. |
@@ -81,6 +81,32 @@ mentat claims check --repo "$REPO" --base "$BASE" --json
 ```
 
 The last command reads only the named commit. A missing or stale review copy returns exit `1`. Invalid input or an unavailable service returns `2`. For a contract that includes `claims.md`, contract loading requires the committed file to match the generated copy. Contracts without the file can still be approved and verified.
+
+### Draft claims from OpenSpec
+
+```sh
+mentat spec import-openspec --repo "$REPO" --base "$BASE"
+mentat spec import-openspec --repo "$REPO" --base "$BASE" --json
+```
+
+The importer reads committed `openspec/specs/<capability>/spec.md` files at a full Git commit ID.
+Each scenario yields a draft claim containing the requirement and scenario text. The ID stays
+the same when either block moves or its body changes. A renamed capability, requirement, or
+scenario receives a new ID. Findings about malformed sections and unsupported input include
+a path and line number. A well-formed draft exits `0`. Missing or malformed specs exit `2`,
+with any usable claims still in the output.
+
+Review the draft, copy the selected `claims[].claim` objects into the contract, and map them
+to approved checks. Each adopted claim needs a behavior check, and the contract needs at
+least one formal check. Run `mentat claims render` and review and approve the committed
+contract through the usual workflow.
+
+The optional `provenance` object takes `origin` of `declared` or `inferred` and a list
+of `citations`. Each citation records `commit`, `blob`, a repository-relative `path`,
+and inclusive one-based `start_line` and `end_line`. Imported citations come from
+the selected Git blob. When authoring citations by hand, verify them during contract
+review. The local and Notion Claims Specs display these citations when the contract
+includes them.
 
 ### Publish to one Notion page
 

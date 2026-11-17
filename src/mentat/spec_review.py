@@ -28,6 +28,7 @@ def summary(project: Project) -> dict:
                 "title": claim.title,
                 "statement": claim.statement,
                 "assumptions": claim.assumptions,
+                **({"provenance": claim.provenance.model_dump()} if claim.provenance else {}),
                 "formal": [
                     check.model_dump(mode="json", exclude_none=True)
                     for check in contract.formal
@@ -126,6 +127,8 @@ def show(review: dict) -> None:
         _line("  statement", claim["statement"])
         if claim["assumptions"]:
             _line("  assumptions", claim["assumptions"])
+        if "provenance" in claim:
+            _line("  provenance", claim["provenance"])
         for check in claim["formal"]:
             _line(f"  formal {check['id']}", check)
         for check in claim["behavior"]:

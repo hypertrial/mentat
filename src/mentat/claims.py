@@ -46,6 +46,17 @@ def _code_span(value: str) -> str:
     return delimiter + value + delimiter
 
 
+def provenance_lines(provenance: dict) -> list[str]:
+    lines = [f"- Origin · {provenance['origin']}"]
+    for citation in provenance["citations"]:
+        location = f"{citation['path']}:{citation['start_line']}-{citation['end_line']}"
+        lines.append(
+            f"- Source {_code_span(location)} · commit {_code_span(citation['commit'])}"
+            f" · blob {_code_span(citation['blob'])}"
+        )
+    return lines
+
+
 def _append_selectors(lines: list[str], contract: Contract, claim_id: str) -> None:
     selectors = [
         f"- Check `{check.id}` selects {_prose(selector)}"
@@ -103,6 +114,8 @@ def _append_review_claim(
     if formal:
         trace += f" · Formal {formal}"
     lines.extend(("", trace))
+    if claim.provenance:
+        lines.extend(("", *provenance_lines(claim.provenance.model_dump())))
 
 
 def _grouped_claims(contract: Contract) -> bytes:
@@ -179,6 +192,8 @@ def render_claims(contract: Contract) -> bytes:
             for assumption in claim.assumptions:
                 lines.append("- " + _prose(assumption).replace("\n", "\n  "))
             lines.extend(("", "Checks"))
+        if claim.provenance:
+            lines.extend(("", *provenance_lines(claim.provenance.model_dump())))
         _append_selectors(lines, contract, claim.id)
         lines.append("")
         for label, checks in (("Formal", contract.formal), ("Behavior", contract.behavior)):

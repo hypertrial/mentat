@@ -12,7 +12,7 @@ from uuid import uuid4
 import typer
 
 from . import evidence, spec_review
-from .claims import checked_claims, write_claims
+from .claims import checked_claims, provenance_lines, write_claims
 from .claims_notion import notion_claims
 from .command import emit, finish, operator_confirm
 from .evidence_report import claim_groups, claim_summary, review_context
@@ -219,6 +219,37 @@ def check_spec(
         _error(exc, output_json)
 
 
+@spec_app.command("import-openspec")
+def import_openspec(
+    repo: Repo,
+    base: Annotated[str, typer.Option(help="Full commit ID containing OpenSpec capability specs.")],
+    output_json: JsonOutput = False,
+) -> None:
+    """Draft claims from committed OpenSpec specs for operator review."""
+    from .openspec import import_spec
+
+    try:
+        result = import_spec(repo, base)
+    except _USER_ERRORS as exc:
+        _error(exc, output_json)
+        return
+    if not output_json:
+
+        def visible(value: str) -> str:
+            return "".join(c if c.isprintable() or c == "\n" else ascii(c)[1:-1] for c in value)
+
+        typer.echo(f"OpenSpec draft from {result['revision']}")
+        for entry in result["claims"]:
+            claim = entry["claim"]
+            typer.echo(f"\n{claim['id']} · {visible(claim['title'])} · needs a behavior check")
+            typer.echo(visible(claim["statement"]))
+            for line in provenance_lines(claim["provenance"]):
+                typer.echo(visible(line))
+        for item in result["diagnostics"]:
+            typer.echo(visible(f"{item['path']}:{item['line']} · {item['detail']}"))
+    finish(result, output_json)
+
+
 @spec_app.command("approve")
 def approve_spec(
     ctx: typer.Context,
@@ -323,7 +354,7 @@ def verify(
             "snapshot_digest": candidate.digest,
             "approval": approved,
             "claims": [
-                claim.model_dump(mode="json", exclude={"title"})
+                claim.model_dump(mode="json", exclude={"title"}, exclude_none=True)
                 for claim in project.contract.claims
             ],
             "claim_review": review_context(project.contract),

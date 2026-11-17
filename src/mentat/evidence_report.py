@@ -3,7 +3,7 @@
 import json
 from urllib.parse import quote
 
-from .claims import _code_span, _inline_prose
+from .claims import _code_span, _inline_prose, provenance_lines
 from .evidence import status
 
 
@@ -134,6 +134,8 @@ def project_report(record: dict) -> list[str]:
             if claim_id in titles:
                 lines.extend((f"Claim {_code_span(claim_id)}", ""))
             lines.append(_inline_prose(claim["statement"]))
+            if provenance := claim.get("provenance"):
+                lines.extend(("", *provenance_lines(provenance)))
             lines.extend(
                 f"- Assumption · {_inline_prose(item)}" for item in claim.get("assumptions", [])
             )

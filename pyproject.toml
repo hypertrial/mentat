@@ -5,6 +5,7 @@ description = "Verify Git commits against approved project contracts"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "markdown-it-py>=4,<5",
     "pydantic>=2.12,<3",
     "rich>=14,<16",
     "typer>=0.20,<1",
