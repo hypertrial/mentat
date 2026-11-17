@@ -8,6 +8,13 @@ import typer
 from . import evidence
 
 
+def visible_text(value: str, *, multiline: bool = False) -> str:
+    return "".join(
+        char if char.isprintable() or (multiline and char == "\n") else ascii(char)[1:-1]
+        for char in value
+    )
+
+
 def emit(result: dict, output_json: bool) -> None:
     if output_json:
         typer.echo(evidence.json_bytes({"schema_version": 1, **result}).decode().rstrip())
@@ -17,6 +24,12 @@ def emit(result: dict, output_json: bool) -> None:
     for key in ("detail", "context", "contract_digest", "run_id", "bundle", "next_action"):
         if result.get(key):
             typer.echo(f"{key.replace('_', ' ')}  {result[key]}")
+    if result.get("kind") == "project-verification":
+        from .evidence_report import terminal_overview
+
+        for line in terminal_overview(result):
+            typer.echo(visible_text(line))
+        return
     for check in result.get("model_checks", []):
         typer.echo(f"{check['kind']}  {check['status']}  {check['detail']}")
         if check.get("witness"):

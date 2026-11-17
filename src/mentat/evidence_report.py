@@ -1,6 +1,7 @@
 """Claim-by-claim views of saved project verification results."""
 
 import json
+from collections import Counter
 from urllib.parse import quote
 
 from .claims import _code_span, _inline_prose, provenance_lines
@@ -52,6 +53,30 @@ def claim_summary(groups: list[tuple[str, list[dict]]]) -> str:
         for claim in claims:
             counts[claim["status"]] += 1
     return ", ".join(f"{count} {outcome}" for outcome, count in counts.items())
+
+
+def terminal_overview(record: dict) -> list[str]:
+    groups = claim_groups(record)
+    titles = record.get("claim_review", {}).get("titles", {})
+    lines = [f"Claims  {claim_summary(groups)}"]
+    for group, claims in groups:
+        lines.append(group)
+        for claim in claims:
+            claim_id = claim["id"]
+            title = f" · {titles[claim_id]}" if claim_id in titles else ""
+            row = f"  {claim_id}{title}  {claim['status']}"
+            for kind in ("formal", "behavior"):
+                counts = Counter(check["status"] for check in claim[kind])
+                if counts:
+                    outcomes = ", ".join(f"{count} {outcome}" for outcome, count in counts.items())
+                    row += f"  {kind.capitalize()} {outcomes}"
+                elif kind == "behavior" and record.get("behavior_skipped"):
+                    row += "  Behavior skipped"
+            lines.append(row)
+            for check in claim["formal"] + claim["behavior"]:
+                if check["status"] in {"violation", "incomplete"}:
+                    lines.append(f"    {check['id']}  {check['detail']}")
+    return lines
 
 
 def _artifact_links(check: dict) -> list[str]:

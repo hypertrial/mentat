@@ -251,11 +251,94 @@ def _checks_by_id(record: dict) -> dict[tuple[str, str], dict]:
     return result
 
 
-def compare_runs(state: Path, before_id: str, after_id: str) -> dict:
+def _run_reference(path: Path, run: dict) -> dict:
+    if run["status"] not in STATUSES or "report.md" not in run["artifacts"]:
+        raise ValueError("Invalid saved run outcome or missing report")
+    return {
+        **{key: run[key] for key in ("run_id", "revision", "status", "behavior_skipped")},
+        "bundle": str(path),
+        "report": str(path / "report.md"),
+    }
+
+
+def _changed(before: str | None, after: str | None) -> str:
+    if before is None or after is None:
+        return "unavailable"
+    return "changed" if before != after else "unchanged"
+
+
+def _historical_claims(run: dict) -> tuple[dict, dict]:
+    metadata = run.get("comparison_inputs", {})
+    definitions = metadata.get("claims", {})
+    titles = run.get("claim_review", {}).get("titles", {})
+    claims = {
+        claim["id"]: {
+            **claim,
+            "title": titles.get(claim["id"]),
+            "definition_digest": definitions.get(claim["id"]),
+            "checks": [],
+        }
+        for claim in run["claims"]
+    }
+    if len(claims) != len(run["claims"]):
+        raise ValueError("Duplicate saved claim IDs")
+    for (kind, check_id), check in _checks_by_id(run).items():
+        claims[check["claim"]]["checks"].append(
+            {"kind": kind, "id": check_id, **{k: v for k, v in check.items() if k != "claim"}}
+        )
+    return claims, metadata
+
+
+def _compare_contract_history(
+    before_path: Path, before: dict, after_path: Path, after: dict
+) -> dict:
+    scope = ("repo", "runner")
+    if changed := [key for key in scope if before[key] != after[key]]:
+        raise ValueError(
+            "Contract history requires matching scope; differs in " + ", ".join(changed)
+        )
+    left, old = _historical_claims(before)
+    right, new = _historical_claims(after)
+    claims = []
+    for claim_id in sorted(left.keys() | right.keys()):
+        a, b = left.get(claim_id), right.get(claim_id)
+        if a is None:
+            definition = "added"
+        elif b is None:
+            definition = "removed"
+        else:
+            definition = _changed(a["definition_digest"], b["definition_digest"])
+        claims.append({"id": claim_id, "definition": definition, "before": a, "after": b})
+    return {
+        "mode": "across-contracts",
+        "status": "incomplete" if "incomplete" in (before["status"], after["status"]) else "pass",
+        **{key: before[key] for key in scope},
+        "environment_changed": any(before[key] != after[key] for key in ("tools", "runtime")),
+        "input_changes": {
+            key: _changed(old.get(key), new.get(key))
+            for key in ("supporting_files", "runner_settings", "verifier")
+        },
+        "before": {
+            **_run_reference(before_path, before),
+            **{key: before[key] for key in ("base", "contract_digest")},
+        },
+        "after": {
+            **_run_reference(after_path, after),
+            **{key: after[key] for key in ("base", "contract_digest")},
+        },
+        "claims": claims,
+    }
+
+
+def compare_runs(
+    state: Path, before_id: str, after_id: str, *, across_contracts: bool = False
+) -> dict:
     before_path, before = read_run(state, before_id)
     after_path, after = read_run(state, after_id)
     if any(run.get("kind") != "project-verification" for run in (before, after)):
         raise ValueError("Run comparison requires two project verification runs")
+    if across_contracts:
+        return _compare_contract_history(before_path, before, after_path, after)
     scope = ("repo", "base", "runner", "contract_digest")
     if changed := [key for key in scope if before[key] != after[key]]:
         raise ValueError("Run comparison requires matching scope; differs in " + ", ".join(changed))
@@ -291,11 +374,5 @@ def compare_runs(state: Path, before_id: str, after_id: str) -> dict:
         "claims": list(claims.values()),
     }
     for side, path, run in (("before", before_path, before), ("after", after_path, after)):
-        if run["status"] not in STATUSES or "report.md" not in run["artifacts"]:
-            raise ValueError("Invalid saved run outcome or missing report")
-        result[side] = {
-            **{key: run[key] for key in ("run_id", "revision", "status", "behavior_skipped")},
-            "bundle": str(path),
-            "report": str(path / "report.md"),
-        }
+        result[side] = _run_reference(path, run)
     return result

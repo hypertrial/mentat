@@ -38,6 +38,7 @@
         "claim_ids": [
           "verification.candidate-pinning",
           "runner.execution",
+          "runner.case-evidence",
           "formal.z3-vacuity",
           "formal.lean-audit",
           "verification.formal-gate",
@@ -48,6 +49,7 @@
         "title": "Inspecting evidence and accepting a run",
         "claim_ids": [
           "evidence.provenance",
+          "evidence.claim-results",
           "evidence.integrity",
           "evidence.comparison",
           "acceptance.complete-pass"
@@ -56,7 +58,8 @@
       {
         "title": "Maintaining the Claims Spec",
         "claim_ids": [
-          "claims.review-sync"
+          "claims.review-sync",
+          "claims.openspec-draft"
         ]
       }
     ],
@@ -101,6 +104,11 @@
       "statement": "Docker behavior checks use a prepared, digest-pinned image without networking or host mounts. Host behavior checks require separate approval and run with the operator's permissions. Host preflight reports unavailable executables and declared prerequisites."
     },
     {
+      "id": "runner.case-evidence",
+      "title": "Require named cases and controls",
+      "statement": "An approved behavior check can require exact results for named cases and a negative control. Missing required case evidence or an unqualified control makes the check incomplete."
+    },
+    {
       "id": "verification.formal-gate",
       "title": "Require formal checks to pass before behavior runs",
       "statement": "Behavior checks begin only after every formal check passes. A saved run records when behavior checks were skipped."
@@ -116,6 +124,11 @@
       "statement": "The evidence records the base and candidate commits, contract and snapshot digests, recorded tools and runner, check results, and a reproduction command. Host evidence also records the effective tool search path, prerequisite results when inspected, and a same-host replay command."
     },
     {
+      "id": "evidence.claim-results",
+      "title": "Review outcomes by claim",
+      "statement": "The verification report groups formal and behavior evidence by claim, identifies known violations and gaps, and links the checks to their saved artifacts."
+    },
+    {
       "id": "evidence.integrity",
       "title": "Check the bundle before export",
       "statement": "Evidence export validates the saved manifest against its local receipt and checks the file set and artifact hashes before copying the bundle."
@@ -123,7 +136,7 @@
     {
       "id": "evidence.comparison",
       "title": "Compare two saved runs by claim",
-      "statement": "Mentat compares intact saved verification runs with the same approved scope. It shows before and after results by claim, identifies skipped or incomplete checks, and reports differences in recorded tools or runner settings."
+      "statement": "Mentat compares intact saved verification runs with the same approved scope by default. An explicit review mode compares runs across contracts, identifies changed claim definitions, and preserves each original verdict."
     },
     {
       "id": "acceptance.complete-pass",
@@ -137,6 +150,11 @@
       "id": "claims.review-sync",
       "title": "Keep the local and Notion specs in sync",
       "statement": "Mentat renders the local spec deterministically and detects drift. Explicit Notion publication mirrors the committed spec in one selected page section and requires a matching local spec at that commit."
+    },
+    {
+      "id": "claims.openspec-draft",
+      "title": "Draft cited claims from OpenSpec",
+      "statement": "Mentat drafts claims from committed OpenSpec scenarios with exact Git source citations. Adopted draft claims require approved checks."
     }
   ],
   "formal": [
@@ -237,6 +255,17 @@
       ]
     },
     {
+      "id": "check.runner.case-evidence",
+      "claim": "runner.case-evidence",
+      "argv": [
+        "python3",
+        "-I",
+        "{checks}/selfcheck.py",
+        "runner.case-evidence"
+      ],
+      "timeout_seconds": 120
+    },
+    {
       "id": "check.verification.formal-gate",
       "claim": "verification.formal-gate",
       "argv": [
@@ -271,6 +300,17 @@
       "selectors": [
         "evidence.provenance"
       ]
+    },
+    {
+      "id": "check.evidence.claim-results",
+      "claim": "evidence.claim-results",
+      "argv": [
+        "python3",
+        "-I",
+        "{checks}/selfcheck.py",
+        "evidence.claim-results"
+      ],
+      "timeout_seconds": 120
     },
     {
       "id": "check.integrity",
@@ -313,6 +353,17 @@
         "-I",
         "{checks}/selfcheck.py",
         "claims.review-sync"
+      ],
+      "timeout_seconds": 120
+    },
+    {
+      "id": "check.claims.openspec-draft",
+      "claim": "claims.openspec-draft",
+      "argv": [
+        "python3",
+        "-I",
+        "{checks}/selfcheck.py",
+        "claims.openspec-draft"
       ],
       "timeout_seconds": 120
     }

@@ -384,6 +384,7 @@ class Project:
     contract: Contract
     files: dict[str, bytes]
     fingerprint: str
+    verifier_digest: str
 
 
 def _git_env() -> dict[str, str]:
@@ -686,15 +687,16 @@ def load_project(repo: Path, base: str, runner: str) -> Project:
             ):
                 raise ValueError("invalid approved checks path")
     verifier = {p.name: (0o644, p.read_bytes()) for p in Path(__file__).parent.glob("*.py")}
+    verifier_digest = _digest(verifier)
     binding = hashlib.sha256()
     for value in (
         str(root),
         revision,
         runner,
         _digest({p: (0o644, v) for p, v in files.items()}),
-        _digest(verifier),
+        verifier_digest,
     ):
         data = value.encode()
         binding.update(len(data).to_bytes(8, "big"))
         binding.update(data)
-    return Project(root, revision, runner, contract, files, binding.hexdigest())
+    return Project(root, revision, runner, contract, files, binding.hexdigest(), verifier_digest)

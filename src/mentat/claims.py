@@ -113,9 +113,9 @@ def _append_review_claim(
     trace = f"Claim `{claim.id}` · Behavior {behavior}"
     if formal:
         trace += f" · Formal {formal}"
-    lines.extend(("", trace))
     if claim.provenance:
         lines.extend(("", *provenance_lines(claim.provenance.model_dump())))
+    lines.extend(("", trace))
 
 
 def _grouped_claims(contract: Contract) -> bytes:
@@ -136,12 +136,24 @@ def _grouped_claims(contract: Contract) -> bytes:
     lines.extend(("", "### Behavior checks"))
     for check in contract.behavior:
         row = f"Check {_code_span(check.id)} · Claim {_code_span(check.claim)}"
-        if not check.selectors:
+        if not (check.selectors or check.case_report or check.negative_control):
             row += " · Standalone check"
         lines.extend(("", row))
-        if check.selectors:
-            lines.append("")
-            lines.extend(f"- Selector {_code_span(selector)}" for selector in check.selectors)
+        details = [f"- Selector {_code_span(selector)}" for selector in check.selectors or []]
+        if check.case_report:
+            details.extend(
+                f"- Required case {_code_span(case)}" for case in check.case_report.required_cases
+            )
+        if check.negative_control:
+            control = check.negative_control
+            requirement = (
+                f"- Negative control requires exit {_code_span(str(control.violation_exit_code))}"
+            )
+            if control.failing_case:
+                requirement += f" and failure of {_code_span(control.failing_case)}"
+            details.append(requirement)
+        if details:
+            lines.extend(("", *details))
     lines.extend(("", "### Formal checks and assumptions"))
     shown = set()
     for check in contract.formal:

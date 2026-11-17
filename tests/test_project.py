@@ -677,3 +677,31 @@ def test_verify_prioritizes_incomplete_over_violation(project_repo, tmp_path, mo
     result = runner.invoke(cli.app, prefix + ["verify", "--rev", base, "--json", *scope])
     assert result.exit_code == 2, result.output
     assert json.loads(result.output)["status"] == "incomplete"
+
+
+def test_comparison_inputs_track_check_definition_and_mark_shared_changes(project_repo):
+    from mentat.spec_review import comparison_inputs
+
+    repo, base, manifest = project_repo
+    original = comparison_inputs(load_project(repo, base, "host"))
+    manifest["claims"][0]["title"] = "New title"
+    path = repo / ".mentat/contract.json"
+    path.write_text(json.dumps(manifest))
+    title_only = commit(repo, "Describe the claim")
+    assert comparison_inputs(load_project(repo, title_only, "host")) == original
+
+    (repo / ".mentat/fixture.txt").write_text("supporting bytes")
+    shared = comparison_inputs(load_project(repo, commit(repo, "Add fixture"), "host"))
+    assert shared["claims"] == original["claims"]
+    assert shared["supporting_files"] != original["supporting_files"]
+
+    manifest["behavior"][0]["negative_control"] = {"args": ["bad"], "violation_exit_code": 1}
+    path.write_text(json.dumps(manifest))
+    control = comparison_inputs(load_project(repo, commit(repo, "Require control"), "host"))
+    assert control["claims"]["claim"] != original["claims"]["claim"]
+    assert control["supporting_files"] == shared["supporting_files"]
+
+    (repo / ".mentat/check.py").write_text("print('changed')\n")
+    script = comparison_inputs(load_project(repo, commit(repo, "Change script"), "host"))
+    assert script["claims"]["claim"] != control["claims"]["claim"]
+    assert script["supporting_files"] != control["supporting_files"]

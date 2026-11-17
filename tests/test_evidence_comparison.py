@@ -141,3 +141,105 @@ def test_compare_does_not_create_missing_state(tmp_path):
     )
     assert result.exit_code == 2
     assert not state.parent.exists()
+
+
+def test_across_contracts_preserves_original_verdicts_and_side_specific_checks(compare):
+    state, run = compare
+    before_id, after_id = "a" * 32, "b" * 32
+    shared = {"id": "claim", "statement": "Example behavior"}
+    saved = save(
+        state,
+        before_id,
+        "violation",
+        claims=[shared, {"id": "removed", "statement": "Previous claim"}],
+        comparison_inputs={
+            "claims": {"claim": "one", "removed": "two"},
+            "supporting_files": "old",
+            "runner_settings": "same",
+            "verifier": "same",
+        },
+    )
+    save(
+        state,
+        after_id,
+        "incomplete",
+        base="c" * 40,
+        contract_digest="d" * 64,
+        claims=[shared, {"id": "added", "statement": "Current claim"}],
+        comparison_inputs={
+            "claims": {"claim": "changed", "added": "two"},
+            "supporting_files": "new",
+            "runner_settings": "same",
+            "verifier": "same",
+        },
+        cases=[
+            {
+                "checks": [
+                    {
+                        "id": "behavior",
+                        "claim": "added",
+                        "status": "incomplete",
+                        "detail": "Timeout",
+                    }
+                ]
+            }
+        ],
+        tools={"z3": {"version": "other"}},
+    )
+    state_paths = sorted(state.rglob("*"))
+    result = run(before_id, after_id, "--across-contracts", "--json")
+    assert result.exit_code == 2, result.output
+    report = json.loads(result.output)
+    assert report["mode"] == "across-contracts"
+    assert report["environment_changed"] is True
+    assert report["before"]["status"] == "violation"
+    assert report["after"]["status"] == "incomplete"
+    assert report["before"]["base"] != report["after"]["base"]
+    assert report["before"]["contract_digest"] != report["after"]["contract_digest"]
+    assert report["input_changes"] == {
+        "supporting_files": "changed",
+        "runner_settings": "unchanged",
+        "verifier": "unchanged",
+    }
+    rows = {row["id"]: row for row in report["claims"]}
+    assert {key: row["definition"] for key, row in rows.items()} == {
+        "added": "added",
+        "claim": "changed",
+        "removed": "removed",
+    }
+    assert rows["added"]["before"] is None and rows["removed"]["after"] is None
+    assert [item["id"] for item in rows["claim"]["after"]["checks"]] == ["model"]
+    assert rows["added"]["after"]["checks"][0]["status"] == "incomplete"
+    assert sorted(state.rglob("*")) == state_paths
+
+    strict = run(before_id, after_id, "--json")
+    assert strict.exit_code == 2 and "requires matching scope" in strict.output
+
+    human = run(before_id, after_id, "--across-contracts")
+    assert human.exit_code == 2
+    assert "Definition changed" in human.output and "after  Current claim" in human.output
+
+    (saved / "example.witness.json").write_text("tampered")
+    damaged = run(before_id, after_id, "--across-contracts", "--json")
+    assert damaged.exit_code == 2 and "integrity check" in damaged.output
+
+
+def test_across_contracts_labels_legacy_definitions_unavailable(compare):
+    state, run = compare
+    save(state, "a" * 32)
+    save(state, "b" * 32, contract_digest="d" * 64, comparison_inputs={"claims": {"claim": "new"}})
+    result = run("a" * 32, "b" * 32, "--across-contracts", "--json")
+    assert result.exit_code == 0, result.output
+    report = json.loads(result.output)
+    assert report["claims"][0]["definition"] == "unavailable"
+    assert report["input_changes"]["verifier"] == "unavailable"
+
+
+@pytest.mark.parametrize(("field", "value"), [("repo", "/other"), ("runner", "docker")])
+def test_across_contracts_requires_same_recorded_repo_and_runner(compare, field, value):
+    state, run = compare
+    save(state, "a" * 32)
+    save(state, "b" * 32, **{field: value})
+    result = run("a" * 32, "b" * 32, "--across-contracts", "--json")
+    assert result.exit_code == 2
+    assert f"differs in {field}" in json.loads(result.output)["detail"]

@@ -88,3 +88,24 @@ def test_report_shows_formal_gate_and_supports_legacy_ungrouped_runs():
     legacy = evidence.report(record).decode()
     assert "Behavior checks were skipped" in legacy
     assert "0 pass, 1 violation, 0 incomplete, 1 skipped" in legacy
+
+
+def test_terminal_verification_groups_claims_and_keeps_failure_details(capsys):
+    from mentat.command import emit
+
+    record = _record()
+    emit(record, False)
+    output = capsys.readouterr().out
+    assert output.index("Mentat incomplete") < output.index("Authoring")
+    assert output.index("Authoring") < output.index("Reviewing")
+    assert "one · First claim  violation  Formal 1 pass  Behavior 1 violation" in output
+    assert "other · Second claim  incomplete  Behavior 1 incomplete" in output
+    assert "native  Bad output" in output
+    assert "missing  Missing tool" in output
+
+    record["behavior_skipped"] = True
+    record["cases"] = []
+    emit(record, False)
+    skipped = capsys.readouterr().out
+    assert "one · First claim  skipped  Formal 1 pass  Behavior 1 skipped" in skipped
+    assert "other · Second claim  skipped  Behavior 1 skipped" in skipped

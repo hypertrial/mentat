@@ -509,3 +509,93 @@ def test_notion_prose_does_not_match_a_quote_block(monkeypatch, prefix):
     contents = f"Source commit: `{BASE}` · 1 claim\n\n{body}\n\n{notion._END}"
     monkeypatch.setattr(notion, "_request", lambda page_id: contents)
     assert not notion.notion_claims(PAGE, claims, BASE)
+
+
+@pytest.mark.parametrize("layout", ["legacy", "numbered", "grouped"])
+@pytest.mark.parametrize("named_cases", [True, False])
+def test_publish_claim_citations_and_control_inventory(monkeypatch, layout, named_cases):
+    import re
+
+    from mentat.claims import render_claims
+    from mentat.project import Contract
+
+    case = "test_app.py::test_case[a > b]"
+    behavior = {"id": "check.id", "claim": "claim.id", "argv": ["test"]}
+    control = {"args": ["bad"], "violation_exit_code": 1}
+    if named_cases:
+        behavior.update(
+            artifacts=["cases.json"],
+            case_report={
+                "artifact": "cases.json",
+                "required_cases": [case],
+            },
+        )
+        control["failing_case"] = case
+    behavior["negative_control"] = control
+    claim = {
+        "id": "claim.id",
+        "title": "Claim with citations",
+        "statement": "The observed fixture passes.",
+        "provenance": {
+            "origin": "declared",
+            "citations": [
+                {
+                    "commit": BASE,
+                    "blob": "b" * 40,
+                    "path": "openspec/specs/cap > item/spec.md",
+                    "start_line": 6,
+                    "end_line": 10,
+                }
+            ],
+        },
+    }
+    manifest = {
+        "version": 1,
+        "claims": [claim],
+        "behavior": [behavior],
+        "formal": [
+            {
+                "id": "proof.id",
+                "claim": "claim.id",
+                "engine": "z3",
+                "source": "model.smt2",
+                "expected": "sat",
+            }
+        ],
+        "allow_host": True,
+    }
+    if layout != "legacy":
+        review = {"overview": "This is what the app does.", "scope_limits": ["One fixture."]}
+        if layout == "grouped":
+            review["groups"] = [{"title": "Check the fixture", "claim_ids": ["claim.id"]}]
+        manifest["review"] = review
+    content = render_claims(Contract.model_validate(manifest))
+    original = f"Notes before\n\n{notion._START}\n\n---\n\nNotes after"
+    current = original
+    writes = []
+
+    def request(page_id, payload=None):
+        nonlocal current
+        assert page_id == PAGE
+        if payload:
+            writes.append(payload)
+            edit = payload["update_content"]["content_updates"][0]
+            assert current.count(edit["old_str"]) == 1
+            # Notion may return inline code as HTML rather than backticks.
+            readback = re.sub(r"`([^`]+)`", r"<code>\1</code>", edit["new_str"])
+            current = current.replace(edit["old_str"], readback, 1)
+        return current
+
+    monkeypatch.setattr(notion, "_request", request)
+    assert notion.notion_claims(PAGE, content, BASE, publish=True)
+    assert notion.notion_claims(PAGE, content, BASE)
+    assert notion.notion_claims(PAGE, content, BASE, publish=True)
+    assert len(writes) == 1
+    assert current.startswith("Notes before\n") and current.endswith("\nNotes after")
+    assert "- Origin · declared" in current
+    assert "<code>openspec/specs/cap > item/spec.md:6-10</code>" in current
+    if layout == "grouped":
+        assert "- Negative control requires exit <code>1</code>" in current
+        if named_cases:
+            assert f"- Required case <code>{case}</code>" in current
+        assert "0 declared selectors" in current

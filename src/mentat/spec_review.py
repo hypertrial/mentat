@@ -5,7 +5,7 @@ import shlex
 import typer
 
 from .evidence import digest, json_bytes
-from .project import Project
+from .project import CHECKS_PREFIX, Project
 
 
 def summary(project: Project) -> dict:
@@ -45,6 +45,63 @@ def summary(project: Project) -> dict:
             }
             for claim in contract.claims
         ],
+    }
+
+
+def comparison_inputs(project: Project) -> dict:
+    contract = project.contract
+    files = {name: digest(data) for name, data in project.files.items()}
+    definitions = {}
+    for claim in contract.claims:
+        formal = [item for item in contract.formal if item.claim == claim.id]
+        behavior = [item for item in contract.behavior if item.claim == claim.id]
+        direct_paths = {
+            path
+            for check in formal
+            for path in (check.source, check.counterexample)
+            if path is not None
+        }
+        for check in behavior:
+            argv = check.effective_argv()
+            if check.negative_control:
+                argv = [*argv, *check.negative_control.args]
+            direct_paths.update(
+                arg.removeprefix(CHECKS_PREFIX) for arg in argv if arg.startswith(CHECKS_PREFIX)
+            )
+        definitions[claim.id] = digest(
+            json_bytes(
+                {
+                    "statement": claim.statement,
+                    "assumptions": claim.assumptions,
+                    "formal": [
+                        check.model_dump(mode="json", exclude_none=True) for check in formal
+                    ],
+                    "behavior": [
+                        check.model_dump(mode="json", exclude_none=True) for check in behavior
+                    ],
+                    "files": {name: files[name] for name in direct_paths},
+                }
+            )
+        )
+    return {
+        "claims": definitions,
+        "supporting_files": digest(
+            json_bytes(
+                {
+                    name: value
+                    for name, value in files.items()
+                    if name not in {"contract.json", "claims.md"}
+                }
+            )
+        ),
+        "runner_settings": digest(
+            json_bytes(
+                contract.model_dump(
+                    mode="json", include={"docker_image", "allow_host", "host_requirements"}
+                )
+            )
+        ),
+        "verifier": project.verifier_digest,
     }
 
 

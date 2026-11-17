@@ -302,8 +302,107 @@ def comparison(root):
     assert checks["model"]["before"]["status"] == checks["model"]["after"]["status"] == "pass"
     assert checks["behavior0"]["before"]["status"] == "violation"
     assert checks["behavior0"]["after"]["status"] == "pass"
+    manifest_path = f.repo / ".mentat/contract.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["claims"][0]["statement"] = "State the changed requirement"
+    manifest_path.write_text(json.dumps(manifest))
+    evolved = f.commit("change contract claim")
+    f.approve(evolved)
+    result, latest = f.verify(fixed, base=evolved)
+    assert result.exit_code == 0, result.output
+    args_history = "evidence", "compare", before["run_id"], latest["run_id"], "--json"
+    assert f.invoke(*args_history).exit_code == 2
+    result = f.invoke(*args_history, "--across-contracts")
+    assert result.exit_code == 0, result.output
+    history = json.loads(result.output)
+    assert history["claims"][0]["definition"] == "changed"
+    assert history["before"]["status"] == "violation" and history["after"]["status"] == "pass"
+    assert history["after"]["base"] == evolved
     Path(compared["before"]["report"]).write_text("tampered")
     assert f.invoke(*args).exit_code == 2
+
+
+def claim_results(root):
+    f = Fixture(root, (1, 2))
+    path = f.repo / ".mentat/contract.json"
+    manifest = json.loads(path.read_text())
+    manifest["claims"][0]["title"] = "Observe fixture"
+    manifest["review"] = {
+        "overview": "Fixture examples",
+        "scope_limits": ["Only the committed fixture."],
+        "groups": [{"title": "Fixture", "claim_ids": ["fixture"]}],
+    }
+    path.write_text(json.dumps(manifest))
+    base = f.commit("group the claims")
+    f.approve(base)
+    result, run = f.verify(base, base)
+    assert result.exit_code == 2, result.output
+    report = (Path(run["bundle"]) / "report.md").read_text()
+    for expected in (
+        "## Counterexample",
+        "## Evidence gap",
+        "## Fixture",
+        "### Observe fixture · incomplete",
+        "Formal (z3)",
+        "Behavior `behavior1`",
+    ):
+        assert expected in report, report
+
+
+def case_evidence(root):
+    f = Fixture(root)
+    path = f.repo / ".mentat/contract.json"
+    manifest = json.loads(path.read_text())
+    manifest["behavior"][0].update(
+        artifacts=["cases.json"],
+        case_report={"artifact": "cases.json", "required_cases": ["observed"]},
+        negative_control={
+            "args": ["known-bad"],
+            "violation_exit_code": 1,
+            "failing_case": "observed",
+        },
+    )
+    path.write_text(json.dumps(manifest))
+    (f.repo / ".mentat/check0.py").write_text(
+        "import json, os, sys\n"
+        "from pathlib import Path\n"
+        "bad = len(sys.argv) == 2 and sys.argv[1] == 'known-bad'\n"
+        "file = Path(os.environ['MENTAT_ARTIFACTS_DIR']) / 'cases.json'\n"
+        "file.write_text(json.dumps({'schema_version': 1, 'cases': {"
+        "'observed': 'fail' if bad else 'pass'}}))\n"
+        "raise SystemExit(1 if bad else 0)\n"
+    )
+    base = f.commit("require a named case and control")
+    f.approve(base)
+    result, run = f.verify(base, base)
+    assert result.exit_code == 0, result.output
+    check = run["cases"][0]["checks"][0]
+    assert check["case_results"] == {"observed": "pass"}
+    assert check["negative_control"]["qualified"]
+    assert check["negative_control"]["case_results"] == {"observed": "fail"}
+
+
+def openspec_draft(root):
+    f = Fixture(root)
+    spec = f.repo / "openspec/specs/fixture/spec.md"
+    spec.parent.mkdir(parents=True)
+    spec.write_text(
+        "### Requirement: Run fixture\nThe fixture SHALL finish.\n"
+        "#### Scenario: Valid input\nThe check passes.\n"
+    )
+    revision = f.commit("commit spec")
+    spec.write_text("dirty edit")
+    result = f.invoke(
+        "spec", "import-openspec", "--repo", str(f.repo), "--base", revision, "--json"
+    )
+    assert result.exit_code == 0, result.output
+    (entry,) = json.loads(result.output)["claims"]
+    assert entry["requires_behavior_check"]
+    citations = entry["claim"]["provenance"]["citations"]
+    assert [row["commit"] for row in citations] == [revision, revision]
+    assert [row["start_line"] for row in citations] == [1, 3]
+    assert spec.read_text() == "dirty edit"
+    assert not f.state.exists()
 
 
 def validation(root):
@@ -761,13 +860,16 @@ SCENARIOS = {
     "formal.z3-vacuity": z3_vacuity,
     "formal.lean-audit": lean_audit,
     "runner.execution": runner_execution,
+    "runner.case-evidence": case_evidence,
     "verification.formal-gate": formal_gate,
     "verification.outcomes": outcomes,
     "evidence.provenance": provenance,
     "evidence.integrity": integrity,
     "evidence.comparison": comparison,
+    "evidence.claim-results": claim_results,
     "acceptance.complete-pass": acceptance,
     "claims.review-sync": review_sync,
+    "claims.openspec-draft": openspec_draft,
 }
 
 if __name__ == "__main__":

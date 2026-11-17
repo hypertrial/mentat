@@ -50,25 +50,31 @@ Docker behavior checks use a prepared, digest-pinned image without networking or
 
 Claim `runner.execution` · Behavior `check.runner.execution`
 
-### 6. Check the Z3 model before its counterexample
+### 6. Require named cases and controls
+
+An approved behavior check can require exact results for named cases and a negative control. Missing required case evidence or an unqualified control makes the check incomplete.
+
+Claim `runner.case-evidence` · Behavior `check.runner.case-evidence`
+
+### 7. Check the Z3 model before its counterexample
 
 An UNSAT check requires a satisfiable base model. A satisfiable counterexample violates the claim, and an inconsistent base model makes the check incomplete.
 
 Claim `formal.z3-vacuity` · Behavior `check.formal.z3-vacuity`
 
-### 7. Check the named Lean theorem and its axioms
+### 8. Check the named Lean theorem and its axioms
 
 Mentat checks that the named theorem is declared by the approved Lean source and audits its transitive axioms. Approval discloses that Lean runs on the host.
 
 Claim `formal.lean-audit` · Behavior `check.formal.lean-audit`
 
-### 8. Require formal checks to pass before behavior runs
+### 9. Require formal checks to pass before behavior runs
 
 Behavior checks begin only after every formal check passes. A saved run records when behavior checks were skipped.
 
 Claim `verification.formal-gate` · Behavior `check.verification.formal-gate`
 
-### 9. Distinguish pass, violation, and incomplete
+### 10. Distinguish pass, violation, and incomplete
 
 Core verification exits 0 for pass, 1 for a confirmed violation, and 2 for an incomplete run or invalid input. Incomplete takes precedence in mixed results. Saved runs retain the individual outcomes.
 
@@ -76,25 +82,31 @@ Claim `verification.outcomes` · Behavior `check.outcomes`
 
 ## Inspecting evidence and accepting a run
 
-### 10. Record how to reproduce the run
+### 11. Record how to reproduce the run
 
 The evidence records the base and candidate commits, contract and snapshot digests, recorded tools and runner, check results, and a reproduction command. Host evidence also records the effective tool search path, prerequisite results when inspected, and a same-host replay command.
 
 Claim `evidence.provenance` · Behavior `check.evidence.provenance`
 
-### 11. Check the bundle before export
+### 12. Review outcomes by claim
+
+The verification report groups formal and behavior evidence by claim, identifies known violations and gaps, and links the checks to their saved artifacts.
+
+Claim `evidence.claim-results` · Behavior `check.evidence.claim-results`
+
+### 13. Check the bundle before export
 
 Evidence export validates the saved manifest against its local receipt and checks the file set and artifact hashes before copying the bundle.
 
 Claim `evidence.integrity` · Behavior `check.integrity`
 
-### 12. Compare two saved runs by claim
+### 14. Compare two saved runs by claim
 
-Mentat compares intact saved verification runs with the same approved scope. It shows before and after results by claim, identifies skipped or incomplete checks, and reports differences in recorded tools or runner settings.
+Mentat compares intact saved verification runs with the same approved scope by default. An explicit review mode compares runs across contracts, identifies changed claim definitions, and preserves each original verdict.
 
 Claim `evidence.comparison` · Behavior `check.evidence.comparison`
 
-### 13. Accept only a complete pass
+### 15. Accept only a complete pass
 
 Acceptance requires an intact passing run under the current approval and a separate operator confirmation in a terminal.
 
@@ -102,11 +114,17 @@ Claim `acceptance.complete-pass` · Behavior `check.acceptance` · Formal `accep
 
 ## Maintaining the Claims Spec
 
-### 14. Keep the local and Notion specs in sync
+### 16. Keep the local and Notion specs in sync
 
 Mentat renders the local spec deterministically and detects drift. Explicit Notion publication mirrors the committed spec in one selected page section and requires a matching local spec at that commit.
 
 Claim `claims.review-sync` · Behavior `check.claims.review-sync`
+
+### 17. Draft cited claims from OpenSpec
+
+Mentat drafts claims from committed OpenSpec scenarios with exact Git source citations. Adopted draft claims require approved checks.
+
+Claim `claims.openspec-draft` · Behavior `check.claims.openspec-draft`
 
 ## Verification coverage and limits
 
@@ -136,6 +154,8 @@ Check `check.runner.execution` · Claim `runner.execution`
 
 - Selector `runner.execution`
 
+Check `check.runner.case-evidence` · Claim `runner.case-evidence` · Standalone check
+
 Check `check.verification.formal-gate` · Claim `verification.formal-gate` · Standalone check
 
 Check `check.outcomes` · Claim `verification.outcomes` · Standalone check
@@ -143,6 +163,8 @@ Check `check.outcomes` · Claim `verification.outcomes` · Standalone check
 Check `check.evidence.provenance` · Claim `evidence.provenance`
 
 - Selector `evidence.provenance`
+
+Check `check.evidence.claim-results` · Claim `evidence.claim-results` · Standalone check
 
 Check `check.integrity` · Claim `evidence.integrity` · Standalone check
 
@@ -152,10 +174,12 @@ Check `check.acceptance` · Claim `acceptance.complete-pass` · Standalone check
 
 Check `check.claims.review-sync` · Claim `claims.review-sync` · Standalone check
 
+Check `check.claims.openspec-draft` · Claim `claims.openspec-draft` · Standalone check
+
 ### Formal checks and assumptions
 
 Formal check `acceptance.eligibility` · Claim `acceptance.complete-pass` · Z3
 
 - Assumption The bounded model represents status, current approval, evidence integrity, and operator confirmation as independent eligibility gates.
 
-Inventory · 14 behavior checks · 1 formal check · 4 declared selectors
+Inventory · 17 behavior checks · 1 formal check · 4 declared selectors

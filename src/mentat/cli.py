@@ -14,8 +14,8 @@ import typer
 from . import evidence, spec_review
 from .claims import checked_claims, provenance_lines, write_claims
 from .claims_notion import notion_claims
-from .command import emit, finish, operator_confirm
-from .evidence_report import claim_groups, claim_summary, review_context
+from .command import emit, finish, operator_confirm, visible_text
+from .evidence_report import review_context
 from .project import Project, load_project, snapshot
 from .project_formal import run_formal, tool_info
 from .runner import host_diagnostics, host_path, run_behavior, runner_info
@@ -234,19 +234,15 @@ def import_openspec(
         _error(exc, output_json)
         return
     if not output_json:
-
-        def visible(value: str) -> str:
-            return "".join(c if c.isprintable() or c == "\n" else ascii(c)[1:-1] for c in value)
-
         typer.echo(f"OpenSpec draft from {result['revision']}")
         for entry in result["claims"]:
             claim = entry["claim"]
-            typer.echo(f"\n{claim['id']} · {visible(claim['title'])} · needs a behavior check")
-            typer.echo(visible(claim["statement"]))
+            typer.echo(f"\n{claim['id']} · {visible_text(claim['title'])} · needs a behavior check")
+            typer.echo(visible_text(claim["statement"], multiline=True))
             for line in provenance_lines(claim["provenance"]):
-                typer.echo(visible(line))
+                typer.echo(visible_text(line))
         for item in result["diagnostics"]:
-            typer.echo(visible(f"{item['path']}:{item['line']} · {item['detail']}"))
+            typer.echo(visible_text(f"{item['path']}:{item['line']} · {item['detail']}"))
     finish(result, output_json)
 
 
@@ -358,6 +354,7 @@ def verify(
                 for claim in project.contract.claims
             ],
             "claim_review": review_context(project.contract),
+            "comparison_inputs": spec_review.comparison_inputs(project),
             "model_checks": models,
             "behavior_checks": [
                 {"id": check.id, "claim": check.claim} for check in project.contract.behavior
@@ -376,8 +373,6 @@ def verify(
                 f"PATH={shlex.quote(runtime['invocation_path'])} {shlex.join([*launcher, *args])}"
             )
         bundle = evidence.save_run(state, record, artifacts)
-        if not output_json:
-            typer.echo(f"Claims  {claim_summary(claim_groups(record))}")
         finish({**record, "bundle": str(bundle)}, output_json)
     except _USER_ERRORS as exc:
         _error(exc, output_json)
@@ -411,12 +406,21 @@ def export_evidence(
 
 @evidence_app.command("compare")
 def compare_evidence(
-    ctx: typer.Context, before_run: str, after_run: str, output_json: JsonOutput = False
+    ctx: typer.Context,
+    before_run: str,
+    after_run: str,
+    output_json: JsonOutput = False,
+    across_contracts: Annotated[
+        bool, typer.Option(help="Review saved runs across approved contract revisions.")
+    ] = False,
 ) -> None:
-    """Compare two intact verification runs under the same approved contract."""
+    """Compare intact verification runs by claim."""
+
     try:
         state = evidence.state_directory(ctx.obj["state"], create=False)
-        result = evidence.compare_runs(state, before_run, after_run)
+        result = evidence.compare_runs(
+            state, before_run, after_run, across_contracts=across_contracts
+        )
     except _USER_ERRORS as exc:
         _error(exc, output_json)
         return
@@ -427,11 +431,29 @@ def compare_evidence(
         for side in ("before", "after"):
             run = result[side]
             typer.echo(f"{side.title()}  {run['revision']}  {run['status']}  (run {run['run_id']})")
+            if across_contracts:
+                typer.echo(f"  Base {run['base']}  Approval {run['contract_digest']}")
             typer.echo(f"  Report  {run['report']}")
             if run["behavior_skipped"]:
                 typer.echo("  Behavior skipped because formal checks did not pass.")
         if result["environment_changed"]:
             typer.echo("Recorded tools or runner metadata differ between the runs.")
+        if across_contracts:
+            typer.echo("Contract history review")
+            for key, value in result["input_changes"].items():
+                typer.echo(f"  {key.replace('_', ' ')}  {value}")
+            for claim in result["claims"]:
+                typer.echo(f"Claim {claim['id']}  Definition {claim['definition']}")
+                for side in ("before", "after"):
+                    item = claim[side]
+                    if item is None:
+                        typer.echo(f"  {side}  absent")
+                        continue
+                    typer.echo(f"  {side}  {visible_text(item['statement'])}")
+                    for check in item["checks"]:
+                        typer.echo(f"    {check['kind']} {check['id']}  {check['status']}")
+            finish(result, False)
+            return
         for claim in result["claims"]:
             typer.echo(f"Claim {claim['id']}  {claim['statement']}")
             for check in claim["checks"]:

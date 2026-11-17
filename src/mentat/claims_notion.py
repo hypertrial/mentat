@@ -24,6 +24,14 @@ _ID = r"[A-Za-z0-9_][A-Za-z0-9_.-]*"
 _CHECK_IDS = rf"`{_ID}`(?:, `{_ID}`)*"
 _LEGACY_SELECTOR = re.compile(rf"(- Check (?:`{_ID}`|<code>{_ID}</code>) selects )(.*)")
 _SELECTOR = "- Selector "
+_REQUIRED_CASE = "- Required case "
+_CONTROL = re.compile(
+    r"(- Negative control requires exit )(?:`([1-9][0-9]{0,2})`|<code>([1-9][0-9]{0,2})</code>)"
+    r"(?: and failure of (.+))?"
+)
+_OID = r"(?:[0-9a-f]{40}|[0-9a-f]{64})"
+_OID_SPAN = rf"(?:`{_OID}`|<code>{_OID}</code>)"
+_CITATION = re.compile(rf"(- Source )(.+)( · commit {_OID_SPAN} · blob {_OID_SPAN})")
 _ESCAPE_OR_GREATER_THAN = re.compile(r"\\.|>")
 _BLOCK_QUOTE = re.compile(r"^[ \t]*(?:(?:[-+*]|[0-9]+[.)])[ \t]+)*>")
 _BEHAVIOR_CHECK = re.compile(rf"Check `({_ID})` · Claim `({_ID})`( · Standalone check)?")
@@ -196,14 +204,36 @@ def _escape_closing_angles(text: str) -> str:
     return _ESCAPE_OR_GREATER_THAN.sub(lambda token: r"\>" if token[0] == ">" else token[0], text)
 
 
+def _control_summary(line: str) -> str | None:
+    match = _CONTROL.fullmatch(line)
+    if not match:
+        return None
+    prefix, code, code_html, case = match.groups()
+    code = code or code_html
+    if int(code) > 124:
+        return None
+    if case is None:
+        return prefix + _code_span(code)
+    if value := _selector_value(case):
+        return prefix + _code_span(code) + " and failure of " + _code_span(value)
+    return None
+
+
 def _normalized(markdown: str) -> list[str]:
     # Notion can reserialize inline code and inter-block spacing.
     lines = []
     for raw in StringIO(markdown, newline=""):
         line = raw.rstrip("\r\n")
-        if line.startswith(_SELECTOR):
-            if (value := _selector_value(line.removeprefix(_SELECTOR))) is not None:
-                line = _SELECTOR + _code_span(value)
+        if prefix := next(
+            (item for item in (_SELECTOR, _REQUIRED_CASE) if line.startswith(item)), None
+        ):
+            if (value := _selector_value(line.removeprefix(prefix))) is not None:
+                line = prefix + _code_span(value)
+        elif control := _control_summary(line):
+            line = control
+        elif match := _CITATION.fullmatch(line):
+            if value := _selector_value(match[2]):
+                line = match[1] + _code_span(value) + _CODE.sub(r"`\1`", match[3])
         elif match := _LEGACY_SELECTOR.fullmatch(line):
             prefix, selector = match.groups()
             value = _selector_value(selector)
@@ -270,11 +300,20 @@ def _behavior_inventory(lines: list[str]) -> tuple[dict[str, str], int] | None:
             not match
             or match[1] in checks
             or bool(match[3]) != (not body)
-            or any(not line.startswith(_SELECTOR) or not line[len(_SELECTOR) :] for line in body)
+            or any(
+                not (
+                    line.startswith(_SELECTOR)
+                    and line[len(_SELECTOR) :]
+                    or line.startswith(_REQUIRED_CASE)
+                    and _selector_value(line[len(_REQUIRED_CASE) :])
+                    or _control_summary(line)
+                )
+                for line in body
+            )
         ):
             return None
         checks[match[1]] = match[2]
-        selectors += len(body)
+        selectors += sum(line.startswith(_SELECTOR) for line in body)
     return checks, selectors
 
 

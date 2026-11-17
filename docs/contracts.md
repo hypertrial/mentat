@@ -154,7 +154,7 @@ Mentat accepts regular Git blobs with executable bits preserved. Symlinks, submo
 
 1. Run `mentat spec check --repo "$REPO" --base "$BASE"`. Review the manifest and supporting files at that commit, then approve the displayed digest with `mentat spec approve DIGEST --repo "$REPO" --base "$BASE"`.
 2. Run `mentat verify --repo "$REPO" --base "$BASE" --rev "$CANDIDATE" --json`. Formal checks run first. Behavior checks run after they pass. Use a new approval when the base, verifier, repository path, or runner mode changes.
-3. Export with `mentat evidence export RUN_ID --out NEW_DIRECTORY`. The bundle contains a Markdown report and a JSON manifest with the commit IDs, check results and provenance, artifact hashes, and reproduction command. For host runs, `host_reproduce` uses the recorded working directory, interpreter, and invocation `PATH` on the same host. The report also records the filtered behavior `PATH` and discovered prerequisites. Replay uses the tools currently installed in those locations. Review logs, local paths, and artifacts before sharing the evidence.
+3. Export with `mentat evidence export RUN_ID --out NEW_DIRECTORY`. The bundle contains a Markdown report and a JSON manifest with the commit IDs, check results and provenance, artifact hashes, and reproduction command. The report leads with the run verdict and claim outcomes, then shows the checks by claim, with formal and behavior evidence labeled separately. Its artifact links resolve within the exported bundle. For host runs, `host_reproduce` uses the recorded working directory, interpreter, and invocation `PATH` on the same host. The report also records the filtered behavior `PATH` and discovered prerequisites. Replay uses the tools currently installed in those locations. Review logs, local paths, and artifacts before sharing the evidence.
 4. Run `mentat accept RUN_ID --repo "$REPO" --base "$BASE"` to accept a complete passing run under the matching approval. Both approval and acceptance require a terminal.
 
 Verification exits `0` for pass, `1` for a confirmed violation in a completed run, and `2` for invalid input or an incomplete run. An incomplete check takes precedence in the exit status when another check reports a violation. The manifest retains each result. A model violation can prevent behavior execution. Timeouts, missing tools, and resource kills are incomplete. Behavior output is capped at 1 MiB per stream and 16 MiB per run across logs and artifacts. The manifest records any omitted logs or optional files.
@@ -168,5 +168,21 @@ mentat --state "$STATE" evidence compare "$BEFORE_RUN" "$AFTER_RUN"
 Comparison reads two intact project verification runs from the same state directory. Both runs must have the same repository path, base, runner, and approved contract digest. It shows check outcomes by claim, points to the saved reports and artifacts, and flags differences in recorded tools or runner metadata. Behavior checks skipped by the formal gate appear as skipped. Older runs without a recorded check list can show the skip for the whole run.
 
 Exit `0` means both runs completed and could be compared. Each revision’s outcome is shown separately. Exit `2` means an incomplete run, incompatible scope, or missing or invalid evidence. Compatible incomplete runs still display available results. Add `--json` for structured output. A checkout at a different path needs its own approval and runs. See the [Nano ID walkthrough](nanoid.md#replay-the-failure) for comparing witnesses across checkouts.
+
+### Review runs across contract revisions
+
+```sh
+mentat --state "$STATE" evidence compare "$BEFORE_RUN" "$AFTER_RUN" --across-contracts
+```
+
+Use this mode to align claim IDs when the recorded base or approval digest differs.
+Both runs must come from the same local state, recorded repository path, and runner mode.
+The output keeps the original verdicts and both check inventories. It identifies added,
+removed, changed, and unchanged claim definitions. For older runs that lack fingerprints,
+it labels the definition unavailable. A definition covers the statement, assumptions,
+configured checks, and files directly referenced by those checks. The comparison also
+reports changes in shared supporting files, runner settings, the verifier, and the recorded
+tools and runtime. Consider those differences when interpreting a result transition.
+The command reads saved evidence and uses the same comparison exit conventions.
 
 State defaults to `~/.local/state/mentat` or `$XDG_STATE_HOME/mentat`. Set `--state PATH` before the command to use a different operator-owned directory outside the project checkout. The state directory has mode `0700`. Bundle integrity receipts are local, so protect state from other same-user processes.
