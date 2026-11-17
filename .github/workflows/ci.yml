@@ -64,12 +64,20 @@ jobs:
           uv run --locked ruff check .
           uv run --locked mentat claims check --repo . --base "$(git rev-parse HEAD)"
       - name: Run locked suite
+        env:
+          MENTAT_ICEBERG_FORMAL_TRACE: ${{ runner.temp }}/iceberg-formal-trace.jsonl
         run: |
           set -o pipefail
           uv run --locked --extra polaris pytest -q -rs | tee "$RUNNER_TEMP/pytest.log"
           if grep -q '^SKIPPED ' "$RUNNER_TEMP/pytest.log"; then
             printf 'Release prerequisites must cover the complete suite.\n' >&2
             exit 1
+          fi
+      - name: Report Iceberg formal process diagnostics
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/iceberg-formal-trace.jsonl" ]; then
+            cat "$RUNNER_TEMP/iceberg-formal-trace.jsonl"
           fi
       - name: Build and check distributions
         run: |

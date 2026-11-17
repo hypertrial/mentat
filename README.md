@@ -4,13 +4,13 @@ Mentat verifies a Git commit against a contract you review and approve. Define w
 
 ## Install
 
-Install Hypertrial Mentat v0.1.1 from GitHub with Python 3.12 and uv. The
+Install Hypertrial Mentat v0.1.2 from GitHub with Python 3.12 and uv. The
 distribution is `hypertrial-mentat` and provides the `mentat` command.
 [Install uv](https://docs.astral.sh/uv/getting-started/installation/)
 
 ```sh
 uv tool install --python 3.12 \
-  'hypertrial-mentat @ git+https://github.com/hypertrial/mentat.git@v0.1.1'
+  'hypertrial-mentat @ git+https://github.com/hypertrial/mentat.git@v0.1.2'
 export PATH="$(uv tool dir --bin):$PATH"
 mentat --version
 ```
@@ -18,7 +18,7 @@ mentat --version
 For the walkthroughs, clone the same tag to get the example scripts.
 
 ```sh
-git clone --branch v0.1.1 https://github.com/hypertrial/mentat.git
+git clone --branch v0.1.2 https://github.com/hypertrial/mentat.git
 cd mentat
 ```
 
@@ -26,7 +26,7 @@ If your internal Hypertrial Mentat install used the old `mentat` distribution
 name, remove that tool with `uv tool uninstall mentat` first. Verify the new
 contract digest and reapprove it when the verifier fingerprint changes.
 
-The v0.1.1 release checks target Linux x86-64 and Apple Silicon macOS. Docker is
+The v0.1.2 release checks target Linux x86-64 and Apple Silicon macOS. Docker is
 the default runner. The clamp quickstart uses the opt-in host runner with Git
 and a POSIX shell. Host behavior checks and Lean run with your local
 permissions. Use trusted code and see the [runner setup](docs/contracts.md#runners).

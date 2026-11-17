@@ -1,14 +1,17 @@
 import hashlib
 import json
 import os
+import resource
 import shutil
 import subprocess
+import sys
+import time
 from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
 
-from mentat import cli
+from mentat import cli, project_formal
 
 ROOT = Path(__file__).resolve().parents[1]
 EXAMPLE = ROOT / "examples/iceberg-go"
@@ -21,6 +24,55 @@ CASES = {
     for partial in ("false", "true")
     for filtered in ("false", "true")
 }
+
+
+def trace_formal_runs(monkeypatch):
+    trace_path = os.environ.get("MENTAT_ICEBERG_FORMAL_TRACE")
+    if trace_path is None:
+        return
+    original = project_formal._run
+
+    def traced(*args, **kwargs):
+        try:
+            started = time.monotonic()
+            before = resource.getrusage(resource.RUSAGE_CHILDREN)
+            load_before = os.getloadavg()
+        except Exception:
+            started = before = load_before = None
+        status, returncode = "error", None
+        try:
+            result = original(*args, **kwargs)
+            status = "returncode"
+            try:
+                returncode = result.returncode
+            except Exception:
+                pass
+            return result
+        except subprocess.TimeoutExpired:
+            status = "timeout"
+            raise
+        finally:
+            try:
+                after = resource.getrusage(resource.RUSAGE_CHILDREN)
+                argv = [Path(str(arg)).name[:120] for arg in args[0]]
+                phase = next((name for name in argv if name in ("Audit.lean", "Model.lean")), argv[0])
+                record = {
+                    "phase": phase, "argv_basenames": argv, "status": status,
+                    "returncode": returncode, "elapsed_seconds": time.monotonic() - started if started is not None else None,
+                    "load_start": load_before, "load_end": os.getloadavg(),
+                    "rusage_scope": "process-wide cumulative children; deltas may include other children",
+                    "maxrss_scope": "process-wide children high-water mark",
+                    "maxrss_units": "bytes" if sys.platform == "darwin" else "KiB",
+                    "maxrss_end": after.ru_maxrss,
+                    "user_cpu_seconds_delta": after.ru_utime - before.ru_utime if before else None,
+                    "system_cpu_seconds_delta": after.ru_stime - before.ru_stime if before else None,
+                }
+                with open(trace_path, "a", encoding="utf-8") as stream:
+                    stream.write(json.dumps(record) + "\n")
+            except Exception:
+                pass
+
+    monkeypatch.setattr(project_formal, "_run", traced)
 
 
 def test_setup_refuses_existing_destinations(tmp_path):
@@ -54,6 +106,8 @@ def test_iceberg_fresh_checkout_replay(tmp_path, monkeypatch):
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(config))
     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
     monkeypatch.setattr(cli, "operator_confirm", lambda _: None)
+    # The external host_reproduce subprocess is outside this in-process trace.
+    trace_formal_runs(monkeypatch)
     runner = CliRunner()
 
     def command(*args, cwd=None, expected=0):
@@ -308,3 +362,94 @@ def test_native_limits_unbounded_go_output(tmp_path):
     assert witness["cases"] == {}
     raw = tmp_path / "artifacts with spaces" / "native-observations.json"
     assert raw.stat().st_size < 200_000
+
+
+def test_formal_trace_preserves_result_and_arguments(tmp_path, monkeypatch):
+    trace = tmp_path / "formal trace.jsonl"
+    monkeypatch.setenv("MENTAT_ICEBERG_FORMAL_TRACE", str(trace))
+    result = subprocess.CompletedProcess(["lean"], 7, "out", "err")
+    calls = []
+
+    def original(*args, **kwargs):
+        calls.append((args, kwargs))
+        return result
+
+    monkeypatch.setattr(project_formal, "_run", original)
+    trace_formal_runs(monkeypatch)
+    argv = ["/tools/lean", "/tmp/session/Audit.lean"]
+    kwargs = {"input": "private input", "cwd": tmp_path, "timeout": 15, "env": {"SECRET": "value"}}
+    assert project_formal._run(argv, **kwargs) is result
+    assert calls == [((argv,), kwargs)]
+    record = json.loads(trace.read_text())
+    assert (record["phase"], record["argv_basenames"], record["status"], record["returncode"]) == (
+        "Audit.lean", ["lean", "Audit.lean"], "returncode", 7
+    )
+    assert record["elapsed_seconds"] >= 0
+    assert record["maxrss_units"] in {"bytes", "KiB"}
+    assert len(record["load_start"]) == len(record["load_end"]) == 3
+    assert "SECRET" not in trace.read_text() and "private input" not in trace.read_text()
+
+
+def test_formal_trace_preserves_timeout_and_appends(tmp_path, monkeypatch):
+    trace = tmp_path / "trace.jsonl"
+    monkeypatch.setenv("MENTAT_ICEBERG_FORMAL_TRACE", str(trace))
+    timeout = subprocess.TimeoutExpired(["lean"], 15)
+    def original(*args, **kwargs):
+        raise timeout
+    monkeypatch.setattr(project_formal, "_run", original)
+    trace_formal_runs(monkeypatch)
+    for _ in range(2):
+        with pytest.raises(subprocess.TimeoutExpired) as caught:
+            project_formal._run(["/bin/lean", "--deps"], timeout=15)
+        assert caught.value is timeout
+    records = [json.loads(line) for line in trace.read_text().splitlines()]
+    assert [record["status"] for record in records] == ["timeout", "timeout"]
+
+
+@pytest.mark.parametrize("failure", [False, True])
+def test_formal_trace_write_failure_does_not_mask_outcome(tmp_path, monkeypatch, failure):
+    monkeypatch.setenv("MENTAT_ICEBERG_FORMAL_TRACE", str(tmp_path / "absent" / "trace"))
+    result = subprocess.CompletedProcess(["lean"], 0)
+    error = ValueError("original")
+    def original(*args, **kwargs):
+        if failure:
+            raise error
+        return result
+    monkeypatch.setattr(project_formal, "_run", original)
+    trace_formal_runs(monkeypatch)
+    if failure:
+        with pytest.raises(ValueError) as caught:
+            project_formal._run(["lean"])
+        assert caught.value is error
+    else:
+        assert project_formal._run(["lean"]) is result
+
+
+def test_formal_trace_unset_leaves_runner_unchanged(monkeypatch):
+    monkeypatch.delenv("MENTAT_ICEBERG_FORMAL_TRACE", raising=False)
+    original = project_formal._run
+    trace_formal_runs(monkeypatch)
+    assert project_formal._run is original
+
+
+def test_formal_trace_logs_error_without_changing_exception(tmp_path, monkeypatch):
+    trace = tmp_path / "trace.jsonl"
+    monkeypatch.setenv("MENTAT_ICEBERG_FORMAL_TRACE", str(trace))
+    error = OSError("original")
+    def original(*args, **kwargs):
+        raise error
+    monkeypatch.setattr(project_formal, "_run", original)
+    trace_formal_runs(monkeypatch)
+    with pytest.raises(OSError) as caught:
+        project_formal._run(["lean"])
+    assert caught.value is error
+    assert json.loads(trace.read_text())["status"] == "error"
+
+
+def test_formal_trace_collection_failure_does_not_mask_result(monkeypatch, tmp_path):
+    monkeypatch.setenv("MENTAT_ICEBERG_FORMAL_TRACE", str(tmp_path / "trace"))
+    result = subprocess.CompletedProcess(["lean"], 0)
+    monkeypatch.setattr(project_formal, "_run", lambda *args, **kwargs: result)
+    monkeypatch.setattr(resource, "getrusage", lambda *_: (_ for _ in ()).throw(OSError("unavailable")))
+    trace_formal_runs(monkeypatch)
+    assert project_formal._run(["lean"]) is result

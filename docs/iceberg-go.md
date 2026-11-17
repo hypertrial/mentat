@@ -77,7 +77,8 @@ It binds sibling module/build cache paths into the reviewed contract before
 committing the base. Review the contract, the Go probe, the Python launcher,
 both formal sources, and the pinned candidate source before approval. These
 are trusted host checks and use your local permissions. Lean elaboration also
-runs on the host.
+runs on the host. Use v0.1.2 for the hardened compiled-model audit, and approve
+the newly displayed verifier-bound digest; older approvals are not reused.
 
 ```sh
 DIGEST='paste the reviewed contract digest'

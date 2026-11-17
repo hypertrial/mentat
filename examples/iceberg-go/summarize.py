@@ -269,8 +269,8 @@ def main():
             "fixed": fixed_summary,
             "evidence": {
                 "bundle_file": BUNDLE,
-                "walkthrough_url": "https://github.com/hypertrial/mentat/blob/v0.1.1/docs/iceberg-go.md",
-                "download_url": "https://github.com/hypertrial/mentat/releases/download/v0.1.1/iceberg-go-compaction-evidence.tar.gz",
+                "walkthrough_url": "https://github.com/hypertrial/mentat/blob/v0.1.2/docs/iceberg-go.md",
+                "download_url": "https://github.com/hypertrial/mentat/releases/download/v0.1.2/iceberg-go-compaction-evidence.tar.gz",
             },
         }
         out.mkdir()

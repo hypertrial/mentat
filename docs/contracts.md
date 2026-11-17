@@ -151,6 +151,8 @@ Use `--docker-context NAME` before the command to override the environment. Supp
 
 Mentat accepts regular Git blobs with executable bits preserved. Candidate snapshots also preserve relative symlinks that resolve entirely within the selected tree to a tracked regular file. Link targets and all intermediate directories are validated against the committed tree before staging; absolute, escaping, chained, missing, directory, or excluded `.mentat` targets are rejected. Case and Unicode aliases that could redirect a staged path are rejected. Approved contract inputs and `base_files` must remain regular files. Unsupported symlinks, submodules, and unresolved Git LFS pointers yield incomplete results. Limits per loaded tree are 4,096 files, 1 MB per file, and 32 MB total. The candidate snapshot skips the root `.mentat` entry before traversal, so its contents do not count toward these limits. Selected paths retain their spelling from the Git tree. The snapshot excludes Git metadata and uncommitted files.
 
+Lean source compilation still executes reviewed code with host permissions. The axiom audit runs a separate trusted driver, loads the compiled model without its environment extensions, and inspects the checked theorem and its transitive axiom dependencies. Model-defined commands cannot replace that audit. Existing approvals must be renewed when the verifier fingerprint changes.
+
 ## Review, verify, and accept
 
 1. Run `mentat spec check --repo "$REPO" --base "$BASE"`. Review the manifest and supporting files at that commit, then approve the displayed digest with `mentat spec approve DIGEST --repo "$REPO" --base "$BASE"`.
