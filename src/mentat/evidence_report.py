@@ -55,11 +55,11 @@ def claim_summary(groups: list[tuple[str, list[dict]]]) -> str:
 
 
 def _artifact_links(check: dict) -> list[str]:
-    refs = {stream: check[stream] for stream in ("stdout", "stderr") if stream in check}
-    refs.update(check.get("artifacts", {}))
+    refs = [(stream, check[stream]) for stream in ("stdout", "stderr") if stream in check]
+    refs.extend(check.get("artifacts", {}).items())
     return [
         f"[{_inline_prose(label)}](./{quote(filename, safe='')})"
-        for label, filename in refs.items()
+        for label, filename in refs
         if filename not in {".", ".."} and "/" not in filename and "\\" not in filename
     ]
 
@@ -85,6 +85,11 @@ def _check_lines(check: dict, label: str) -> list[str]:
         if len(value) > 512:
             value = value[:512] + "…"
         lines.append(f"  - {key.capitalize()} {_code_span(value)}")
+    if "command_status" in check:
+        lines.append(f"  - Command · {check['command_status']} · exit {check['exit_code']}")
+    cases = check.get("case_results", {})
+    for case in check.get("required_cases", sorted(cases)):
+        lines.append(f"  - Case {_code_span(case)} · {cases.get(case, 'missing')}")
     if links := _artifact_links(check):
         lines.append("  - " + " · ".join(links))
     return lines
@@ -137,4 +142,11 @@ def project_report(record: dict) -> list[str]:
                 lines.extend(_check_lines(check, f"Formal ({check['kind']})"))
             for check in claim["behavior"]:
                 lines.extend(_check_lines(check, "Behavior"))
+                if control := check.get("negative_control"):
+                    outcome = "qualified" if control.get("qualified") else "did not qualify"
+                    lines.extend(
+                        _check_lines(
+                            {**control, "id": check["id"]}, f"Negative control ({outcome})"
+                        )
+                    )
     return lines

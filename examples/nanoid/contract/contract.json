@@ -48,7 +48,13 @@
       "timeout_seconds": 30,
       "artifacts": [
         "witness.json"
-      ]
+      ],
+      "negative_control": {
+        "args": [
+          "--negative-control"
+        ],
+        "violation_exit_code": 1
+      }
     },
     {
       "id": "cli-size-native",
@@ -57,11 +63,36 @@
         "node",
         "{checks}/check-native.mjs"
       ],
-      "violation_exit_codes": [10],
-      "timeout_seconds": 30
+      "violation_exit_codes": [
+        10
+      ],
+      "timeout_seconds": 30,
+      "artifacts": [
+        "case-report.json"
+      ],
+      "case_report": {
+        "artifact": "case-report.json",
+        "required_cases": [
+          "prints unique ID",
+          "uses size",
+          "uses alphabet",
+          "shows an error on unknown argument",
+          "shows an error if size is not a number",
+          "requires error if size is a negative number",
+          "rejects non-integer size 0.5",
+          "rejects non-integer size 1.5",
+          "rejects non-integer size Infinity",
+          "displays help",
+          "displays version"
+        ]
+      }
     }
   ],
-  "host_requirements": {"executables": ["node"]},
+  "host_requirements": {
+    "executables": [
+      "node"
+    ]
+  },
   "allow_host": true,
   "base_files": [
     "test/bin.test.js"

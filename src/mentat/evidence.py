@@ -204,6 +204,25 @@ def read_run(state: Path, run_id: str) -> tuple[Path, dict]:
     return bundle, record
 
 
+def _check_evidence(check: dict, artifacts: dict) -> dict:
+    paths = dict(check.get("artifacts", {}))
+    logs = {stream: check[stream] for stream in ("stdout", "stderr") if stream in check}
+    if (set(paths.values()) | set(logs.values())) - artifacts.keys():
+        raise ValueError("Saved check references files outside its evidence manifest")
+    result = {
+        "status": check["status"],
+        "detail": check["detail"],
+        "artifacts": paths,
+        "logs": logs,
+    }
+    if "command_status" in check:
+        result.update(command_status=check["command_status"], exit_code=check["exit_code"])
+    for key in ("case_results", "required_cases", "qualified"):
+        if key in check:
+            result[key] = check[key]
+    return result
+
+
 def _checks_by_id(record: dict) -> dict[tuple[str, str], dict]:
     result = {}
     for kind, checks in (
@@ -214,17 +233,15 @@ def _checks_by_id(record: dict) -> dict[tuple[str, str], dict]:
             key = kind, check["id"]
             if key in result or check["status"] not in STATUSES:
                 raise ValueError("Invalid saved check results")
-            paths = dict(check.get("artifacts", {}))
-            logs = {stream: check[stream] for stream in ("stdout", "stderr") if stream in check}
-            if (set(paths.values()) | set(logs.values())) - record["artifacts"].keys():
-                raise ValueError("Saved check references files outside its evidence manifest")
+            artifact_index = record["artifacts"]
             result[key] = {
                 "claim": check["claim"],
-                "status": check["status"],
-                "detail": check["detail"],
-                "artifacts": paths,
-                "logs": logs,
+                **_check_evidence(check, artifact_index),
             }
+            if "negative_control" in check:
+                result[key]["negative_control"] = _check_evidence(
+                    check["negative_control"], artifact_index
+                )
     if record["behavior_skipped"]:
         for check in record.get("behavior_checks", []):
             key = "behavior", check["id"]

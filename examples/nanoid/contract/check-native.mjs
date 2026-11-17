@@ -1,4 +1,4 @@
-import { copyFile, mkdir, mkdtemp, rm, symlink } from 'node:fs/promises'
+import { copyFile, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 
 const names = [
@@ -9,6 +9,16 @@ const names = [
   'displays help', 'displays version'
 ]
 const violations = new Set(names.slice(6, 9))
+function caseOutcome(event) {
+  if (!event) return 'error'
+  if (event.data.skip || event.data.todo) return 'skip'
+  if (event.type === 'test:pass') return 'pass'
+  const error = event.data.details.error
+  return violations.has(event.data.name) && error?.failureType === 'testCodeFailure' &&
+    error.cause?.code === 'ERR_ASSERTION' && error.cause?.message === 'Missing expected rejection.'
+    ? 'fail' : 'error'
+}
+
 const results = new Map()
 let directory
 let summary
@@ -44,13 +54,7 @@ try {
   }
   for (const event of results.values()) {
     if (event.data.skip || event.data.todo) throw new Error('skipped or todo test')
-    if (event.type === 'test:fail') {
-      const error = event.data.details.error
-      if (!violations.has(event.data.name) || error?.failureType !== 'testCodeFailure' ||
-          error.cause?.code !== 'ERR_ASSERTION' || error.cause?.message !== 'Missing expected rejection.') {
-        throw new Error(`unexpected failure: ${event.data.name}`)
-      }
-    }
+    if (caseOutcome(event) === 'error') throw new Error(`unexpected failure: ${event.data.name}`)
   }
 } catch (error) {
   problem = error.message
@@ -60,6 +64,11 @@ try {
   }
 }
 const failures = [...results.values()].filter(event => event.type === 'test:fail').map(event => event.data.name)
+const cases = Object.fromEntries(names.map(name => [name, caseOutcome(results.get(name))]))
+await writeFile(
+  join(process.env.MENTAT_ARTIFACTS_DIR, 'case-report.json'),
+  JSON.stringify({ schema_version: 1, cases }) + '\n'
+)
 const outcome = problem ? 'incomplete' : failures.length ? 'violation' : 'pass'
 console.log(JSON.stringify({ node: process.version, passed: results.size - failures.length, failed: failures.length, failures, outcome, ...(problem && { error: problem }) }))
 // Node can exit 1 before the tests run, so the contract reserves 10 for violations.

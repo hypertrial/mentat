@@ -12,7 +12,7 @@ Create `.mentat/contract.json` and commit it along with the approved models and 
 | `claims` | Entries with unique `id`, human-readable `statement`, and optional `assumptions`. |
 | `review` | Optional reviewer-facing overview, scope limits, example links, and capability groups. Requires a short `title` on each claim. |
 | `formal` | Entries with `id`, `claim`, `engine`, and the relative `source` file. |
-| `behavior` | Entries with `id`, `claim`, and `argv`. Optional `timeout_seconds` defaults to 60 and supports 1–600. Optional `violation_exit_codes` defaults to `[1]` and supports 1–124. Optional `artifacts` lists flat output filenames. Optional `selectors` is a list of arguments expanded at a standalone `{selectors}` element in `argv`. |
+| `behavior` | Entries with `id`, `claim`, and `argv`. Optional `timeout_seconds` defaults to 60 and supports 1–600. Optional `violation_exit_codes` defaults to `[1]` and supports 1–124. Optional `artifacts` lists flat output filenames. Optional `selectors` is a list of arguments expanded at a standalone `{selectors}` element in `argv`. See [named cases and negative controls](#named-cases-and-negative-controls) for the optional evidence settings. |
 | `docker_image` | Prepared OCI image reference in the form `repository@sha256:<digest>`. Omit for a host-only contract with `allow_host: true`. |
 | `allow_host` | Boolean. Defaults to `false`. |
 | `base_files` | Optional list of tracked file paths outside `.mentat/` to load from the base commit. |
@@ -38,6 +38,31 @@ A behavior check may declare `selectors` and a single standalone `{selectors}` a
 For host checks, `host_requirements` can list executable names or absolute paths in `executables` and installed Python distribution names in `python_distributions`. Set `loopback` to `true` when a check needs to bind an IPv4 loopback listener. Mentat reports availability and treats missing declared prerequisites as incomplete. It inspects Python distribution metadata with the `python3` found on the runner's effective `PATH`.
 
 Compare two contracts that support the selected runner with `--base "$NEW_BASE" --against "$OLD_BASE"` on `spec check` and `spec approve`. The displayed Git diff command reads the original commit objects, matching the inputs Mentat reviewed. Review the comparison and the new contract before approving its digest. Both the local and Notion Claims Specs display declared behavior selectors. The grouped layout lists them in a verification appendix.
+
+### Named cases and negative controls
+
+Set `case_report` on a behavior check to require evidence for exact native cases. Use
+`{"artifact":"cases.json","required_cases":["case A","case B"]}` and list the filename in `artifacts`.
+The reviewed launcher writes a JSON object to that file in `MENTAT_ARTIFACTS_DIR`:
+
+```json
+{"schema_version":1,"cases":{"case A":"pass","case B":"fail"}}
+```
+
+Give every required case exactly one result. Valid case statuses are `pass`, `fail`, `skip`, and `error`.
+A passing command requires all cases to pass. A violation exit requires at least one failed case and
+a conclusive result for every case. Missing or invalid evidence, skips, errors, or disagreement with
+the process exit make the check incomplete. The report shows the process outcome, available case
+results, and the raw artifact. Use an approved launcher to identify assertions and report execution
+or collection errors distinctly. A case report carries the same trust as its approved launcher and runner.
+
+To exercise an assertion against a known-bad input or observation, add
+`"negative_control":{"args":["--negative-control"],"violation_exit_code":10}`. The exit code
+must already be in `violation_exit_codes`. Mentat appends the approved arguments and starts the same
+launcher in a fresh stage with the same runner and timeout, after the primary check passes. If the
+check requires a case report, add `failing_case` with the one expected failed case. The other cases
+must pass. A control that fails to demonstrate the expected violation makes the check incomplete.
+The primary and control share the run output limit and have separate evidence files.
 
 ## Claims Spec
 

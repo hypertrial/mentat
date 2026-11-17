@@ -170,6 +170,27 @@ class Formal(_Model):
         return self
 
 
+class CaseReport(_Model):
+    artifact: str
+    required_cases: list[str] = Field(min_length=1, max_length=128)
+
+    @field_validator("required_cases")
+    @classmethod
+    def case_ids(cls, value):
+        if len(set(value)) != len(value) or any(
+            not item or len(item) > 256 or any(unicodedata.category(c) == "Cc" for c in item)
+            for item in value
+        ):
+            raise ValueError("case IDs must be distinct nonempty strings")
+        return value
+
+
+class NegativeControl(_Model):
+    args: list[str] = Field(min_length=1, max_length=128)
+    violation_exit_code: int = Field(ge=1, le=124)
+    failing_case: str | None = None
+
+
 class Behavior(_Model):
     id: str
     claim: str
@@ -180,9 +201,24 @@ class Behavior(_Model):
     )
     artifacts: list[str] = Field(default_factory=list, max_length=128)
     selectors: list[str] | None = Field(default=None, max_length=128)
+    case_report: CaseReport | None = None
+    negative_control: NegativeControl | None = None
 
     @model_validator(mode="after")
     def selector_arguments(self):
+        if self.case_report and self.case_report.artifact not in self.artifacts:
+            raise ValueError("case report must be a declared artifact")
+        if self.negative_control:
+            control = self.negative_control
+            if control.violation_exit_code not in self.violation_exit_codes:
+                raise ValueError("negative control exit code must be a violation exit code")
+            if self.case_report:
+                if control.failing_case not in self.case_report.required_cases:
+                    raise ValueError("negative control must name a required failing case")
+            elif control.failing_case is not None:
+                raise ValueError("negative control failing case requires a case report")
+            if "{selectors}" in control.args:
+                raise ValueError("negative control arguments cannot reference staged paths")
         if self.selectors is None:
             return self
         if self.argv.count("{selectors}") != 1:
@@ -620,7 +656,7 @@ def load_project(repo: Path, base: str, runner: str) -> Project:
         argv = check.effective_argv()
         if not argv or not argv[0]:
             raise ValueError("behavior command must not be empty")
-        for arg in argv:
+        for arg in [*argv, *(check.negative_control.args if check.negative_control else [])]:
             if len(arg) > 4096 or "\x00" in arg:
                 raise ValueError("invalid behavior argument")
             if (

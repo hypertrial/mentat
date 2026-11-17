@@ -60,14 +60,14 @@ mentat --state "$STATE" evidence compare "$FAILED_RUN" "$PASSING_RUN"
 
 The Z3 model should pass on both revisions. Both CLI checks should move from violation to pass. Exit `2` from verification means the run is incomplete and should be investigated before continuing. Use `--json` on the comparison for machine-readable results.
 
-The native test check uses the fixed revision’s exact `test/bin.test.js` through [approved base files](contracts.md#approved-base-files-and-selectors). Its launcher stages the approved test where it can invoke the candidate’s CLI. The Node version, totals, and failed test names are recorded in the check log.
+The native test check uses the fixed revision’s exact `test/bin.test.js` through [approved base files](contracts.md#approved-base-files-and-selectors). Its launcher stages the approved test where it can invoke the candidate’s CLI. The Node version, totals, and failed test names are recorded in the check log. The approved case report records all 11 exact case IDs and their outcomes. Read the exported report under claim `cli.size` to see each case, the custom observation, and the Z3 model result.
 
 | Candidate | Own upstream CLI tests | Approved fixed CLI tests |
 | --- | ---: | ---: |
 | Parent `3167e10` | 8 passed | 8 passed, 3 failed |
 | Fix `58193a1` | 11 passed | 11 passed |
 
-The custom check also observes the exact CLI exit status, stderr, and output shape. Its witness records the input, exit status, stderr, and stdout length without storing the random ID characters. A request for seven characters serves as a positive control.
+The custom check also observes the exact CLI exit status, stderr, and output shape. Its witness records the input, exit status, stderr, and stdout length without storing the random ID characters. A request for seven characters serves as a positive control. When the primary check passes, the negative control feeds a known-bad fractional-size observation through the same matcher. The separate control evidence records whether the matcher caught it.
 
 ```sh
 mentat --state "$STATE" evidence export "$FAILED_RUN" --out "$PILOT/before"

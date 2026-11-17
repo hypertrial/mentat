@@ -21,6 +21,7 @@ import unicodedata
 from pathlib import Path, PurePosixPath
 
 from .colima import validate_colima
+from .evidence import decode_json
 from .project import CHECKS_PREFIX
 
 _MAX_OUTPUT = 1024 * 1024
@@ -409,25 +410,9 @@ def run_behavior(project, snapshot, context, info, run_id) -> tuple[list[dict], 
     ]
     if prerequisites.get("loopback") and prerequisites["loopback"]["status"] != "available":
         missing.append("loopback")
-    for index, check in enumerate(project.contract.behavior, start=1):
-        prefix = f"check-{index:03d}"
-        result = {
-            "id": check.id,
-            "claim": check.claim,
-            "status": "incomplete",
-            "detail": "Check did not complete",
-            "exit_code": None,
-        }
-        results.append(result)
-        if project.runner == "host":
-            if missing:
-                result["detail"] = "Missing host prerequisites. Run mentat doctor for details."
-                continue
-            command = check.effective_argv()[0]
-            executable = info["executables"].get(command)
-            if executable and executable["status"] == "missing":
-                result["detail"] = f"Host executable not found: {command!r}"
-                continue
+
+    def phase(check, result, prefix, args):
+        nonlocal remaining
         name = "mentat-" + secrets.token_hex(16)
         created = False
         try:
@@ -450,13 +435,13 @@ def run_behavior(project, snapshot, context, info, run_id) -> tuple[list[dict], 
                         "MENTAT_CHECKS_DIR": str(checks),
                         "MENTAT_ARTIFACTS_DIR": str(artifacts),
                     }
-                    argv = _arguments(check.effective_argv(), str(checks))
+                    argv = _arguments([*check.effective_argv(), *args], str(checks))
                     code, stdout, stderr = _process(
                         argv, cwd=candidate, env=env, timeout=check.timeout_seconds
                     )
                     oom = False
                 else:
-                    argv = _arguments(check.effective_argv(), "/mentat/checks")
+                    argv = _arguments([*check.effective_argv(), *args], "/mentat/checks")
                     command = [
                         "create",
                         "--name",
@@ -539,23 +524,14 @@ def run_behavior(project, snapshot, context, info, run_id) -> tuple[list[dict], 
                     result.update(status="violation", detail="Check reported a violation")
                 else:
                     result["detail"] = "Check exited unexpectedly"
-                for suffix, data in (("stdout", stdout), ("stderr", stderr)):
-                    if data:
-                        if len(data) > remaining:
-                            result.setdefault("log_omissions", []).append(suffix)
-                            continue
-                        key = f"{prefix}.{suffix}.log"
-                        files[key] = data
-                        result[suffix] = key
-                        remaining -= len(data)
-                for number, artifact in enumerate(check.artifacts, start=1):
+                if check.case_report or check.negative_control:
+                    result["command_status"] = result["status"]
+
+                def collect_artifact(number, artifact):
+                    nonlocal remaining
                     try:
                         if remaining == 0:
                             raise ValueError("run output limit reached")
-                        if not re.fullmatch(
-                            r"[A-Za-z0-9_][A-Za-z0-9_.-]*", artifact
-                        ) or artifact in (".", ".."):
-                            raise ValueError("artifact name must be flat")
                         data = (
                             _artifact(artifacts / artifact)
                             if project.runner == "host"
@@ -567,8 +543,64 @@ def run_behavior(project, snapshot, context, info, run_id) -> tuple[list[dict], 
                         files[key] = data
                         result.setdefault("artifacts", {})[artifact] = key
                         remaining -= len(data)
+                        return data
                     except (OSError, ValueError, RuntimeError, tarfile.TarError):
                         result.setdefault("artifact_omissions", []).append(artifact)
+                        return None
+
+                report_data = None
+                if check.case_report:
+                    number = check.artifacts.index(check.case_report.artifact) + 1
+                    report_data = collect_artifact(number, check.case_report.artifact)
+                if check.case_report:
+                    try:
+                        report = decode_json(report_data) if report_data is not None else None
+                        if isinstance(report, dict) and isinstance(report.get("cases"), dict):
+                            result["case_results"] = {
+                                case: value
+                                for case, value in report["cases"].items()
+                                if case in check.case_report.required_cases
+                                and isinstance(value, str)
+                                and value in ("pass", "fail", "skip", "error")
+                            }
+                        if (
+                            not isinstance(report, dict)
+                            or set(report) != {"schema_version", "cases"}
+                            or type(report["schema_version"]) is not int
+                            or report["schema_version"] != 1
+                            or not isinstance(report["cases"], dict)
+                            or set(report["cases"]) != set(check.case_report.required_cases)
+                            or any(
+                                value not in ("pass", "fail", "skip", "error")
+                                for value in report["cases"].values()
+                            )
+                        ):
+                            raise ValueError("invalid case report")
+                        result["case_results"] = report["cases"]
+                        outcomes = set(report["cases"].values())
+                        if (
+                            outcomes & {"skip", "error"}
+                            or (result["status"] == "pass" and "fail" in outcomes)
+                            or (result["status"] == "violation" and "fail" not in outcomes)
+                        ):
+                            result.update(
+                                status="incomplete",
+                                detail="Case report is inconclusive or contradicts exit code",
+                            )
+                    except (ValueError, TypeError, UnicodeError):
+                        result.update(status="incomplete", detail="Missing or invalid case report")
+                for suffix, data in (("stdout", stdout), ("stderr", stderr)):
+                    if data:
+                        if len(data) > remaining:
+                            result.setdefault("log_omissions", []).append(suffix)
+                            continue
+                        key = f"{prefix}.{suffix}.log"
+                        files[key] = data
+                        result[suffix] = key
+                        remaining -= len(data)
+                for number, artifact in enumerate(check.artifacts, start=1):
+                    if not check.case_report or artifact != check.case_report.artifact:
+                        collect_artifact(number, artifact)
 
         except (
             OSError,
@@ -592,4 +624,55 @@ def run_behavior(project, snapshot, context, info, run_id) -> tuple[list[dict], 
                         status="incomplete",
                         detail=f"{result['detail']}. Container cleanup failed ({name})",
                     )
+
+    for index, check in enumerate(project.contract.behavior, start=1):
+        prefix = f"check-{index:03d}"
+        result = {
+            "id": check.id,
+            "claim": check.claim,
+            "status": "incomplete",
+            "detail": "Check did not complete",
+            "exit_code": None,
+        }
+        if check.case_report or check.negative_control:
+            result["command_status"] = "incomplete"
+        results.append(result)
+        if check.case_report:
+            result["required_cases"] = check.case_report.required_cases
+        if project.runner == "host":
+            if missing:
+                result["detail"] = "Missing host prerequisites. Run mentat doctor for details."
+                continue
+            command = check.effective_argv()[0]
+            executable = info["executables"].get(command)
+            if executable and executable["status"] == "missing":
+                result["detail"] = f"Host executable not found: {command!r}"
+                continue
+        phase(check, result, prefix, [])
+        if check.negative_control and result["status"] == "pass":
+            control = {
+                "status": "incomplete",
+                "detail": "Check did not complete",
+                "exit_code": None,
+            }
+            control["command_status"] = "incomplete"
+            if check.case_report:
+                control["required_cases"] = check.case_report.required_cases
+            result["negative_control"] = control
+            phase(check, control, prefix + ".negative-control", check.negative_control.args)
+            expected = (
+                control["status"] == "violation"
+                and control["exit_code"] == check.negative_control.violation_exit_code
+            )
+            if check.case_report and expected:
+                expected = all(
+                    value == ("fail" if case == check.negative_control.failing_case else "pass")
+                    for case, value in control["case_results"].items()
+                )
+            control["qualified"] = expected
+            if not expected:
+                result.update(
+                    status="incomplete",
+                    detail="Negative control did not demonstrate the expected violation",
+                )
     return results, files

@@ -109,6 +109,15 @@ def test_nanoid_fresh_checkout_replay(tmp_path, monkeypatch):
         name = check(record, "cli-size-native")["stdout"]
         return json.loads((Path(record["bundle"]) / name).read_text())
 
+    assert "negative_control" not in check(before, "cli-size-replay")
+    control = check(after, "cli-size-replay")["negative_control"]
+    assert (control["status"], control["exit_code"]) == ("violation", 1)
+    assert control["qualified"] is True
+    control_witness = json.loads(
+        (Path(after["bundle"]) / control["artifacts"]["witness.json"]).read_text()
+    )
+    assert [row["input"] for row in control_witness if row.get("synthetic")] == ["0.5"]
+    assert not any(row.get("synthetic") for row in json.loads(witness(after)[1]))
     old_native, new_native = native(before), native(after)
     assert check(before, "cli-size-native")["exit_code"] == 10
     node_version = command("node", "--version")
@@ -119,6 +128,21 @@ def test_nanoid_fresh_checkout_replay(tmp_path, monkeypatch):
         "violation",
     )
     assert (new_native["passed"], new_native["failed"], new_native["outcome"]) == (11, 0, "pass")
+    contract = json.loads((ROOT / "examples/nanoid/contract/contract.json").read_text())
+    native_contract = next(item for item in contract["behavior"] if item["id"] == "cli-size-native")
+    case_spec = native_contract["case_report"]
+    assert len(case_spec["required_cases"]) == len(set(case_spec["required_cases"])) == 11
+    for record, failed in ((before, 3), (after, 0)):
+        native_check = check(record, "cli-size-native")
+        artifact_name = native_check["artifacts"][case_spec["artifact"]]
+        data = (Path(record["bundle"]) / artifact_name).read_bytes()
+        manifest = json.loads((Path(record["bundle"]) / "manifest.json").read_text())
+        assert hashlib.sha256(data).hexdigest() == manifest["artifacts"][artifact_name]
+        case_report = json.loads(data)
+        assert case_report["schema_version"] == 1
+        assert set(case_report["cases"]) == set(case_spec["required_cases"])
+        assert list(case_report["cases"].values()).count("fail") == failed
+        assert list(case_report["cases"].values()).count("pass") == 11 - failed
     comparison = invoke(state, ["evidence", "compare", before["run_id"], after["run_id"], "--json"])
     assert comparison["status"] == "pass"
     assert comparison["before"]["run_id"] == before["run_id"]
@@ -200,4 +224,8 @@ def test_nanoid_native_launcher_rejects_incomplete_tests(tmp_path, test_source):
     )
     assert result.returncode == 2, result.stdout + result.stderr
     assert json.loads(result.stdout)["outcome"] == "incomplete"
-    assert list(artifacts.iterdir()) == []
+    assert [path.name for path in artifacts.iterdir()] == ["case-report.json"]
+    report = json.loads((artifacts / "case-report.json").read_text())
+    assert report["schema_version"] == 1
+    assert len(report["cases"]) == 11
+    assert set(report["cases"].values()) == {"error"}
