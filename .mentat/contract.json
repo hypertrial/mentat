@@ -49,6 +49,7 @@
         "claim_ids": [
           "evidence.provenance",
           "evidence.integrity",
+          "evidence.comparison",
           "acceptance.complete-pass"
         ]
       },
@@ -118,6 +119,11 @@
       "id": "evidence.integrity",
       "title": "Check the bundle before export",
       "statement": "Evidence export validates the saved manifest against its local receipt and checks the file set and artifact hashes before copying the bundle."
+    },
+    {
+      "id": "evidence.comparison",
+      "title": "Compare two saved runs by claim",
+      "statement": "Mentat compares intact saved verification runs with the same approved scope. It shows before and after results by claim, identifies skipped or incomplete checks, and reports differences in recorded tools or runner settings."
     },
     {
       "id": "acceptance.complete-pass",
@@ -274,6 +280,17 @@
         "-I",
         "{checks}/selfcheck.py",
         "evidence.integrity"
+      ],
+      "timeout_seconds": 120
+    },
+    {
+      "id": "check.evidence.comparison",
+      "claim": "evidence.comparison",
+      "argv": [
+        "python3",
+        "-I",
+        "{checks}/selfcheck.py",
+        "evidence.comparison"
       ],
       "timeout_seconds": 120
     },

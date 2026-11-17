@@ -88,7 +88,13 @@ Evidence export validates the saved manifest against its local receipt and check
 
 Claim `evidence.integrity` · Behavior `check.integrity`
 
-### 12. Accept only a complete pass
+### 12. Compare two saved runs by claim
+
+Mentat compares intact saved verification runs with the same approved scope. It shows before and after results by claim, identifies skipped or incomplete checks, and reports differences in recorded tools or runner settings.
+
+Claim `evidence.comparison` · Behavior `check.evidence.comparison`
+
+### 13. Accept only a complete pass
 
 Acceptance requires an intact passing run under the current approval and a separate operator confirmation in a terminal.
 
@@ -96,7 +102,7 @@ Claim `acceptance.complete-pass` · Behavior `check.acceptance` · Formal `accep
 
 ## Maintaining the Claims Spec
 
-### 13. Keep the local and Notion specs in sync
+### 14. Keep the local and Notion specs in sync
 
 Mentat renders the local spec deterministically and detects drift. Explicit Notion publication mirrors the committed spec in one selected page section and requires a matching local spec at that commit.
 
@@ -140,6 +146,8 @@ Check `check.evidence.provenance` · Claim `evidence.provenance`
 
 Check `check.integrity` · Claim `evidence.integrity` · Standalone check
 
+Check `check.evidence.comparison` · Claim `evidence.comparison` · Standalone check
+
 Check `check.acceptance` · Claim `acceptance.complete-pass` · Standalone check
 
 Check `check.claims.review-sync` · Claim `claims.review-sync` · Standalone check
@@ -150,4 +158,4 @@ Formal check `acceptance.eligibility` · Claim `acceptance.complete-pass` · Z3
 
 - Assumption The bounded model represents status, current approval, evidence integrity, and operator confirmation as independent eligibility gates.
 
-Inventory · 13 behavior checks · 1 formal check · 4 declared selectors
+Inventory · 14 behavior checks · 1 formal check · 4 declared selectors

@@ -16,7 +16,7 @@
       "This contract covers only the CLI size option."
     ],
     "verification_limits": [
-      "The formal check covers the numeric rule. The behavior check exercises four concrete inputs on a trusted host with Node.js 26.10.0 as the reference."
+      "The formal check covers the numeric rule. The custom behavior check exercises four concrete inputs, and the native check runs the approved upstream CLI tests on a trusted host with Node.js 26.10.0 as the reference."
     ],
     "groups": [
       {
@@ -49,8 +49,21 @@
       "artifacts": [
         "witness.json"
       ]
+    },
+    {
+      "id": "cli-size-native",
+      "claim": "cli.size",
+      "argv": [
+        "node",
+        "{checks}/check-native.mjs"
+      ],
+      "violation_exit_codes": [10],
+      "timeout_seconds": 30
     }
   ],
   "host_requirements": {"executables": ["node"]},
-  "allow_host": true
+  "allow_host": true,
+  "base_files": [
+    "test/bin.test.js"
+  ]
 }

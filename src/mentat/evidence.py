@@ -85,9 +85,10 @@ def write_record(path: Path, data: bytes) -> None:
             temporary.unlink(missing_ok=True)
 
 
-def state_directory(path: Path) -> Path:
+def state_directory(path: Path, *, create: bool = True) -> Path:
     path = path.expanduser().resolve()
-    path.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if create:
+        path.mkdir(mode=0o700, parents=True, exist_ok=True)
     stat = path.stat()
     if stat.st_uid != os.getuid() or stat.st_mode & 0o077:
         raise ValueError("Mentat state must be an operator-owned directory with mode 0700")
@@ -194,3 +195,83 @@ def read_run(state: Path, run_id: str) -> tuple[Path, dict]:
         if path.is_symlink() or not path.is_file() or digest(path.read_bytes()) != expected:
             raise ValueError(f"Evidence artifact failed its integrity check: {name}")
     return bundle, record
+
+
+def _checks_by_id(record: dict) -> dict[tuple[str, str], dict]:
+    result = {}
+    for kind, checks in (
+        ("formal", record["model_checks"]),
+        ("behavior", [check for case in record["cases"] for check in case["checks"]]),
+    ):
+        for check in checks:
+            key = kind, check["id"]
+            if key in result or check["status"] not in STATUSES:
+                raise ValueError("Invalid saved check results")
+            paths = dict(check.get("artifacts", {}))
+            logs = {stream: check[stream] for stream in ("stdout", "stderr") if stream in check}
+            if (set(paths.values()) | set(logs.values())) - record["artifacts"].keys():
+                raise ValueError("Saved check references files outside its evidence manifest")
+            result[key] = {
+                "claim": check["claim"],
+                "status": check["status"],
+                "detail": check["detail"],
+                "artifacts": paths,
+                "logs": logs,
+            }
+    if record["behavior_skipped"]:
+        for check in record.get("behavior_checks", []):
+            key = "behavior", check["id"]
+            if key in result:
+                raise ValueError("Invalid saved behavior check inventory")
+            result[key] = {"claim": check["claim"], "status": "skipped"}
+    return result
+
+
+def compare_runs(state: Path, before_id: str, after_id: str) -> dict:
+    before_path, before = read_run(state, before_id)
+    after_path, after = read_run(state, after_id)
+    if any(run.get("kind") != "project-verification" for run in (before, after)):
+        raise ValueError("Run comparison requires two project verification runs")
+    scope = ("repo", "base", "runner", "contract_digest")
+    if changed := [key for key in scope if before[key] != after[key]]:
+        raise ValueError("Run comparison requires matching scope; differs in " + ", ".join(changed))
+    if before["claims"] != after["claims"]:
+        raise ValueError("Saved claims differ under the same contract")
+
+    before_checks = _checks_by_id(before)
+    after_checks = _checks_by_id(after)
+    claims = {claim["id"]: {**claim, "checks": []} for claim in before["claims"]}
+    for kind, check_id in dict.fromkeys((*before_checks, *after_checks)):
+        left = before_checks.get((kind, check_id))
+        right = after_checks.get((kind, check_id))
+        if (left is None and not (kind == "behavior" and before["behavior_skipped"])) or (
+            right is None and not (kind == "behavior" and after["behavior_skipped"])
+        ):
+            raise ValueError(f"Saved runs contain different results for check {check_id}")
+        if left is not None and right is not None and left["claim"] != right["claim"]:
+            raise ValueError(f"Saved runs disagree on the claim for check {check_id}")
+        claim = (left or right)["claim"]
+        outcomes = {"id": check_id, "kind": kind}
+        for side, check in (("before", left), ("after", right)):
+            outcomes[side] = (
+                {key: value for key, value in check.items() if key != "claim"}
+                if check is not None
+                else {"status": "skipped"}
+            )
+        claims[claim]["checks"].append(outcomes)
+
+    result = {
+        "status": "incomplete" if "incomplete" in (before["status"], after["status"]) else "pass",
+        **{key: before[key] for key in scope},
+        "environment_changed": any(before[key] != after[key] for key in ("tools", "runtime")),
+        "claims": list(claims.values()),
+    }
+    for side, path, run in (("before", before_path, before), ("after", after_path, after)):
+        if run["status"] not in STATUSES or "report.md" not in run["artifacts"]:
+            raise ValueError("Invalid saved run outcome or missing report")
+        result[side] = {
+            **{key: run[key] for key in ("run_id", "revision", "status", "behavior_skipped")},
+            "bundle": str(path),
+            "report": str(path / "report.md"),
+        }
+    return result

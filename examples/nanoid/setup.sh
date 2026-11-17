@@ -18,7 +18,7 @@ test "$(git -C "$repo" rev-parse "$fixed^{commit}")" = "$fixed"
 test "$(git -C "$repo" rev-parse "$fixed^1")" = "$before"
 git -C "$repo" branch mentat-nanoid-before "$before"
 git -C "$repo" branch mentat-nanoid-fixed "$fixed"
-git -C "$repo" -c core.hooksPath=/dev/null switch -c mentat-nanoid-base "$fixed" >&2
+git -C "$repo" -c core.hooksPath=/dev/null switch -C mentat-nanoid-base "$fixed" >&2
 mkdir "$repo/.mentat"
 cp "$here"/contract/* "$repo/.mentat/"
 mentat claims render --repo "$repo"

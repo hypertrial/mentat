@@ -277,6 +277,35 @@ def integrity(root):
     missing.write_bytes(original)
 
 
+def comparison(root):
+    f = Fixture(root)
+    script = f.repo / ".mentat/check0.py"
+    script.write_text(
+        "from pathlib import Path\nraise SystemExit(int(Path('candidate.txt').read_text()))\n"
+    )
+    (f.repo / "candidate.txt").write_text("1")
+    base = f.commit("comparison base")
+    f.approve(base)
+    first, before = f.verify(base, base=base)
+    assert first.exit_code == 1, first.output
+    (f.repo / "candidate.txt").write_text("0")
+    fixed = f.commit("fix candidate")
+    second, after = f.verify(fixed, base=base)
+    assert second.exit_code == 0, second.output
+
+    args = "evidence", "compare", before["run_id"], after["run_id"], "--json"
+    result = f.invoke(*args)
+    assert result.exit_code == 0, result.output
+    compared = json.loads(result.output)
+    assert compared["before"]["revision"] == base and compared["after"]["revision"] == fixed
+    checks = {check["id"]: check for check in compared["claims"][0]["checks"]}
+    assert checks["model"]["before"]["status"] == checks["model"]["after"]["status"] == "pass"
+    assert checks["behavior0"]["before"]["status"] == "violation"
+    assert checks["behavior0"]["after"]["status"] == "pass"
+    Path(compared["before"]["report"]).write_text("tampered")
+    assert f.invoke(*args).exit_code == 2
+
+
 def validation(root):
     import copy
 
@@ -736,6 +765,7 @@ SCENARIOS = {
     "verification.outcomes": outcomes,
     "evidence.provenance": provenance,
     "evidence.integrity": integrity,
+    "evidence.comparison": comparison,
     "acceptance.complete-pass": acceptance,
     "claims.review-sync": review_sync,
 }

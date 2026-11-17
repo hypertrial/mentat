@@ -1,98 +1,149 @@
 # Nano ID replay pilot
 
-This example verifies a [historical Nano ID CLI fix](https://github.com/ai/nanoid/pull/618) with the same approved check on both revisions. The older CLI accepted `0.5`, `1.5`, and `Infinity` as sizes. The fixed CLI rejects them. A valid size of seven is the positive control.
+This example compares a [historical Nano ID CLI fix](https://github.com/ai/nanoid/pull/618) with its parent under one approved contract. The older CLI accepted `0.5`, `1.5`, and `Infinity` as sizes. The fixed CLI rejects them.
 
-## Set up a clean checkout
+## Set up and approve
 
-From the Mentat clone, use Git, the installed Mentat CLI, and Node.js on `PATH`. The reference run uses Node.js 26.10.0. Nano ID’s CLI and its upstream CLI test file use Node’s standard library.
+From a Mentat checkout, use Git, Python 3 and Node.js on `PATH`. The reference run uses Node.js 26.10.0. The example and its approved upstream test run without an npm install.
 
 ```sh
 uv tool install --python 3.12 .
 node --version
 
-PILOT="$PWD/.cache/nanoid-pilot"
+PILOT=$(mktemp -d "${TMPDIR:-/tmp}/mentat-nanoid.XXXXXX")
 REPO="$PILOT/nanoid"
 STATE="$PILOT/state"
-mkdir -p "$PILOT"
 ./examples/nanoid/setup.sh "$REPO"
 
 BASE=$(git -C "$REPO" rev-parse mentat-nanoid-base)
 BEFORE=$(git -C "$REPO" rev-parse mentat-nanoid-before)
 FIXED=$(git -C "$REPO" rev-parse mentat-nanoid-fixed)
-```
 
-Choose a new destination for each setup. As a second argument, the script can use an existing local Nano ID clone that contains the two upstream commits. The contract base adds the grouped Claims Spec, Z3 model, and behavior check to the fixed revision. The candidates are the original upstream commits.
-
-## Approve, verify, and replay
-
-Read the generated `.mentat/claims.md` and check the review output. The Z3 model checks the size rule after numeric parsing. The Node subprocess check observes the CLI’s actual exit status and output. The host runner uses your local permissions, so review the check and candidate source before approving.
-
-```sh
 mentat --state "$STATE" doctor --repo "$REPO" --base "$BASE" --runner host
 mentat claims check --repo "$REPO" --base "$BASE"
 mentat --state "$STATE" spec check --repo "$REPO" --base "$BASE" --runner host
-
-DIGEST='paste the contract digest'
-mentat --state "$STATE" spec approve "$DIGEST" --repo "$REPO" --base "$BASE" --runner host
-mentat --state "$STATE" verify --repo "$REPO" --base "$BASE" --rev "$BEFORE" --runner host --json
-mentat --state "$STATE" verify --repo "$REPO" --base "$BASE" --rev "$FIXED" --runner host --json
 ```
 
-The formal check should pass on both runs. The parent should report a behavior violation with exit `1`. The fix should pass with exit `0`. Treat exit `2` as an unresolved run. Copy the run IDs from the JSON output.
+The setup script accepts a local Nano ID mirror containing the pinned commits as an optional second argument. Review the displayed contract, `"$REPO/.mentat/claims.md"`, the approved test file and the candidate source. Host behavior checks use your local permissions.
 
 ```sh
-FAILED_RUN='paste the failing run ID'
-PASSING_RUN='paste the passing run ID'
+DIGEST='paste the contract digest'
+mentat --state "$STATE" spec approve "$DIGEST" --repo "$REPO" --base "$BASE" --runner host
+```
+
+## Verify and compare
+
+```sh
+verify_into() (
+    expected=$1
+    destination=$2
+    candidate=$3
+    result_code=0
+    mentat --state "$STATE" verify --repo "$REPO" --base "$BASE" \
+        --rev "$candidate" --runner host --json > "$destination" || result_code=$?
+    if [ "$result_code" -ne "$expected" ]; then
+        cat "$destination" >&2
+        return 1
+    fi
+)
+
+run_id() {
+    python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["run_id"])' "$1"
+}
+
+verify_into 1 "$PILOT/before.json" "$BEFORE" &&
+verify_into 0 "$PILOT/fixed.json" "$FIXED" &&
+FAILED_RUN=$(run_id "$PILOT/before.json") &&
+PASSING_RUN=$(run_id "$PILOT/fixed.json") &&
+mentat --state "$STATE" evidence compare "$FAILED_RUN" "$PASSING_RUN"
+```
+
+The Z3 model should pass on both revisions. Both CLI checks should move from violation to pass. Exit `2` from verification means the run is incomplete and should be investigated before continuing. Use `--json` on the comparison for machine-readable results.
+
+The native test check uses the fixed revision’s exact `test/bin.test.js` through [approved base files](contracts.md#approved-base-files-and-selectors). Its launcher stages the approved test where it can invoke the candidate’s CLI. The Node version, totals, and failed test names are recorded in the check log.
+
+| Candidate | Own upstream CLI tests | Approved fixed CLI tests |
+| --- | ---: | ---: |
+| Parent `3167e10` | 8 passed | 8 passed, 3 failed |
+| Fix `58193a1` | 11 passed | 11 passed |
+
+The custom check also observes the exact CLI exit status, stderr, and output shape. Its witness records the input, exit status, stderr, and stdout length without storing the random ID characters. A request for seven characters serves as a positive control.
+
+```sh
 mentat --state "$STATE" evidence export "$FAILED_RUN" --out "$PILOT/before"
 mentat --state "$STATE" evidence export "$PASSING_RUN" --out "$PILOT/fixed"
 ```
 
-Run the same-host replay command in `before/report.md`. It should exit `1` and return a new run ID. Export that run and compare the witnesses.
+## Replay the failure
+
+To replay on the same host, review and run the command in `"$PILOT/before/report.md"` and redirect its JSON output to `"$PILOT/replay.json"`. It should exit `1` with a new run ID.
 
 ```sh
-REPLAY_RUN='paste the replay run ID'
+REPLAY_RUN=$(run_id "$PILOT/replay.json")
 mentat --state "$STATE" evidence export "$REPLAY_RUN" --out "$PILOT/replay"
-cmp "$PILOT/before/check-001.artifact-001.witness.json" \
-    "$PILOT/replay/check-001.artifact-001.witness.json"
 ```
 
-The witness records the input, exit status, stderr, and stdout length. It excludes the random ID characters. For a fresh checkout, repeat setup with a different destination and state directory and obtain approval for the digest displayed there.
-
-## Compare with upstream tests
-
-Run the upstream CLI tests in scratch snapshots. Passing `frozen` applies the fixed commit’s exact test file to the selected candidate.
+For a fresh checkout, derive the base and candidate from that checkout’s refs. The following uses the first Nano ID checkout as a local Git source. On a second host, run the setup script from an equivalent Mentat checkout with the public default source or an available local mirror.
 
 ```sh
-run_cli_tests() (
-  work=$(mktemp -d)
-  trap 'rm -rf "$work"' 0
-  git -C "$REPO" archive "$1" > "$work/source.tar" || exit 2
-  tar -xf "$work/source.tar" -C "$work" || exit 2
-  rm "$work/source.tar" || exit 2
-  if [ "$2" = frozen ]; then
-    git -C "$REPO" show "${FIXED}:test/bin.test.js" > "$work/test/bin.test.js" || exit 2
-  fi
-  cd "$work" || exit 2
-  node --test --test-reporter=tap test/bin.test.js
-)
+SOURCE_REPO="$REPO"
+REPO="$PILOT/fresh nanoid"
+STATE="$PILOT/fresh state"
+./examples/nanoid/setup.sh "$REPO" "$SOURCE_REPO"
 
-run_cli_tests "$BEFORE" own
-run_cli_tests "$FIXED" own
-run_cli_tests "$BEFORE" frozen
-run_cli_tests "$FIXED" frozen
+BASE=$(git -C "$REPO" rev-parse mentat-nanoid-base)
+BEFORE=$(git -C "$REPO" rev-parse mentat-nanoid-before)
+mentat --state "$STATE" doctor --repo "$REPO" --base "$BASE" --runner host
+mentat claims check --repo "$REPO" --base "$BASE"
+mentat --state "$STATE" spec check --repo "$REPO" --base "$BASE" --runner host
+
+DIGEST='paste the new contract digest after reviewing the inputs'
+mentat --state "$STATE" spec approve "$DIGEST" --repo "$REPO" --base "$BASE" --runner host
+verify_into 1 "$PILOT/fresh.json" "$BEFORE" &&
+FRESH_RUN=$(run_id "$PILOT/fresh.json") &&
+mentat --state "$STATE" evidence export "$FRESH_RUN" --out "$PILOT/fresh"
 ```
 
-| Candidate | CLI tests | Passed on Node 26.10.0 | Failed on Node 26.10.0 |
-| --- | --- | ---: | ---: |
-| Parent `3167e10` | Its own tests | 8 | 0 |
-| Fix `58193a1` | Its own tests | 11 | 0 |
-| Parent `3167e10` | Fixed tests | 8 | 3 |
-| Fix `58193a1` | Fixed tests | 11 | 0 |
+The fresh checkout has its own approval, even when it is on the same machine. Use the original failure export and the replay exports to compare witnesses. If replaying elsewhere, transfer the original export you have reviewed for sharing.
 
-The fixed upstream tests already detect all three faulty results. Mentat exercises the reviewed rule with the same contract on both candidates and records the inputs, results, and replay instructions together.
+```sh
+compare_witnesses() {
+    python3 - "$@" <<'PY'
+import hashlib
+import json
+import sys
+from pathlib import Path
 
-## Verified pilot result
+reference = None
+for argument in sys.argv[1:]:
+    bundle = Path(argument)
+    manifest = json.loads((bundle / "manifest.json").read_text())
+    check = next(
+        check for case in manifest["cases"] for check in case["checks"]
+        if check["id"] == "cli-size-replay"
+    )
+    name = check["artifacts"]["witness.json"]
+    data = (bundle / name).read_bytes()
+    sha256 = hashlib.sha256(data).hexdigest()
+    if sha256 != manifest["artifacts"][name] or (reference is not None and data != reference):
+        sys.exit(f"Witness mismatch in {bundle}")
+    reference = data
+    print(sha256, bundle)
+PY
+}
 
-On Node.js 26.10.0, the Z3 check passed on both candidates. The parent returned a confirmed behavior violation for the three invalid sizes, and the fix passed all four cases. The exported failure replay reproduced the witness byte for byte, including from a separate fresh Nano ID checkout with its own approved contract. The failure witness SHA-256 was `a7eb9410234add47aaa2233719e1a38ea6e5e027aeca962231c04dd38bbdf059`.
+compare_witnesses "$PILOT/before" "$PILOT/replay" "$PILOT/fresh"
+```
 
-The independent walkthrough exposed two documentation issues. The guide now uses Git revision syntax that works in zsh and names the witness file exactly as Mentat exports it.
+On a second host with the original export copied into `"$PILOT/before"`, run `compare_witnesses "$PILOT/before" "$PILOT/fresh"`.
+
+The historical reference witness SHA-256 was `a7eb9410234add47aaa2233719e1a38ea6e5e027aeca962231c04dd38bbdf059`. The walkthrough has been verified across fresh checkouts on one machine.
+
+## Run the opt-in integration test
+
+Use a prepared local Nano ID mirror and put the reference Node version on `PATH`. The test runs the setup script twice and uses pytest’s approval seam. The regular test suite requires no Nano ID clone.
+
+```sh
+MENTAT_NANOID_SOURCE=/path/to/local/nanoid.git \
+    uv run --locked --extra polaris pytest -q tests/test_nanoid_replay.py
+```

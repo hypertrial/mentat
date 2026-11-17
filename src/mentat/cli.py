@@ -329,6 +329,9 @@ def verify(
                 for claim in project.contract.claims
             ],
             "model_checks": models,
+            "behavior_checks": [
+                {"id": check.id, "claim": check.claim} for check in project.contract.behavior
+            ],
             "behavior_skipped": not bool(cases),
             "cases": cases,
             "runtime": runtime,
@@ -372,6 +375,44 @@ def export_evidence(
         )
     except (*_USER_ERRORS, KeyError) as exc:
         _error(exc, output_json)
+
+
+@evidence_app.command("compare")
+def compare_evidence(
+    ctx: typer.Context, before_run: str, after_run: str, output_json: JsonOutput = False
+) -> None:
+    """Compare two intact verification runs under the same approved contract."""
+    try:
+        state = evidence.state_directory(ctx.obj["state"], create=False)
+        result = evidence.compare_runs(state, before_run, after_run)
+    except _USER_ERRORS as exc:
+        _error(exc, output_json)
+        return
+    except (KeyError, TypeError):
+        _error(ValueError("Invalid saved verification record"), output_json)
+        return
+    if not output_json:
+        for side in ("before", "after"):
+            run = result[side]
+            typer.echo(f"{side.title()}  {run['revision']}  {run['status']}  (run {run['run_id']})")
+            typer.echo(f"  Report  {run['report']}")
+            if run["behavior_skipped"]:
+                typer.echo("  Behavior skipped because formal checks did not pass.")
+        if result["environment_changed"]:
+            typer.echo("Recorded tools or runner metadata differ between the runs.")
+        for claim in result["claims"]:
+            typer.echo(f"Claim {claim['id']}  {claim['statement']}")
+            for check in claim["checks"]:
+                typer.echo(
+                    f"  {check['kind']} {check['id']}  "
+                    f"{check['before']['status']} -> {check['after']['status']}"
+                )
+                for side in ("before", "after"):
+                    bundle = Path(result[side]["bundle"])
+                    for group in ("artifacts", "logs"):
+                        for name, filename in check[side].get(group, {}).items():
+                            typer.echo(f"    {side} {name}  {bundle / filename}")
+    finish(result, output_json)
 
 
 @app.command()

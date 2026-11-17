@@ -108,4 +108,14 @@ Mentat accepts regular Git blobs with executable bits preserved. Symlinks, submo
 
 Verification exits `0` for pass, `1` for a confirmed violation in a completed run, and `2` for invalid input or an incomplete run. An incomplete check takes precedence in the exit status when another check reports a violation. The manifest retains each result. A model violation can prevent behavior execution. Timeouts, missing tools, and resource kills are incomplete. Behavior output is capped at 1 MiB per stream and 16 MiB per run across logs and artifacts. The manifest records any omitted logs or optional files.
 
+### Compare saved runs
+
+```sh
+mentat --state "$STATE" evidence compare "$BEFORE_RUN" "$AFTER_RUN"
+```
+
+Comparison reads two intact project verification runs from the same state directory. Both runs must have the same repository path, base, runner, and approved contract digest. It shows check outcomes by claim, points to the saved reports and artifacts, and flags differences in recorded tools or runner metadata. Behavior checks skipped by the formal gate appear as skipped. Older runs without a recorded check list can show the skip for the whole run.
+
+Exit `0` means both runs completed and could be compared. Each revision’s outcome is shown separately. Exit `2` means an incomplete run, incompatible scope, or missing or invalid evidence. Compatible incomplete runs still display available results. Add `--json` for structured output. A checkout at a different path needs its own approval and runs. See the [Nano ID walkthrough](nanoid.md#replay-the-failure) for comparing witnesses across checkouts.
+
 State defaults to `~/.local/state/mentat` or `$XDG_STATE_HOME/mentat`. Set `--state PATH` before the command to use a different operator-owned directory outside the project checkout. The state directory has mode `0700`. Bundle integrity receipts are local, so protect state from other same-user processes.
