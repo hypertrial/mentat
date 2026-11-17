@@ -1,0 +1,5 @@
+The native compaction replay adapts Apache Iceberg Go's
+compaction_file_grain_test.go, contributed by Matt Faltyn in Apache Iceberg
+Go pull request #2288 (https://github.com/apache/iceberg-go/pull/2288).
+Copyright The Apache Software Foundation. Licensed under the Apache License,
+Version 2.0; see LICENSE.

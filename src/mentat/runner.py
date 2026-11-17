@@ -17,12 +17,11 @@ import subprocess
 import tarfile
 import tempfile
 import time
-import unicodedata
 from pathlib import Path, PurePosixPath
 
 from .colima import validate_colima
 from .evidence import decode_json
-from .project import CHECKS_PREFIX
+from .project import CHECKS_PREFIX, _validate_staged
 
 _MAX_OUTPUT = 1024 * 1024
 _MAX_ARTIFACT = 1024 * 1024
@@ -288,24 +287,21 @@ def _relative(name):
 
 
 def _stage(root, files, *, trusted=False):
+    entries, links = _validate_staged(files, trusted=trusted)
     root.mkdir(mode=0o755)
-    seen = {}
-    for name, entry in files.items():
+    for name, (mode, data) in entries.items():
+        if mode == 0o120000:
+            continue
         relative = _relative(name)
-        if platform.system() == "Darwin":
-            for index in range(1, len(relative.parts) + 1):
-                spelling = "/".join(relative.parts[:index])
-                folded = unicodedata.normalize("NFD", spelling).casefold()
-                if seen.setdefault(folded, spelling) != spelling:
-                    raise ValueError("staged paths collide on this filesystem")
         path = root.joinpath(*relative.parts)
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
-        mode, data = (0o644, entry) if trusted else entry
-        if mode not in (0o644, 0o755) or not isinstance(data, bytes):
-            raise ValueError("invalid staged file")
         with path.open("xb") as stream:
             stream.write(data)
         path.chmod(mode if not trusted else 0o555)
+    for name, target in links.items():
+        path = root.joinpath(*_relative(name).parts)
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
+        path.symlink_to(target)
     if trusted:
         for path in root.rglob("*"):
             if path.is_dir():
@@ -313,6 +309,8 @@ def _stage(root, files, *, trusted=False):
 
 
 def _stage_archive(archive, candidate_files, trusted_files):
+    candidate_entries, links = _validate_staged(candidate_files)
+    trusted_entries, _ = _validate_staged(trusted_files, trusted=True)
     with tarfile.open(fileobj=archive, mode="w") as tar:
         directories = set()
 
@@ -330,14 +328,12 @@ def _stage_archive(archive, candidate_files, trusted_files):
         directory("mentat/checks", 0o755)
         directory("mentat/artifacts", 0o777)
         for prefix, entries, trusted in (
-            ("candidate", candidate_files, False),
-            ("checks", trusted_files, True),
+            ("candidate", candidate_entries, False),
+            ("checks", trusted_entries, True),
         ):
             for name, entry in entries.items():
                 relative = _relative(name)
-                mode, data = (0o644, entry) if trusted else entry
-                if mode not in (0o644, 0o755) or not isinstance(data, bytes):
-                    raise ValueError("invalid staged file")
+                mode, data = entry
                 base = "mentat/" + prefix
                 for part in relative.parts[:-1]:
                     base += "/" + part
@@ -345,8 +341,14 @@ def _stage_archive(archive, candidate_files, trusted_files):
                 item = tarfile.TarInfo(base + "/" + relative.name)
                 item.mode = 0o555 if trusted else mode | 0o222
                 item.uid = item.gid = 0
-                item.size = len(data)
-                tar.addfile(item, io.BytesIO(data))
+                if mode == 0o120000:
+                    item.type = tarfile.SYMTYPE
+                    item.linkname = links[name]
+                    item.mode = 0o777
+                    tar.addfile(item)
+                else:
+                    item.size = len(data)
+                    tar.addfile(item, io.BytesIO(data))
     archive.seek(0)
 
 
