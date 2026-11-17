@@ -4,45 +4,66 @@ Mentat verifies a Git commit against a contract you review and approve. Define w
 
 ## Install
 
-From a Mentat clone, install the CLI with Python 3.12 and uv. [uv installation](https://docs.astral.sh/uv/getting-started/installation/)
+Install Hypertrial Mentat v0.1.0 from GitHub with Python 3.12 and uv. The
+distribution is `hypertrial-mentat` and provides the `mentat` command.
+[Install uv](https://docs.astral.sh/uv/getting-started/installation/)
 
 ```sh
-uv tool install --python 3.12 .
+uv tool install --python 3.12 \
+  'hypertrial-mentat @ git+https://github.com/hypertrial/mentat.git@v0.1.0'
+mentat --version
 ```
 
-Docker is the default runner. Use a local Docker context on Linux or an unshared Colima profile on Apple Silicon macOS. The example below uses the opt-in host runner so you can try it with Git and a POSIX shell. See the [runner setup](docs/contracts.md#runners).
+For the walkthroughs, clone the same tag to get the example scripts.
+
+```sh
+git clone --branch v0.1.0 https://github.com/hypertrial/mentat.git
+cd mentat
+```
+
+If your internal Hypertrial Mentat install used the old `mentat` distribution
+name, remove that tool with `uv tool uninstall mentat` first. Verify the new
+contract digest and reapprove it when the verifier fingerprint changes.
+
+The v0.1.0 release checks target Linux x86-64 and Apple Silicon macOS. Docker is
+the default runner. The clamp quickstart uses the opt-in host runner with Git
+and a POSIX shell. Host behavior checks and Lean run with your local
+permissions. Use trusted code and see the [runner setup](docs/contracts.md#runners).
 
 ## Try it on a Git repo
 
-From the Mentat clone, create a separate example repository with a buggy shell command and a fixed revision.
+From the tagged clone, create a separate example repository with a buggy shell
+command and a fixed revision. The Z3 check covers the clamp model. The executable
+check verifies the candidate command on the declared inputs.
 
 ```sh
 DEMO="$(mktemp -d)/clamp"
 ./examples/quickstart/create.sh "$DEMO"
+STATE=$(dirname "$DEMO")/state
 BASE=$(git -C "$DEMO" rev-parse mentat-demo-base)
 FIXED=$(git -C "$DEMO" rev-parse mentat-demo-fixed)
 
-mentat doctor --repo "$DEMO" --base "$BASE" --runner host
-mentat spec check --repo "$DEMO" --base "$BASE" --runner host
+mentat --state "$STATE" doctor --repo "$DEMO" --base "$BASE" --runner host
+mentat --state "$STATE" spec check --repo "$DEMO" --base "$BASE" --runner host
 ```
 
 Review the files in `"$DEMO/.mentat"`. Copy the displayed contract digest and approve it at the terminal.
 
 ```sh
 DIGEST='paste the contract digest'
-mentat spec approve "$DIGEST" --repo "$DEMO" --base "$BASE" --runner host
-mentat verify --repo "$DEMO" --base "$BASE" --rev "$BASE" --runner host --json
+mentat --state "$STATE" spec approve "$DIGEST" --repo "$DEMO" --base "$BASE" --runner host
+mentat --state "$STATE" verify --repo "$DEMO" --base "$BASE" --rev "$BASE" --runner host --json
 ```
 
 The Z3 model passes. The behavior check returns exit `1` because the buggy CLI prints `-1` for a negative input. Copy its run ID to export the counterexample and reproduction command.
 
 ```sh
 FAILED_RUN='paste the failing run ID'
-mentat evidence export "$FAILED_RUN" --out "$DEMO/../evidence"
-mentat verify --repo "$DEMO" --base "$BASE" --rev "$FIXED" --runner host --json
+mentat --state "$STATE" evidence export "$FAILED_RUN" --out "$DEMO/../evidence"
+mentat --state "$STATE" verify --repo "$DEMO" --base "$BASE" --rev "$FIXED" --runner host --json
 
 PASSING_RUN='paste the passing run ID'
-mentat accept "$PASSING_RUN" --repo "$DEMO" --base "$BASE" --runner host
+mentat --state "$STATE" accept "$PASSING_RUN" --repo "$DEMO" --base "$BASE" --runner host
 ```
 
 ## Try approved pytest checks on a src-layout project
@@ -69,12 +90,22 @@ mentat verify --repo "$DEMO" --base "$BASE" --rev "$BASE" --runner host --json
 
 See [approved base files and selectors](docs/contracts.md#approved-base-files-and-selectors) for the launcher, host prerequisites, and evidence reproduction details.
 
+## Replay a real bug
+
+Follow the [Nano ID walkthrough](docs/nanoid.md) to reproduce a historical size
+validation bug. Compare the named CLI cases before and after the fix and see
+how the negative control tests the approved check.
+
 ## Use Mentat on your project
 
-- [Project contracts and CLI](docs/contracts.md) covers writing claims and checks, running candidates, and interpreting results.
-- [Mentat Claims Spec](.mentat/claims.md) explains what Mentat covers and links its numbered requirements to executable checks.
-- [Apache Polaris showcase](docs/polaris.md) replays a real namespace round-trip bug and exports a native regression test. Mentat 0.1 Polaris commands now live under `mentat showcase polaris`.
-- [Nemo example](docs/nemo.md) catches a silent arithmetic error, verifies the historical fix, and exports a standalone replay.
-- [Nano ID pilot](docs/nanoid.md) compares a historical CLI input validation bug with its fix and exports a replay.
+Every claim needs a behavior check, and at least one claim also needs a formal
+check. A passing model establishes a result under its stated assumptions.
+Behavior evidence covers the approved commands and recorded environment.
 
-Run the full suite from the Mentat clone with `uv run --locked --extra polaris pytest`. Put Lean 4.31.0 on `PATH` to include the Lean checks. Run the [runtime smoke check](docs/polaris.md#run-the-runtime-smoke-check) on a prepared Colima host to exercise live Polaris replay and native pytest.
+- [Project contracts and CLI](docs/contracts.md) covers writing claims, selecting runners, and interpreting results.
+- [Mentat Claims Spec](.mentat/claims.md) links Mentat's own numbered requirements to executable checks.
+- [Nemo example](docs/nemo.md) catches a silent arithmetic error and exports a standalone replay.
+- [Apache Polaris showcase](docs/polaris.md) replays a real namespace round-trip bug and exports a native regression test.
+
+See the [release notes](CHANGELOG.md), [contribution guide](CONTRIBUTING.md), and
+[security policy](SECURITY.md). Mentat is available under the [MIT license](LICENSE).

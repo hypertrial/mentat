@@ -2,12 +2,26 @@
 
 This example compares a [historical Nano ID CLI fix](https://github.com/ai/nanoid/pull/618) with its parent under one approved contract. The older CLI accepted `0.5`, `1.5`, and `Infinity` as sizes. The fixed CLI rejects them.
 
+## Recorded result
+
+Excerpt from the verification evidence using Node.js 26.10.0. The full
+export includes the approved inputs, case results, and reproduction command.
+
+| Check | Parent `3167e108865702c0539d8e552365ed840ac9d8d9` | Fix `58193a1d3aab9877315c42e995eb94667e0b1a4a` |
+| --- | --- | --- |
+| Overall verdict | Violation | Pass |
+| Z3 size model | Pass | Pass |
+| Approved native tests | 8 passed, 3 failed | 11 passed |
+| `rejects non-integer size 0.5` | Fail | Pass |
+| `rejects non-integer size 1.5` | Fail | Pass |
+| `rejects non-integer size Infinity` | Fail | Pass |
+| Negative control for the behavior probe | Primary check failed, control skipped | Qualified. The matcher rejected a synthetic bad observation for `0.5`. |
+
 ## Set up and approve
 
-From a Mentat checkout, use Git, Python 3 and Node.js on `PATH`. The reference run uses Node.js 26.10.0. The example and its approved upstream test run without an npm install.
+Follow the [release install instructions](../README.md#install) and run the commands below from the tagged Mentat clone. Use Git, Python 3 and Node.js on `PATH`. The reference run uses Node.js 26.10.0. The example and its approved upstream test run without an npm install.
 
 ```sh
-uv tool install --python 3.12 .
 node --version
 
 PILOT=$(mktemp -d "${TMPDIR:-/tmp}/mentat-nanoid.XXXXXX")

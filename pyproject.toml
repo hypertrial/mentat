@@ -1,8 +1,10 @@
 [project]
-name = "mentat"
-version = "0.2.0"
+name = "hypertrial-mentat"
+version = "0.1.0"
 description = "Verify Git commits against approved project contracts"
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "markdown-it-py>=4,<5",
@@ -11,6 +13,11 @@ dependencies = [
     "typer>=0.20,<1",
     "z3-solver>=4.15,<5",
 ]
+
+[project.urls]
+Homepage = "https://github.com/hypertrial/mentat"
+Repository = "https://github.com/hypertrial/mentat"
+Issues = "https://github.com/hypertrial/mentat/issues"
 
 [project.optional-dependencies]
 polaris = ["pyyaml>=6.0.3,<7"]

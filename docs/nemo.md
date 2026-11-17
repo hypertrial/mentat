@@ -102,36 +102,22 @@ nemo_mentat accept "$NEMO_PASSING_RUN" --repo "$NEMO_REPO" --base "$NEMO_BASE"
 
 The first two commands should exit `2`. Review the passing evidence and make the decision on the third command in a terminal. Record the passing run ID and acceptance receipt.
 
-## Repair pilot
-
-Commit a second local approval pack derived from the public pack with additional owner-held cases. Cover negative values, exact cancellation to double zero, multiple groups with different type combinations, and reordered facts. Run `doctor` and `spec check`, then present the private digest to the operator for interactive approval. Calibrate both packs on the historical pair. Check that wrong-value, wrong-type, missing-row, and extra-row controls fail and that reordered output passes.
-
-Freeze the prompt and public evidence hashes, private fixture hashes, toolchain, scoring rules, and attempt order. Use three interleaved pairs in baseline/evidence, evidence/baseline, baseline/evidence order. Each fresh GPT‑6.1 Terra high-effort attempt receives the same symptom, a remote-free repository initialized from the exact buggy tree, the same offline build command, and 30 minutes to submit one local repair commit. The evidence arm additionally receives the three public files exported from the buggy run. Use the configured agent guard. Keep the fix and private cases out of the handoffs and attempt repositories. Treat the shared host as an isolation limit and record any observed exposure.
-
-Freeze submissions at their one local commit or at the deadline. Score every submitted tree on the same private contract. A successful submission builds and passes the public and held-out cases. Record successes out of three per arm, time to submission, regressions, timeouts, exposure, and incomplete scores. Keep private cases and detailed scoring evidence operator-owned. Publish the aggregate outcomes with the source, toolchain, image, contract, and evidence identifiers once available.
-
 ## Recorded Apple Silicon run
 
 The historical pair cold-built under the default non-root runner limits in 107 seconds per candidate. The runner was Docker 29.5.2 on Linux ARM64, with Rust `nightly-2026-08-12` (`rustc 1.99.0-nightly`, `3d6c19bb9`) and Z3 4.16.0 on the Mentat host. The two commits had the same `Cargo.lock` SHA-256 `5f2cc6ad7e20fb9d3a857fc6954329d6a909a08732f7728e4eb5179d3159a2e2`. The local runner image was `localhost:5500/mentat-nemo@sha256:6a1d7468bc2b931615257a675509319aaa300be0f55d34e70aef669b0ca4e879`.
 
-| Public run | Mentat exit | Cases passed | Run ID |
-|---|---:|---:|---|
-| Historical bug | `1` | 3/4 | `ae7be98ee8534b8199f340e0cbab625c` |
-| Historical fix | `0` | 4/4 | `1bd012ae80e6463c93808af892ccc47f` |
+| Candidate | Mentat exit | Public cases passed |
+| --- | ---: | ---: |
+| Historical bug | `1` | 3/4 |
+| Historical fix | `0` | 4/4 |
 
-The public contract digest was `a254dfe0a515ac8900fe76961c6de0fcc861934bf3bcdf1630694ed0efc73eb6`. Both public bundles passed artifact hash validation. The exported replay files reproduced both witnesses against independently built binaries from the pinned revisions. The private scoring contract `0617db136e828984956d38f68fe718021867a68931a46caeeeeeba3ca0865afa` passed 3/8 cases on the buggy revision and all eight on the fix. Mentat rejected the buggy run and a noninteractive acceptance attempt. The operator accepted the fixed public run on November 15, 2026.
+Both public bundles passed artifact hash validation. The exported standalone
+replay reproduced the witnesses against independently built binaries at the
+pinned revisions. Mentat rejected acceptance of the failing run. The operator
+accepted the fixed run at the terminal.
 
-### Pilot outcomes
+## Repair pilot outcome
 
-All six submitted commits passed all eight cases, with 3/3 successes in each arm. Time to submission includes the agents’ own builds and checks, measured from the start of each attempt to its final report.
-
-| Attempt | Arm | Commit | Time to submission | Cases passed |
-|---|---|---|---:|---:|
-| 1 | Baseline | `635eb9c` | 9m 48s | 8/8 |
-| 2 | Evidence | `f490e64` | 18m 52s | 8/8 |
-| 3 | Evidence | `d836665` | 13m 53s | 8/8 |
-| 4 | Baseline | `99c1895` | 13m 34s | 8/8 |
-| 5 | Baseline | `4c03dae` | 12m 02s | 8/8 |
-| 6 | Evidence | `6fe6dd5` | 11m 32s | 8/8 |
-
-One initial scoring build hit the 500-second deadline while agent builds shared the VM. The original incomplete run `ece7a7e5b26d4656bd937adc7bd850cc` was retained. The same commit passed under the same contract after the agent builds finished. The recorded tool calls showed no exposure to the historical fix or held-out inputs. The agents shared a host, and overlapping builds and retries affected timing. These outcomes describe this single-defect pilot.
+In a historical six-attempt pilot on this one defect, all three baseline
+attempts and all three evidence-assisted attempts passed the held-out
+scoring cases. The two arms tied on repair success.

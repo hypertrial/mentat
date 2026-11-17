@@ -42,7 +42,7 @@ An out-of-memory kill, a signal exit, or a stopped server leaves the affected re
 
 For agents, `--json` emits a versioned result. Exit `0` means complete success, `1` means a confirmed violation, and `2` means verification is incomplete or the input is invalid. Polaris verification gives a confirmed violation precedence when another check is incomplete. The manifest retains each result. Mentat reruns Z3 and Lean for every verification. Existing commands may still pass `--fresh`. The live oracle and native regression cover the reported fixtures and revisions. A contract or verifier change requires fresh approval.
 
-## Run the founder evaluation
+## Run a held-out evaluation
 
 Copy the bundled public fixture shape from `src/mentat/showcases/polaris/pack/public.json` into an operator-owned private file. Use unseen nested and literal-dot paths with selected properties and explicitly include their parent paths. Give at least one namespace a selected property so the evaluator can test loss of a namespace and corruption of an existing value. Freeze the file digest before repair and keep the file away from the repair workspace.
 
@@ -71,6 +71,6 @@ The smoke command exits nonzero if prerequisites, expected results, or resource 
 
 ## Cleanup and upgrade
 
-In Mentat 0.2 the Polaris workflow moved under `mentat showcase polaris`. Run `spec check` and approve the new fingerprint before replaying. Export existing run IDs with the shared `mentat evidence export` command.
+The public release exposes the Polaris workflow under `mentat showcase polaris`. Run `spec check` and approve the new fingerprint before replaying. Export existing run IDs with the shared `mentat evidence export` command.
 
 On interruption, the replay cleans up its disposable resources. After a hard kill, inspect `docker --context colima-mentat ps -a --filter label=org.hypertrial.mentat.run` and `docker --context colima-mentat network ls --filter label=org.hypertrial.mentat.run` and remove only the orphaned run's resources.

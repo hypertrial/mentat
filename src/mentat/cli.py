@@ -5,6 +5,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+from importlib.metadata import version
 from pathlib import Path
 from typing import Annotated, Literal
 from uuid import uuid4
@@ -44,9 +45,18 @@ JsonOutput = Annotated[bool, typer.Option("--json", help="Emit machine-readable 
 _USER_ERRORS = (OSError, ValueError, subprocess.SubprocessError)
 
 
+def _version(value: bool) -> None:
+    if value:
+        typer.echo(f"mentat {version('hypertrial-mentat')}")
+        raise typer.Exit()
+
+
 @app.callback()
 def configure(
     ctx: typer.Context,
+    version_option: Annotated[
+        bool, typer.Option("--version", callback=_version, is_eager=True, help="Show version.")
+    ] = False,
     state: Annotated[Path | None, typer.Option("--state", envvar="MENTAT_STATE")] = None,
     docker_context: Annotated[
         str | None, typer.Option("--docker-context", envvar="MENTAT_DOCKER_CONTEXT")
