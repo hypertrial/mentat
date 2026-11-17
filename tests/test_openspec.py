@@ -273,3 +273,60 @@ def test_cli_draft_adoption_requires_behavior_and_preserves_citations(repo):
     for citation in claim["provenance"]["citations"]:
         assert f"{citation['path']}:{citation['start_line']}-{citation['end_line']}" in rendered
         assert citation["commit"] in rendered and citation["blob"] in rendered
+
+
+def test_import_includes_scenarios_with_plain_level_four_titles(repo):
+    path = "openspec/specs/drafts/spec.md"
+    write(
+        repo,
+        path,
+        "# Drafts\n\n## Purpose\nDescribe how drafts are saved.\n\n## Requirements\n"
+        "### Requirement: Save drafts\nThe editor SHALL retain drafts.\n"
+        "#### Scenario: Save online\n- WHEN the editor saves online\n- THEN it stores a copy\n"
+        "#### Save offline\n- GIVEN the editor is offline\n- WHEN the editor saves\n"
+        "- THEN it stores the draft locally\n",
+    )
+    result = openspec.import_spec(repo, commit(repo))
+    assert result["status"] == "pass"
+    claims = [entry["claim"] for entry in result["claims"]]
+    assert [claim["title"] for claim in claims] == [
+        "Save drafts: Save online",
+        "Save drafts: Save offline",
+    ]
+    assert "stores the draft locally" in claims[1]["statement"]
+    assert claims[1]["provenance"]["citations"][1]["start_line"] == 12
+
+
+@pytest.mark.parametrize("heading", ["#### Scenario: Scenario", "#### Scenario"])
+def test_import_accepts_scenario_as_a_title(repo, heading):
+    write(
+        repo,
+        "openspec/specs/drafts/spec.md",
+        f"### Requirement: Save drafts\nThe editor SHALL retain drafts.\n{heading}\nIt saves.\n",
+    )
+    result = openspec.import_spec(repo, commit(repo))
+    assert result["status"] == "pass"
+    (entry,) = result["claims"]
+    assert entry["claim"]["title"] == "Save drafts: Scenario"
+
+
+@pytest.mark.parametrize("entry", ["gitlink", "symlink"])
+def test_import_reports_unreadable_capability_trees(repo, entry):
+    write(
+        repo,
+        "openspec/specs/local/spec.md",
+        "### Requirement: Local feature\nIt SHALL work.\n#### Scenario: Works\nIt works.\n",
+    )
+    first = commit(repo)
+    path = "openspec/specs/linked"
+    if entry == "gitlink":
+        git(repo, "update-index", "--add", "--cacheinfo", f"160000,{first},{path}")
+        git(repo, "-c", "commit.gpgsign=false", "commit", "-qm", "add Git-linked capability")
+        revision = git(repo, "rev-parse", "HEAD")
+    else:
+        (repo / path).symlink_to("local", target_is_directory=True)
+        revision = commit(repo)
+    draft = openspec.import_spec(repo, revision)
+    assert draft["status"] == "incomplete"
+    assert [item["claim"]["title"] for item in draft["claims"]] == ["Local feature: Works"]
+    assert draft["diagnostics"] == [{"path": path, "line": 1, "detail": "unsupported spec entry"}]

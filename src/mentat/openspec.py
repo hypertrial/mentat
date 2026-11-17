@@ -29,9 +29,9 @@ def import_spec(repo: Path, base: str) -> dict:
         for record in records:
             meta, raw_path = record.split(b"\t", 1)
             mode, kind, oid = meta.split(b" ")
-            if not raw_path.endswith(b"/spec.md") and (
-                raw_path != b"openspec/specs" or kind == b"tree"
-            ):
+            linked = mode in (b"120000", b"160000")
+            is_spec = raw_path.endswith(b"/spec.md")
+            if not (linked or is_spec or (raw_path == b"openspec/specs" and kind != b"tree")):
                 continue
             try:
                 path = _git_path(raw_path)
@@ -101,12 +101,13 @@ def import_spec(repo: Path, base: str) -> dict:
             scenarios = [
                 (j, heading, line)
                 for j, (level, heading, line) in enumerate(subsections)
-                if level == 4 and heading.startswith("Scenario")
+                if level == 4
             ]
             level, heading, start = headings[i] if i >= 0 else (0, "", 0)
             if level != 3 or not heading.startswith("Requirement"):
-                for _, _, line in scenarios:
-                    diagnostic(path, line + 1, "orphan scenario")
+                for _, label, line in scenarios:
+                    if label.startswith("Scenario:"):
+                        diagnostic(path, line + 1, "orphan scenario")
                 continue
             requirements += 1
             end = headings[end_index][2] if end_index < len(headings) else len(lines)
@@ -131,9 +132,7 @@ def import_spec(repo: Path, base: str) -> dict:
                 diagnostic(path, start + 1, "missing scenario")
             scenario_names = set()
             for section_index, label, line in scenarios:
-                scenario_name = (
-                    label.removeprefix("Scenario:").strip() if label.startswith("Scenario:") else ""
-                )
+                scenario_name = label.removeprefix("Scenario:").strip()
                 scenario_valid = valid
                 if not scenario_name:
                     diagnostic(path, line + 1, "malformed scenario heading")

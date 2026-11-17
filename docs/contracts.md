@@ -92,9 +92,10 @@ mentat spec import-openspec --repo "$REPO" --base "$BASE" --json
 The importer reads committed `openspec/specs/<capability>/spec.md` files at a full Git commit ID.
 Each scenario yields a draft claim containing the requirement and scenario text. The ID stays
 the same when either block moves or its body changes. A renamed capability, requirement, or
-scenario receives a new ID. Findings about malformed sections and unsupported input include
-a path and line number. A well-formed draft exits `0`. Missing or malformed specs exit `2`,
-with any usable claims still in the output.
+scenario receives a new ID. Level-four scenario headings can use a plain name or the
+`Scenario:` prefix. Unsupported entries, including symbolic links and submodules in the
+specs tree, are reported with a path and line number. A well-formed draft exits `0`.
+Missing, malformed, or unsupported specs exit `2`, with any usable claims still in the output.
 
 Review the draft, copy the selected `claims[].claim` objects into the contract, and map them
 to approved checks. Each adopted claim needs a behavior check, and the contract needs at
