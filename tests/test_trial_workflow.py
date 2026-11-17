@@ -1,6 +1,7 @@
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -367,3 +368,49 @@ def test_new_base_file_requires_new_approval(trial, tmp_path, monkeypatch):
     rejected = runner.invoke(cli.app, prefix + ["verify", *new_scope, "--rev", new_base, "--json"])
     assert rejected.exit_code != 0
     assert json.loads(rejected.output)["status"] == "incomplete"
+
+
+@pytest.mark.skipif(
+    shutil.which("node") is None, reason="Node.js is required for the Nano ID probe"
+)
+@pytest.mark.parametrize("candidate", ["fixed", "historical", "broken"])
+def test_nanoid_probe_classifies_candidate_results(tmp_path, candidate):
+    repo = tmp_path / "candidate"
+    binary = repo / "bin" / "nanoid.js"
+    binary.parent.mkdir(parents=True)
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+    behaviors = {
+        "fixed": (
+            "process.stderr.write('Size must be positive integer\\n'); process.exitCode = 1;",
+            0,
+        ),
+        "historical": (
+            "process.stdout.write(process.argv[3] === '1.5' ? 'x\\n' : '\\n');",
+            1,
+        ),
+        "broken": ("throw new Error('Failed to initialize');", 2),
+    }
+    invalid, expected_status = behaviors[candidate]
+    binary.write_text(
+        "if (process.argv[3] === '7') { process.stdout.write('abc-d_E\\n'); }"
+        f" else {{ {invalid} }}\n"
+    )
+    script = Path(__file__).resolve().parents[1] / "examples/nanoid/contract/check-cli.mjs"
+    outcome = subprocess.run(
+        ["node", str(script)],
+        cwd=repo,
+        env={**os.environ, "MENTAT_ARTIFACTS_DIR": str(artifacts)},
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert outcome.returncode == expected_status, outcome.stderr
+    witness = (artifacts / "witness.json").read_text()
+    records = json.loads(witness)
+    assert [record["input"] for record in records] == ["0.5", "1.5", "Infinity", "7"]
+    assert records[-1] == {"input": "7", "status": 0, "stderr": "", "stdout_length": 8}
+    if candidate != "broken":
+        assert "abc-d_E" not in witness
+    if candidate == "historical":
+        assert [record["stdout_length"] for record in records[:-1]] == [1, 2, 1]

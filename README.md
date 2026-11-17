@@ -75,5 +75,6 @@ See [approved base files and selectors](docs/contracts.md#approved-base-files-an
 - [Mentat Claims Spec](.mentat/claims.md) explains what Mentat covers and links its numbered requirements to executable checks.
 - [Apache Polaris showcase](docs/polaris.md) replays a real namespace round-trip bug and exports a native regression test. Mentat 0.1 Polaris commands now live under `mentat showcase polaris`.
 - [Nemo example](docs/nemo.md) catches a silent arithmetic error, verifies the historical fix, and exports a standalone replay.
+- [Nano ID pilot](docs/nanoid.md) compares a historical CLI input validation bug with its fix and exports a replay.
 
 Run the full suite from the Mentat clone with `uv run --locked --extra polaris pytest`. Put Lean 4.31.0 on `PATH` to include the Lean checks. Run the [runtime smoke check](docs/polaris.md#run-the-runtime-smoke-check) on a prepared Colima host to exercise live Polaris replay and native pytest.

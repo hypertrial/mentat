@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "claims": [
+    {
+      "id": "cli.size",
+      "title": "CLI size validation",
+      "statement": "The CLI rejects fractional and non-finite sizes with an error and no ID. A request for seven characters returns one seven-character ID.",
+      "assumptions": [
+        "The formal model represents parsed numeric values with a separate finite flag."
+      ]
+    }
+  ],
+  "review": {
+    "overview": "Nano ID's CLI validates the requested ID size.",
+    "scope_limits": [
+      "This contract covers only the CLI size option."
+    ],
+    "verification_limits": [
+      "The formal check covers the numeric rule. The behavior check exercises four concrete inputs on a trusted host with Node.js 26.10.0 as the reference."
+    ],
+    "groups": [
+      {
+        "title": "CLI",
+        "claim_ids": [
+          "cli.size"
+        ]
+      }
+    ]
+  },
+  "formal": [
+    {
+      "id": "size-rule",
+      "claim": "cli.size",
+      "engine": "z3",
+      "source": "ideal.smt2",
+      "expected": "unsat",
+      "counterexample": "ideal-counterexample.smt2"
+    }
+  ],
+  "behavior": [
+    {
+      "id": "cli-size-replay",
+      "claim": "cli.size",
+      "argv": [
+        "node",
+        "{checks}/check-cli.mjs"
+      ],
+      "timeout_seconds": 30,
+      "artifacts": [
+        "witness.json"
+      ]
+    }
+  ],
+  "host_requirements": {"executables": ["node"]},
+  "allow_host": true
+}
