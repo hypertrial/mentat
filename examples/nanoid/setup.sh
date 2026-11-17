@@ -22,7 +22,7 @@ git -C "$repo" -c core.hooksPath=/dev/null switch -c mentat-nanoid-base "$fixed"
 mkdir "$repo/.mentat"
 cp "$here"/contract/* "$repo/.mentat/"
 mentat claims render --repo "$repo"
-git -C "$repo" add -- .mentat
+git -C "$repo" add --force -- .mentat
 git -C "$repo" -c user.name='Mentat Nano ID Example' -c user.email='nanoid@example.invalid' \
     -c core.hooksPath=/dev/null commit --no-gpg-sign -qm 'Add Nano ID size contract'
 printf 'Repository %s\nContract base %s\nBefore %s\nFixed %s\n' \
