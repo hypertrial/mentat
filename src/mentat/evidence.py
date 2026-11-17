@@ -85,8 +85,15 @@ def write_record(path: Path, data: bytes) -> None:
             temporary.unlink(missing_ok=True)
 
 
-def state_directory(path: Path, *, create: bool = True) -> Path:
-    path = path.expanduser().resolve()
+def state_directory(path: Path, *, create: bool = True, candidate_root: Path | None = None) -> Path:
+    try:
+        path = path.expanduser().resolve()
+    except RuntimeError as exc:
+        raise ValueError(f"Could not resolve Mentat state path: {exc}") from exc
+    if candidate_root is not None and (
+        path.is_relative_to(candidate_root) or candidate_root.is_relative_to(path)
+    ):
+        raise ValueError("Mentat state must be outside the candidate repository")
     if create:
         path.mkdir(mode=0o700, parents=True, exist_ok=True)
     stat = path.stat()

@@ -304,9 +304,11 @@ def test_evaluation_failed_preflight_keeps_planned_rows(tmp_path, monkeypatch, s
     monkeypatch.setattr("mentat.showcases.polaris.evaluation.docker_runtime.run_pytest", unexpected)
     monkeypatch.setattr("mentat.showcases.polaris.evaluation.run_case", unexpected)
     public = load_cases(PACK / "public.json", spec)[0]
-    result = evaluate(tmp_path, FIXED, "test-context", spec, [public, public], public, "sample")
+    result = evaluate(
+        tmp_path, FIXED, "context with spaces", spec, [public, public], public, "sample"
+    )
 
-    assert calls == ["test-context"]
+    assert calls == ["context with spaces"]
     assert result["status"] == "incomplete"
     assert result["native_regression"] == ["incomplete", "incomplete"]
     assert len(result["baseline_rows"]) == 5
@@ -318,7 +320,8 @@ def test_evaluation_failed_preflight_keeps_planned_rows(tmp_path, monkeypatch, s
         for method in row["methods"].values():
             assert method["status"] == "incomplete"
             assert method["seconds"] == 0.0
-            assert "doctor --prepare" in method["detail"]
+            assert "mentat showcase polaris" in method["detail"]
+            assert "--docker-context 'context with spaces' doctor --prepare" in method["detail"]
 
 
 def test_snapshot_staging_is_readable_in_container_under_restrictive_umask(tmp_path):

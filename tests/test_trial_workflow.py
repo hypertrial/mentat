@@ -247,6 +247,61 @@ def test_example_creates_tags_with_global_signing_enabled(tmp_path, example, oth
         assert git(repo, "cat-file", "-t", f"refs/tags/{tag}") == "commit"
 
 
+@pytest.mark.parametrize("example", ["quickstart", "python-src"])
+def test_example_commits_contract_despite_global_git_excludes(tmp_path, example):
+    excludes = tmp_path / "global-excludes"
+    excludes.write_text(".mentat/\n")
+    config = tmp_path / "gitconfig"
+    config.write_text(f'[core]\n    excludesFile = "{excludes}"\n')
+    repo = tmp_path / "example"
+    script = Path(__file__).resolve().parents[1] / "examples" / example / "create.sh"
+    subprocess.run(
+        [str(script), str(repo)],
+        check=True,
+        env={**os.environ, "GIT_CONFIG_GLOBAL": str(config), "GIT_CONFIG_NOSYSTEM": "1"},
+        capture_output=True,
+        text=True,
+    )
+    assert json.loads(git(repo, "show", "mentat-demo-base:.mentat/contract.json"))["version"] == 1
+    assert (
+        ".mentat/clamp.smt2"
+        in git(repo, "ls-tree", "-r", "--name-only", "mentat-demo-base").splitlines()
+    )
+
+
+@pytest.mark.parametrize("command", ["verify", "export", "compare"])
+def test_cyclic_state_alias_returns_incomplete_json(trial, tmp_path, command):
+    repo, manifest = trial
+    base = save(repo, manifest)
+    alias = tmp_path / "cyclic-state"
+    alias.symlink_to(alias.name)
+    arguments = {
+        "verify": ["verify", *scope(repo, base), "--rev", base, "--json"],
+        "export": ["evidence", "export", "a" * 32, "--out", str(tmp_path / "out"), "--json"],
+        "compare": ["evidence", "compare", "a" * 32, "b" * 32, "--json"],
+    }
+    result = CliRunner().invoke(cli.app, ["--state", str(alias), *arguments[command]])
+    assert result.exit_code == 2, (result.output, result.exception)
+    assert json.loads(result.output)["status"] == "incomplete"
+    assert alias.is_symlink()
+    assert not (tmp_path / "out").exists()
+
+
+def test_state_alias_into_candidate_does_not_create_state(trial, tmp_path):
+    repo, manifest = trial
+    base = save(repo, manifest)
+    target = repo / "new-state"
+    alias = tmp_path / "state-alias"
+    alias.symlink_to(target, target_is_directory=True)
+    result = CliRunner().invoke(
+        cli.app,
+        ["--state", str(alias), "verify", *scope(repo, base), "--rev", base, "--json"],
+    )
+    assert result.exit_code == 2, result.output
+    assert "state must be outside the candidate repository" in json.loads(result.output)["detail"]
+    assert not target.exists()
+
+
 def test_host_reproduce_survives_changed_outer_path(trial, tmp_path, monkeypatch):
     repo, manifest = trial
     base = save(repo, manifest)

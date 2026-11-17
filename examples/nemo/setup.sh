@@ -12,7 +12,10 @@ umask 077
 mkdir -- "$root"
 root=$(CDPATH='' cd -- "$root" && pwd -P)
 repo="$root/nemo"
-git clone --no-local --no-checkout -- "$source" "$repo" >&2
+git clone --no-local --no-checkout --origin origin -- "$source" "$repo" >&2
+if ! git -C "$repo" cat-file -e "$fixed^{commit}" 2>/dev/null; then
+    git -C "$repo" fetch --no-tags origin "$fixed" >&2
+fi
 test "$(git -C "$repo" rev-parse "$fixed^1")" = "$before"
 test "$(git -C "$repo" rev-parse "$fixed:Cargo.lock")" = \
     "$(git -C "$repo" rev-parse "$before:Cargo.lock")"
@@ -23,7 +26,8 @@ if [ -z "$image" ]; then
 fi
 docker --context "$context" image inspect "$image" >/dev/null
 
-git -C "$repo" switch -c mentat-nemo-public "$before" >&2
+git -C "$repo" switch -C mentat-nemo-public "$before" >&2
+git -C "$repo" branch --force mentat-nemo-fixed "$fixed"
 mkdir "$repo/.mentat"
 cp "$here"/contract/*.json "$here"/contract/*.py "$here"/contract/*.smt2 "$repo/.mentat/"
 python3 - "$repo/.mentat/contract.json" "$image" <<'PY'
@@ -40,7 +44,7 @@ contract = json.loads(path.read_text())
 contract["docker_image"] = image
 path.write_text(json.dumps(contract, indent=2) + "\n")
 PY
-git -C "$repo" add -- .mentat
+git -C "$repo" add --force -- .mentat
 git -C "$repo" -c user.name='Mentat Nemo Example' -c user.email='nemo@example.invalid' \
     commit --no-gpg-sign -qm 'Add public Mentat contract for mixed numeric sums'
 printf 'Nemo repository %s\nMentat state %s\nDocker context %s\nRunner image %s\n' \

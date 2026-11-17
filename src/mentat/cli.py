@@ -68,10 +68,7 @@ def _scope(project: Project) -> dict:
 
 
 def _state(ctx: typer.Context, project: Project) -> Path:
-    state = ctx.obj["state"].expanduser().resolve()
-    if state.is_relative_to(project.root) or project.root.is_relative_to(state):
-        raise ValueError("Mentat state must be outside the candidate repository")
-    return evidence.state_directory(state)
+    return evidence.state_directory(ctx.obj["state"], candidate_root=project.root)
 
 
 def _approval_path(state: Path, project: Project) -> Path:

@@ -71,6 +71,7 @@ cat > "$repo/src/clamp/__init__.py" <<'PY'
 def clamp(value):
     return min(2, max(0, value))
 PY
+git -C "$repo" add --force -- .mentat
 git -C "$repo" add .
 git -C "$repo" -c commit.gpgsign=false commit -qm "Add contract and working clamp"
 git -C "$repo" -c tag.gpgSign=false tag mentat-demo-base

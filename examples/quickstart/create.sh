@@ -83,6 +83,7 @@ SH_CLAMP
 }
 
 write_candidate -1
+git -C "$repo" add --force -- .mentat
 git -C "$repo" add .
 git -C "$repo" -c commit.gpgsign=false commit -qm "Add contract and buggy clamp"
 git -C "$repo" -c tag.gpgSign=false tag mentat-demo-base

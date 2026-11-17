@@ -4,7 +4,7 @@ Nemo’s CLI can silently drop the float subtotal when `#sum` combines integers 
 
 ## Prepare the checkout and offline build image
 
-Use Apple Silicon macOS with Git, Python 3, Colima, Docker, and an installed Mentat CLI. Run setup from the Mentat checkout. The target directory must be new. The optional second argument is a local Nemo clone containing the pinned commits.
+Use Apple Silicon macOS with Git, Python 3, Colima, Docker, and an installed Mentat CLI. Run setup from the Mentat checkout. The target directory must be new. The optional second argument is a local Nemo clone containing the pinned commits, including a checkout created by an earlier run of setup.
 
 ```sh
 colima start mentat-nemo --runtime docker --vm-type vz --mount none --cpu 4 --memory 6 --disk 30 --activate=false

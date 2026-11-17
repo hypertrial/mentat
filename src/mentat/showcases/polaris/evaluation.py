@@ -1,5 +1,6 @@
 """Founder-run evaluation against frozen fixtures and known controls."""
 
+import shlex
 import subprocess
 from dataclasses import replace
 from pathlib import Path
@@ -131,13 +132,16 @@ def evaluate(
     native_source = render_regression(public, spec.selected_properties)
     property_test = _hypothesis(public, spec.selected_properties)
     preflight = docker_runtime.doctor(context)
+    prepare = shlex.join(
+        ["mentat", "showcase", "polaris", "--docker-context", context, "doctor", "--prepare"]
+    )
 
     def timed_check(check, *args):
         if not preflight["ok"]:
             return {
                 "status": "incomplete",
                 "seconds": 0.0,
-                "detail": "Docker preflight failed; check the selected Colima context and run polaris doctor --prepare.",
+                "detail": f"Docker preflight failed. Check the selected Colima context, then run\n{prepare}",
             }
         start = monotonic()
         result = check(*args)
