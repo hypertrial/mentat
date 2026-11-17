@@ -154,6 +154,13 @@ def test_nanoid_fresh_checkout_replay(tmp_path, monkeypatch):
     assert second["status"] == "violation"
     assert witness(second)[1] == original
 
+    for branch in ("mentat-nanoid-before", "mentat-nanoid-fixed"):
+        command("git", "-C", str(repo), "switch", branch)
+        fresh_repo, fresh_base = setup(branch, repo)
+        assert command("git", "-C", str(fresh_repo), "rev-parse", f"{fresh_base}^") == FIXED
+        assert command("git", "-C", str(fresh_repo), "rev-parse", "mentat-nanoid-before") == BEFORE
+        assert command("git", "-C", str(fresh_repo), "rev-parse", "mentat-nanoid-fixed") == FIXED
+
     command("git", "-C", str(repo), "-c", "core.hooksPath=/dev/null", "switch", "--detach", BEFORE)
     (repo / "test/bin.test.js").write_text("// candidate substitutes its own tests\n")
     command("git", "-C", str(repo), "add", "test/bin.test.js")

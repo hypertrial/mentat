@@ -83,7 +83,7 @@ REPLAY_RUN=$(run_id "$PILOT/replay.json")
 mentat --state "$STATE" evidence export "$REPLAY_RUN" --out "$PILOT/replay"
 ```
 
-For a fresh checkout, derive the base and candidate from that checkout’s refs. The following uses the first Nano ID checkout as a local Git source. On a second host, run the setup script from an equivalent Mentat checkout with the public default source or an available local mirror.
+For a fresh checkout, derive the base and candidate from that checkout’s refs. The following uses the first Nano ID checkout as a local Git source. Any of its pilot branches can be checked out. On a second host, run the setup script from an equivalent Mentat checkout with the public default source or an available local mirror.
 
 ```sh
 SOURCE_REPO="$REPO"
