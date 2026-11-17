@@ -113,23 +113,23 @@ def report(record: dict) -> bytes:
         "",
     ]
     if record.get("kind") == "project-verification":
-        lines += [f"- Contract base `{record['base']}`", f"- Runner `{record['runner']}`", ""]
-        for claim in record["claims"]:
-            lines.append(f"- Claim `{claim['id']}` · {claim['statement']}")
-        lines.append("")
-    for check in record.get("model_checks", []):
-        claim = f" · `{check['claim']}`" if "claim" in check else ""
-        lines.append(
-            f"- {check['kind']} model evidence{claim} · {check['status']} · {check['detail']}"
-        )
-    if record.get("behavior_skipped"):
-        lines.append("- Behavior checks require passing formal checks.")
-    for case in record.get("cases", []):
-        lines.append(f"- Execution · `{case['case_id']}` · {case['status']}")
-        for check in case.get("checks", []):
-            detail = check.get("detail", check.get("id", "check"))
-            claim = f"`{check['claim']}` · " if "claim" in check else ""
-            lines.append(f"  - {claim}{check.get('status', 'incomplete')} · {detail}")
+        from .evidence_report import project_report
+
+        lines.extend(project_report(record))
+    else:
+        for check in record.get("model_checks", []):
+            claim = f" · `{check['claim']}`" if "claim" in check else ""
+            lines.append(
+                f"- {check['kind']} model evidence{claim} · {check['status']} · {check['detail']}"
+            )
+        if record.get("behavior_skipped"):
+            lines.append("- Behavior checks require passing formal checks.")
+        for case in record.get("cases", []):
+            lines.append(f"- Execution · `{case['case_id']}` · {case['status']}")
+            for check in case.get("checks", []):
+                detail = check.get("detail", check.get("id", "check"))
+                claim = f"`{check['claim']}` · " if "claim" in check else ""
+                lines.append(f"  - {claim}{check.get('status', 'incomplete')} · {detail}")
     for regression in record.get("regressions", []):
         lines.append(f"- Native pytest · `{regression['case_id']}` · {regression['status']}")
     for method, counts in record.get("counts", {}).items():

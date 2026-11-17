@@ -15,6 +15,7 @@ from . import evidence, spec_review
 from .claims import checked_claims, write_claims
 from .claims_notion import notion_claims
 from .command import emit, finish, operator_confirm
+from .evidence_report import claim_groups, claim_summary, review_context
 from .project import Project, load_project, snapshot
 from .project_formal import run_formal, tool_info
 from .runner import host_diagnostics, host_path, run_behavior, runner_info
@@ -325,6 +326,7 @@ def verify(
                 claim.model_dump(mode="json", exclude={"title"})
                 for claim in project.contract.claims
             ],
+            "claim_review": review_context(project.contract),
             "model_checks": models,
             "behavior_checks": [
                 {"id": check.id, "claim": check.claim} for check in project.contract.behavior
@@ -343,6 +345,8 @@ def verify(
                 f"PATH={shlex.quote(runtime['invocation_path'])} {shlex.join([*launcher, *args])}"
             )
         bundle = evidence.save_run(state, record, artifacts)
+        if not output_json:
+            typer.echo(f"Claims  {claim_summary(claim_groups(record))}")
         finish({**record, "bundle": str(bundle)}, output_json)
     except _USER_ERRORS as exc:
         _error(exc, output_json)

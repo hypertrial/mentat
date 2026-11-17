@@ -650,8 +650,20 @@ def test_verify_prioritizes_incomplete_over_violation(project_repo, tmp_path, mo
         cli,
         "run_formal",
         lambda *args: [
-            {"status": "violation", "kind": "z3", "detail": "failed"},
-            {"status": "incomplete", "kind": "z3", "detail": "unavailable"},
+            {
+                "id": manifest["formal"][0]["id"],
+                "claim": second["claim"],
+                "status": "violation",
+                "kind": "z3",
+                "detail": "failed",
+            },
+            {
+                "id": second["id"],
+                "claim": second["claim"],
+                "status": "incomplete",
+                "kind": "z3",
+                "detail": "unavailable",
+            },
         ],
     )
     scope = ["--repo", str(repo), "--base", base, "--runner", "host"]
