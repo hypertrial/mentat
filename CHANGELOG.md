@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.1.1
+
+- Preserve confined candidate symlinks to tracked regular files in snapshots
+  and both runners. Keep approved inputs regular-only and reject unsafe targets.
+
+- Add the Iceberg-Go compaction replay pack, with pinned historical revisions,
+  eight native row-preservation cases, committed-snapshot observations, and
+  separate Lean and Z3 specification checks.
+- Prepare verified Go module and build caches explicitly before offline
+  verification. Each run compiles its own staged candidate and approved probe.
+- Generate a public comparison summary and checksummed paired evidence bundle
+  from intact Mentat records. Keep runtime errors distinct from row violations.
+
 ## v0.1.0
 
 First public prerelease of Hypertrial Mentat. Install the `hypertrial-mentat`

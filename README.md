@@ -4,13 +4,13 @@ Mentat verifies a Git commit against a contract you review and approve. Define w
 
 ## Install
 
-Install Hypertrial Mentat v0.1.0 from GitHub with Python 3.12 and uv. The
+Install Hypertrial Mentat v0.1.1 from GitHub with Python 3.12 and uv. The
 distribution is `hypertrial-mentat` and provides the `mentat` command.
 [Install uv](https://docs.astral.sh/uv/getting-started/installation/)
 
 ```sh
 uv tool install --python 3.12 \
-  'hypertrial-mentat @ git+https://github.com/hypertrial/mentat.git@v0.1.0'
+  'hypertrial-mentat @ git+https://github.com/hypertrial/mentat.git@v0.1.1'
 export PATH="$(uv tool dir --bin):$PATH"
 mentat --version
 ```
@@ -18,7 +18,7 @@ mentat --version
 For the walkthroughs, clone the same tag to get the example scripts.
 
 ```sh
-git clone --branch v0.1.0 https://github.com/hypertrial/mentat.git
+git clone --branch v0.1.1 https://github.com/hypertrial/mentat.git
 cd mentat
 ```
 
@@ -26,7 +26,7 @@ If your internal Hypertrial Mentat install used the old `mentat` distribution
 name, remove that tool with `uv tool uninstall mentat` first. Verify the new
 contract digest and reapprove it when the verifier fingerprint changes.
 
-The v0.1.0 release checks target Linux x86-64 and Apple Silicon macOS. Docker is
+The v0.1.1 release checks target Linux x86-64 and Apple Silicon macOS. Docker is
 the default runner. The clamp quickstart uses the opt-in host runner with Git
 and a POSIX shell. Host behavior checks and Lean run with your local
 permissions. Use trusted code and see the [runner setup](docs/contracts.md#runners).
@@ -93,9 +93,14 @@ See [approved base files and selectors](docs/contracts.md#approved-base-files-an
 
 ## Replay a real bug
 
-Follow the [Nano ID walkthrough](docs/nanoid.md) to reproduce a historical size
-validation bug. Compare the named CLI cases before and after the fix and see
-how the negative control tests the approved check.
+Follow the [Iceberg-Go compaction walkthrough](docs/iceberg-go.md) to check whether
+a historical compaction preserves all twelve rows after each committed batch.
+Run the same approved native probe against the original revision and upstream
+fix, inspect the separate Lean and Z3 model results, and export the recorded
+failure and passing comparison.
+
+The [Nano ID walkthrough](docs/nanoid.md) remains available for a smaller CLI
+validation example with approved native tests and a negative control.
 
 ## Use Mentat on your project
 

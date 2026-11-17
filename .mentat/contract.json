@@ -14,6 +14,11 @@
         "url": "https://github.com/hypertrial/mentat#try-it-on-a-git-repo"
       },
       {
+        "label": "Apache Iceberg-Go",
+        "summary": "Replay a compaction commit that left one of twelve rows visible in the active snapshot, then verify the fix with native Go observations and separate Lean and Z3 specification checks.",
+        "url": "https://github.com/hypertrial/mentat/blob/main/docs/iceberg-go.md"
+      },
+      {
         "label": "Nemo",
         "summary": "Build two historical revisions and replay a mixed-type sum that returned the wrong value and numeric type.",
         "url": "https://github.com/hypertrial/mentat/blob/main/docs/nemo.md"
@@ -81,7 +86,7 @@
     {
       "id": "verification.candidate-pinning",
       "title": "Stage the exact candidate",
-      "statement": "Checks see the exact candidate commit, excluding Git metadata, uncommitted files, and the candidate's root .mentat entry. Unsupported selected Git entries make verification incomplete."
+      "statement": "Checks see the exact candidate commit, excluding Git metadata, uncommitted files, and the candidate's root .mentat entry. Regular files and confined relative links to tracked regular files are preserved. Unsupported selected Git entries make verification incomplete."
     },
     {
       "id": "approval.scope",

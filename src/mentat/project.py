@@ -520,7 +520,9 @@ def _revision(root: Path, rev: str) -> str:
     return result
 
 
-def _tree_entries(records: Iterable[bytes]) -> dict[str, tuple[int, bytes]]:
+def _tree_entries(
+    records: Iterable[bytes], *, allow_links: bool = False
+) -> dict[str, tuple[int, bytes]]:
     entries = {}
     # Git lists each tree before its children and orders siblings by name.
     parents = [(b"", b"")]
@@ -541,9 +543,11 @@ def _tree_entries(records: Iterable[bytes]) -> dict[str, tuple[int, bytes]]:
         if directory:
             parents.append((raw_path, b""))
             continue
-        if mode not in (b"100644", b"100755") or kind != b"blob":
+        if kind != b"blob" or (
+            mode not in (b"100644", b"100755") and not (allow_links and mode == b"120000")
+        ):
             raise ValueError(f"unsupported Git entry: {path}")
-        entries[path] = (int(mode, 8) & 0o777, oid)
+        entries[path] = (0o120000 if mode == b"120000" else int(mode, 8) & 0o777, oid)
         if len(entries) > _MAX_FILES:
             raise ValueError("too many files")
     return entries
@@ -551,7 +555,7 @@ def _tree_entries(records: Iterable[bytes]) -> dict[str, tuple[int, bytes]]:
 
 def _tree(root: Path, revision: str, *, approved: bool) -> dict[str, tuple[int, bytes]]:
     with closing(_tree_records(root, revision, approved=approved)) as listing:
-        entries = _tree_entries(listing)
+        entries = _tree_entries(listing, allow_links=not approved)
     return _read_blobs(root, entries)
 
 
@@ -602,10 +606,76 @@ def _digest(files: dict[str, tuple[int, bytes]]) -> str:
     return digest.hexdigest()
 
 
+def _validate_staged(files, *, trusted=False):
+    entries = {}
+    directories = {""}
+    seen = {}
+    for name, entry in files.items():
+        _path(name)
+        parts = name.split("/")
+        mode, data = (0o644, entry) if trusted else entry
+        if mode not in ((0o644, 0o755) if trusted else (0o644, 0o755, 0o120000)) or not isinstance(
+            data, bytes
+        ):
+            raise ValueError("invalid staged file")
+        entries[name] = (mode, data)
+        for index in range(1, len(parts) + 1):
+            spelling = "/".join(parts[:index])
+            folded = unicodedata.normalize("NFD", spelling).casefold()
+            if seen.setdefault(folded, spelling) != spelling:
+                raise ValueError("staged paths collide on this filesystem")
+            if index < len(parts):
+                directories.add(spelling)
+    if directories.intersection(entries):
+        raise ValueError("staged file conflicts with directory")
+    links = {}
+    for name, (mode, data) in entries.items():
+        if mode != 0o120000:
+            continue
+        try:
+            target = data.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ValueError("invalid symlink target") from exc
+        if (
+            not target
+            or target.startswith("/")
+            or "\\" in target
+            or len(target) > 512
+            or any(unicodedata.category(c) == "Cc" for c in target)
+            or any(part.casefold() == ".mentat" for part in target.split("/"))
+        ):
+            raise ValueError("invalid symlink target")
+        parts = name.split("/")[:-1]
+        components = target.split("/")
+        for index, part in enumerate(components):
+            if part in ("", "."):
+                pass
+            elif part == "..":
+                if not parts:
+                    raise ValueError("symlink escapes candidate")
+                parts.pop()
+            else:
+                parts.append(part)
+            resolved = "/".join(parts)
+            if index < len(components) - 1 and resolved not in directories:
+                raise ValueError("symlink traverses non-directory")
+        resolved = "/".join(parts)
+        if (
+            any(part.casefold() == ".mentat" for part in parts)
+            or resolved not in entries
+            or entries[resolved][0] not in (0o644, 0o755)
+        ):
+            raise ValueError("symlink target is not a tracked regular file")
+        links[name] = target
+    return entries, links
+
+
 def snapshot(root: Path, rev: str) -> Snapshot:
     root = _root(root)
     revision = _revision(root, rev)
     files = _tree(root, revision, approved=False)
+    if any(mode == 0o120000 for mode, _ in files.values()):
+        _validate_staged(files)
     return Snapshot(revision, _digest(files), files)
 
 

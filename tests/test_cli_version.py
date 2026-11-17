@@ -8,5 +8,5 @@ def test_version_is_eager_and_does_not_create_state(tmp_path):
     for args in (["--version"], ["--state", str(state), "--version"]):
         result = CliRunner().invoke(app, args)
         assert result.exit_code == 0
-        assert result.stdout == "mentat 0.1.0\n"
+        assert result.stdout == "mentat 0.1.1\n"
         assert not state.exists()

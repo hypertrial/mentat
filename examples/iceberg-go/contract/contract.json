@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "claims": [
+    {
+      "id": "compaction.rows",
+      "title": "Compaction preserves rows",
+      "statement": "In the bounded single-source-file fixture, compaction preserves the multiset of all twelve rows at every committed snapshot and the final table across split and unsplit scan tasks, atomic and partial-progress commits, and planner residual filters.",
+      "assumptions": [
+        "The fixture contains twelve rows in one source file, with no logical deletes or concurrent writers.",
+        "The formal specification assumes whole-file ownership, replacement output that copies the selected row multiset, and atomic catalog publication. It is not a proof of the Go implementation."
+      ]
+    }
+  ],
+  "review": {
+    "overview": "Compaction may replace a physical data file only while preserving its row multiset.",
+    "scope_limits": [
+      "The replay is limited to one twelve-row source file without logical deletes or concurrent writers.",
+      "The native matrix covers split and unsplit scan tasks, atomic and partial-progress commits, and planner residual filters present and absent; it checks every committed prefix and the final table."
+    ],
+    "verification_limits": [
+      "Z3 and Lean check the same bounded multiplicity specification, not the Go source. Native observations determine whether each implementation preserves rows."
+    ],
+    "groups": [
+      {"title": "Row preservation", "claim_ids": ["compaction.rows"]}
+    ]
+  },
+  "formal": [
+    {"id": "row-preservation-z3", "claim": "compaction.rows", "engine": "z3", "source": "ideal.smt2", "expected": "unsat", "counterexample": "ideal-counterexample.smt2"},
+    {"id": "row-preservation-lean", "claim": "compaction.rows", "engine": "lean", "source": "Model.lean", "theorem": "IcebergCompaction.committed_prefixes_preserved"}
+  ],
+  "behavior": [
+    {
+      "id": "compaction-rows",
+      "claim": "compaction.rows",
+      "argv": ["python3", "{checks}/check.py", "--mod-cache", "__MOD_CACHE__", "--build-cache", "__BUILD_CACHE__"],
+      "timeout_seconds": 600,
+      "violation_exit_codes": [10],
+      "artifacts": ["case-report.json", "witness.json", "native-observations.json"],
+      "case_report": {
+        "artifact": "case-report.json",
+        "required_cases": [
+          "split=false/partial=false/filtered=false",
+          "split=false/partial=false/filtered=true",
+          "split=false/partial=true/filtered=false",
+          "split=false/partial=true/filtered=true",
+          "split=true/partial=false/filtered=false",
+          "split=true/partial=false/filtered=true",
+          "split=true/partial=true/filtered=false",
+          "split=true/partial=true/filtered=true"
+        ]
+      },
+      "negative_control": {
+        "args": ["--negative-control"],
+        "violation_exit_code": 10,
+        "failing_case": "split=true/partial=true/filtered=false"
+      }
+    }
+  ],
+  "host_requirements": {"executables": ["python3", "go"]},
+  "allow_host": true
+}

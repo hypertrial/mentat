@@ -13,6 +13,7 @@ Mentat is a local CLI for reviewers who need evidence about a committed software
 ## Examples
 
 - [Quickstart](https://github.com/hypertrial/mentat#try-it-on-a-git-repo) — Create a small Git repository, catch a broken clamp command, and verify the fix.
+- [Apache Iceberg-Go](https://github.com/hypertrial/mentat/blob/main/docs/iceberg-go.md) — Replay a compaction commit that left one of twelve rows visible in the active snapshot, then verify the fix with native Go observations and separate Lean and Z3 specification checks.
 - [Nemo](https://github.com/hypertrial/mentat/blob/main/docs/nemo.md) — Build two historical revisions and replay a mixed-type sum that returned the wrong value and numeric type.
 - [Apache Polaris](https://github.com/hypertrial/mentat/blob/main/docs/polaris.md) — Replay a namespace round-trip bug and export a native pytest regression when the failure reproduces. This showcase gives a confirmed violation precedence over an incomplete check.
 
@@ -40,7 +41,7 @@ Claim `approval.scope` · Behavior `check.approval.scope`
 
 ### 4. Stage the exact candidate
 
-Checks see the exact candidate commit, excluding Git metadata, uncommitted files, and the candidate's root .mentat entry. Unsupported selected Git entries make verification incomplete.
+Checks see the exact candidate commit, excluding Git metadata, uncommitted files, and the candidate's root .mentat entry. Regular files and confined relative links to tracked regular files are preserved. Unsupported selected Git entries make verification incomplete.
 
 Claim `verification.candidate-pinning` · Behavior `check.verification.candidate-pinning`
 

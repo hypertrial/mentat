@@ -12,7 +12,7 @@ jobs:
   test:
     name: Test and package (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 25
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -37,7 +37,11 @@ jobs:
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '26.10.0'
-      - name: Install Lean and fetch Nano ID
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.26.3'
+          cache: false
+      - name: Install Lean and fetch replay sources
         env:
           LEAN_TARGET: ${{ matrix.lean_target }}
           LEAN_SHA256: ${{ matrix.lean_sha256 }}
@@ -52,6 +56,8 @@ jobs:
           printf '%s\n' "$RUNNER_TEMP/$archive/bin" >> "$GITHUB_PATH"
           git clone --mirror https://github.com/ai/nanoid.git "$RUNNER_TEMP/nanoid.git"
           printf 'MENTAT_NANOID_SOURCE=%s\n' "$RUNNER_TEMP/nanoid.git" >> "$GITHUB_ENV"
+          git clone --mirror https://github.com/apache/iceberg-go.git "$RUNNER_TEMP/iceberg-go.git"
+          printf 'MENTAT_ICEBERG_GO_SOURCE=%s\n' "$RUNNER_TEMP/iceberg-go.git" >> "$GITHUB_ENV"
       - name: Check source and committed Claims Spec
         run: |
           uv sync --locked --extra polaris
