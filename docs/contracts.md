@@ -39,7 +39,7 @@ For a host behavior check, `host_environment` optionally lists up to 128 distinc
 
 For host checks, `host_requirements` can list executable names or absolute paths in `executables` and installed Python distribution names in `python_distributions`. Set `loopback` to `true` when a check needs to bind an IPv4 loopback listener. `mentat verify` names missing declared prerequisites in the incomplete check detail and skips behavior execution. Run `mentat doctor` for setup hints. Mentat inspects Python distribution metadata with the `python3` found on the runner's effective `PATH`.
 
-Compare two contracts that support the selected runner with `--base "$NEW_BASE" --against "$OLD_BASE"` on `spec check` and `spec approve`. The displayed Git diff command reads the original commit objects, matching the inputs Mentat reviewed. Review the comparison and the new contract before approving its digest. Both the local and Notion Claims Specs display declared behavior selectors. The grouped layout lists them in a verification appendix.
+Compare two contracts that support the selected runner with `--base "$NEW_BASE" --against "$OLD_BASE"` on `spec check` and `spec approve`. The displayed Git diff command reads the original commit objects, matching the inputs Mentat reviewed. Review the comparison and the new contract before approving its digest. Both the local and Notion Claims Specs display declared behavior selectors and approved host environment names. The grouped layout lists them in a verification appendix.
 
 ### Named cases and negative controls
 

@@ -142,7 +142,9 @@ def _grouped_claims(contract: Contract) -> bytes:
     lines.extend(("", "### Behavior checks"))
     for check in contract.behavior:
         row = f"Check {_code_span(check.id)} · Claim {_code_span(check.claim)}"
-        if not (check.selectors or check.case_report or check.negative_control):
+        if not (
+            check.selectors or check.host_environment or check.case_report or check.negative_control
+        ):
             row += " · Standalone check"
         lines.extend(("", row))
         details = [f"- Selector {_code_span(selector)}" for selector in check.selectors or []]

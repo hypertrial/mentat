@@ -24,6 +24,7 @@ _ID = r"[A-Za-z0-9_][A-Za-z0-9_.-]*"
 _CHECK_IDS = rf"`{_ID}`(?:, `{_ID}`)*"
 _LEGACY_SELECTOR = re.compile(rf"(- Check (?:`{_ID}`|<code>{_ID}</code>) selects )(.*)")
 _SELECTOR = "- Selector "
+_HOST_ENVIRONMENT = "- Host environment "
 _REQUIRED_CASE = "- Required case "
 _CONTROL = re.compile(
     r"(- Negative control requires exit )(?:`([1-9][0-9]{0,2})`|<code>([1-9][0-9]{0,2})</code>)"
@@ -225,7 +226,12 @@ def _normalized(markdown: str) -> list[str]:
     for raw in StringIO(markdown, newline=""):
         line = raw.rstrip("\r\n")
         if prefix := next(
-            (item for item in (_SELECTOR, _REQUIRED_CASE) if line.startswith(item)), None
+            (
+                item
+                for item in (_SELECTOR, _HOST_ENVIRONMENT, _REQUIRED_CASE)
+                if line.startswith(item)
+            ),
+            None,
         ):
             if (value := _selector_value(line.removeprefix(prefix))) is not None:
                 line = prefix + _code_span(value)
@@ -304,6 +310,9 @@ def _behavior_inventory(lines: list[str]) -> tuple[dict[str, str], int] | None:
                 not (
                     line.startswith(_SELECTOR)
                     and line[len(_SELECTOR) :]
+                    or line.startswith(_HOST_ENVIRONMENT)
+                    and (name := _selector_value(line[len(_HOST_ENVIRONMENT) :]))
+                    and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name)
                     or line.startswith(_REQUIRED_CASE)
                     and _selector_value(line[len(_REQUIRED_CASE) :])
                     or _control_summary(line)

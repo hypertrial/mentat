@@ -599,3 +599,90 @@ def test_publish_claim_citations_and_control_inventory(monkeypatch, layout, name
         if named_cases:
             assert f"- Required case <code>{case}</code>" in current
         assert "0 declared selectors" in current
+
+
+@pytest.mark.parametrize("with_selector", [False, True])
+def test_generated_host_environment_publishes_and_round_trips(monkeypatch, with_selector):
+    import re
+
+    from mentat.claims import render_claims
+    from mentat.project import Contract
+
+    behavior = {
+        "id": "check.id",
+        "claim": "claim.id",
+        "argv": ["test"],
+        "host_environment": ["NPM_CONFIG_USERCONFIG", "CA_FILE"],
+    }
+    if with_selector:
+        behavior.update(argv=["test", "{selectors}"], selectors=["test_case"])
+    manifest = {
+        "version": 1,
+        "claims": [{"id": "claim.id", "title": "Test", "statement": "The check passes."}],
+        "behavior": [behavior],
+        "formal": [
+            {
+                "id": "proof.id",
+                "claim": "claim.id",
+                "engine": "z3",
+                "source": "model.smt2",
+                "expected": "sat",
+            }
+        ],
+        "allow_host": True,
+        "review": {
+            "overview": "Overview.",
+            "scope_limits": ["One fixture."],
+            "groups": [{"title": "Capability", "claim_ids": ["claim.id"]}],
+        },
+    }
+    claims = render_claims(Contract.model_validate(manifest))
+    contents = f"Before notes\n\n{notion._START}\n\n{notion._END}\n\nAfter notes"
+    writes = []
+
+    def request(page_id, payload=None):
+        nonlocal contents
+        assert page_id == PAGE
+        if payload:
+            edit = payload["update_content"]["content_updates"][0]
+            writes.append(edit)
+            assert contents.count(edit["old_str"]) == 1
+            readback = re.sub(r"`([^`]+)`", r"<code>\1</code>", edit["new_str"])
+            contents = contents.replace(edit["old_str"], readback, 1)
+        return contents
+
+    monkeypatch.setattr(notion, "_request", request)
+    assert notion.notion_claims(PAGE, claims, BASE, publish=True)
+    assert "- Host environment <code>NPM_CONFIG_USERCONFIG</code>" in contents
+    assert " · Standalone check" not in contents
+    assert notion.notion_claims(PAGE, claims, BASE)
+    assert notion.notion_claims(PAGE, claims, BASE, publish=True)
+    assert len(writes) == 1
+    assert contents.startswith("Before notes\n") and contents.endswith("\nAfter notes")
+    contents = contents.replace("<code>CA_FILE</code>", "<code>OTHER_FILE</code>")
+    assert not notion.notion_claims(PAGE, claims, BASE)
+    assert notion.notion_claims(PAGE, claims, BASE, publish=True)
+    assert len(writes) == 2
+    contents = contents.replace(
+        "### Formal checks and assumptions",
+        "- Unexpected operator content\n\n### Formal checks and assumptions",
+    )
+    with pytest.raises(ValueError):
+        notion.notion_claims(PAGE, claims, BASE, publish=True)
+    assert len(writes) == 2
+
+
+def test_grouped_existing_standalone_document_remains_unchanged(monkeypatch):
+    claims = GROUPED.replace(
+        "Check `check.id` · Claim `claim.id`\n\n- Selector `tests/test_app.py::test_case[one]`".encode(),
+        "Check `check.id` · Claim `claim.id` · Standalone check".encode(),
+    ).replace(b"1 declared selector", b"0 declared selectors")
+    body = notion._body(claims).replace("`check.id`", "<code>check.id</code>")
+    contents = f"Source commit: `{BASE}` · 1 claim\n\n{body}\n\n{notion._END}"
+
+    def request(page_id, payload=None):
+        assert payload is None
+        return contents
+
+    monkeypatch.setattr(notion, "_request", request)
+    assert notion.notion_claims(PAGE, claims, BASE, publish=True)
