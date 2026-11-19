@@ -1,0 +1,5 @@
+#!/bin/sh
+set -eu
+cd "$(dirname "$0")/.."
+uv run --locked --no-sync ruff check .
+sh -c 'uv run --locked --no-sync mentat claims check --repo . --base "$(git rev-parse HEAD)"'

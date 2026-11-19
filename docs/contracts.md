@@ -9,7 +9,7 @@ Create `.mentat/contract.json` and commit it along with the approved models and 
 | Field | Contents |
 | --- | --- |
 | `version` | Manifest version `1`. |
-| `claims` | Entries with unique `id`, human-readable `statement`, and optional `assumptions` and `provenance`. |
+| `claims` | Entries with unique `id`, human-readable `statement`, and optional `assumptions`, `provenance`, and `assurance`. |
 | `review` | Optional reviewer-facing overview, scope limits, example links, and capability groups. Requires a short `title` on each claim. |
 | `formal` | Entries with `id`, `claim`, `engine`, and the relative `source` file. |
 | `behavior` | Entries with `id`, `claim`, and `argv`. Optional `timeout_seconds` defaults to 60 and supports 1–600. Optional `violation_exit_codes` defaults to `[1]` and supports 1–124. Optional `artifacts` lists flat output filenames. Optional `selectors` is a list of arguments expanded at a standalone `{selectors}` element in `argv`. See [named cases and negative controls](#named-cases-and-negative-controls) for the optional evidence settings. |
@@ -17,6 +17,7 @@ Create `.mentat/contract.json` and commit it along with the approved models and 
 | `allow_host` | Boolean. Defaults to `false`. |
 | `base_files` | Optional list of tracked file paths outside `.mentat/` to load from the base commit. |
 | `host_requirements` | Optional host prerequisites: `executables`, `python_distributions`, and `loopback`. |
+| `source_mutations` | Optional approved `.mentat/` path for a source mutation qualification manifest. |
 
 Every claim needs a behavior check. At least one claim needs both a formal and a behavior check. Use IDs made from letters, digits, dots, underscores, and hyphens, starting with a letter, digit, or underscore. Claim and check IDs are unique across the manifest.
 
@@ -28,6 +29,22 @@ For behavior, the working directory is the staged candidate root. Each `argv` el
 Bare commands use absolute entries from the runner’s `PATH`. Use an explicit path such as `./tool` to run a candidate program. For approved Python tests, use an isolated launcher such as the [src-layout example](../examples/python-src/create.sh).
 
 Status reflects the checks you wrote. A passing model check establishes a result about the model under its assumptions. A passing behavior check establishes that an approved command passed for the recorded snapshot and environment. For checks that use candidate-owned tests, review changes to those tests as part of the candidate.
+
+## Assurance metadata and comparator policy
+
+A claim may declare human-reviewed `assurance` metadata. `implementation_checks` names behavior checks; `witness_checks` can name behavior or formal checks. Each reference has `check_id` and optional `case_ids`. Case IDs must be required cases on that behavior check; formal checks cannot name cases. References to checks attached to another claim are supporting references, not proof that the current claim has its own implementation check.
+
+`bounds` have an `id`, `statement`, `kind`, and either `checks` for an `enforced` bound or an `assumption` exactly matching an existing claim assumption for an `assumed` bound. `exclusions` record `scenario`, `reason`, `effect`, and `affected_claims`. `deviations` record a `citation` already present in that claim’s provenance, a `rationale`, and an `effect`. These declarations describe the contract for reviewers; they do not themselves execute checks or establish coverage.
+
+A contract can set `"source_mutations": "mutants.json"` to use an approved `.mentat/mutants.json` manifest. Ordinary `verify` runs its qualification after the formal and baseline behavior phases. Its mutations remain separate from behavior negative controls; assurance metadata alone does not prove a mutation was killed.
+
+The manifest has `"version": 1` and a `mutants` object keyed by mutation ID. Each entry names `check`, `path`, `before`, `after`, and `expected_case`. The check must declare the expected case as required. Paths must identify product source, outside approved base files, tests, fixtures, lockfiles and build configuration. The UTF-8 `before` bytes must occur exactly once, including overlapping occurrences. Every mutation uses a fresh staged candidate and the original approved check launcher; the original snapshot remains unchanged.
+
+The unmodified check and all its required cases must pass first. A mutation is `killed` only when the approved violation exit occurs, its named expected assertion fails, and the complete case report contains no skipped or errored cases. Other failed assertions are retained. A complete passing mutated check is `survived` and fails qualification. Missing prerequisites, an inapplicable patch, timeout or inconclusive evidence produces `error` and an incomplete qualification. These outcomes qualify the checks; they do not by themselves establish a product defect. Any failed or incomplete qualification prevents acceptance.
+
+Saved results bind the run, candidate, approved contract and verifier, mutation manifest, original and changed source hashes, runtime and actual case outcomes. Qualification artifacts share a bounded output budget. Missing required evidence is incomplete; omitted optional logs are labeled. Reports and comparison show qualification separately from product checks and existing negative controls. Historical evidence without qualification metadata remains readable and displays unavailable metadata in HTML.
+
+The `lean-comparator` formal declaration adds an explicit `theorem`, `allowed_imports` (only `Init`, `Std`, or `Lean` module families), and `permitted_axioms` (a subset of `propext`, `Classical.choice`, and `Quot.sound`). Both policy lists must be present, and Z3 fields are forbidden. This declaration reserves the upcoming comparator engine policy; it does not establish that comparator execution or a proof campaign is complete. Existing `lean` and `z3` declarations do not accept comparator policy fields.
 
 ## Approved base files and selectors
 
@@ -178,6 +195,7 @@ The report omits runtime environment, repository paths, raw logs, witnesses, and
 
 ```sh
 mentat --state "$STATE" evidence compare "$BEFORE_RUN" "$AFTER_RUN"
+mentat --state "$STATE" evidence compare "$BEFORE_RUN" "$AFTER_RUN" --out comparison.html
 ```
 
 Comparison reads two intact project verification runs from the same state directory. Both runs must have the same repository path, base, runner, and approved contract digest. It shows check outcomes by claim, points to the saved reports and artifacts, and flags differences in recorded tools or runner metadata. Behavior checks skipped by the formal gate appear as skipped. Older runs without a recorded check list can show the skip for the whole run.
@@ -199,5 +217,33 @@ configured checks, and files directly referenced by those checks. The comparison
 reports changes in shared supporting files, runner settings, the verifier, and the recorded
 tools and runtime. Consider those differences when interpreting a result transition.
 The command reads saved evidence and uses the same comparison exit conventions.
+
+The optional offline HTML comparison places changed claims and check evidence first,
+retains both original verdicts and matching acceptance receipts, and identifies
+changed tools or runner metadata. Model proof identities, tested correspondence,
+witnesses, source-mutation outcomes and unavailable legacy declarations remain
+separate. It has the same output protections and sharing restrictions as a single
+run report. Use `--across-contracts` explicitly when definitions differ.
+With `--out`, successful rendering exits zero even if an original run is incomplete;
+JSON retains `comparison_status` and both original run verdicts. Invalid evidence
+still fails without writing a report. Comparison without `--out` keeps its existing
+exit conventions.
+
+### Prepare a PR summary
+
+```sh
+mentat --state "$STATE" evidence pr-summary "$RUN_ID" --head "$PR_HEAD" \
+  --report-url "$AUTHORIZED_REPORT_URL" --ci-status "$EXACT_HEAD_CI_RESULT"
+```
+
+The host supplies the existing authorized artifact/report URL and the lightweight
+CI result (`pass`, `fail`, `incomplete`, or `unavailable`). The command rejects a
+head different from the saved revision and prints Markdown without posting to a
+PR or publishing a report. CI is labeled host-reported; it cannot substitute for
+full saved verification or matching operator acceptance. Keep the repository's
+existing artifact access controls. Inspect report contents before sharing links.
+
+See [approved proof campaigns](proofs.md) for pinned Linux model proving and the
+host's falsification, author, amendment and budget workflow.
 
 State defaults to `~/.local/state/mentat` or `$XDG_STATE_HOME/mentat`. Set `--state PATH` before the command to use a different operator-owned directory outside the project checkout. The state directory has mode `0700`. Bundle integrity receipts are local, so protect state from other same-user processes.

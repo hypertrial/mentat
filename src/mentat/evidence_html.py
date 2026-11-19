@@ -38,6 +38,20 @@ _SAFE_DETAILS = {
     "Lean produced an unrecognized theorem axiom audit",
     "The theorem uses disallowed axioms",
     "Lean checked the theorem and its axioms",
+    "A checked proof campaign is required",
+    "Expected case failed",
+    "Mutation survived",
+    "Baseline check did not pass completely",
+    "Mutation must match exactly once",
+    "Mutation target is missing or not a regular file",
+    "Mutation check did not establish the expected outcome",
+    "Latest proof submission is not accepted",
+    "Proof campaign attempt or time limit reached",
+    "Pinned comparator and kernel accepted the frozen target proof",
+    "Lean target, definition or axiom policy did not match",
+    "Protected checker timed out or could not complete",
+    "Protected checker cleanup did not complete",
+    "Proof checker returned mismatched evidence",
 }
 _SAFE_Z3 = re.compile(r"Z3 returned (?:sat|unsat|unknown), expected (?:sat|unsat)\Z")
 
@@ -64,7 +78,7 @@ def _check(check, claims, artifacts, kind):
     _string(check.get("id"))
     if check.get("claim") not in claims or check.get("status") not in evidence.STATUSES:
         raise ValueError("Invalid saved check reference or status")
-    if kind == "formal" and check.get("kind") not in {"z3", "lean"}:
+    if kind == "formal" and check.get("kind") not in {"z3", "lean", "lean-comparator"}:
         raise ValueError("Invalid saved formal engine")
     if not isinstance(check.get("detail"), str):
         raise ValueError("Invalid saved check detail")
@@ -181,6 +195,10 @@ def _validate(record):
         ids.add(claim["id"])
         _string(claim.get("statement"))
         _strings(claim.get("assumptions", []))
+        if claim.get("assurance") is not None:
+            from .project import Assurance
+
+            Assurance.model_validate(claim["assurance"])
     review = record.get("claim_review", {})
     if not isinstance(review, dict) or not isinstance(review.get("titles", {}), dict):
         raise ValueError("Invalid saved claim review")
@@ -258,6 +276,9 @@ def _validate(record):
             check["id"]: check["claim"] for check in checks
         }:
             raise ValueError("Saved behavior inventory does not match results")
+    for check in evidence.source_qualifications(record):
+        _references(check, artifacts)
+        _cases(check)
     return claim_groups(record)
 
 
@@ -315,12 +336,46 @@ def _check_html(check, kind):
     title = f"{kind.title()} · {name}"
     if kind == "formal":
         title += f" ({_text(check.get('kind', 'Unavailable'))})"
+    elif kind == "qualification":
+        title = f"Source mutation · {name} · {_text(check.get('outcome', 'skipped'))}"
     parts = [
         f'<section class="check"><h5>{title} · {_status(status)}</h5>',
         f"<p>{_text(_diagnostic(check))}</p>",
     ]
+    if kind == "qualification":
+        parts.append(
+            f"<p>Qualification of the check; this outcome alone does not demonstrate a product defect. Expected failing case: {_text(check['expected_case'])}</p>"
+        )
     if kind == "formal":
         info = check.get("evidence", {})
+        if check.get("kind") == "lean-comparator":
+            parts.append(
+                "<p>Model proof only; implementation correspondence is recorded separately.</p>"
+            )
+            for label, key in (
+                ("Campaign", "campaign_id"),
+                ("Theorem", "theorem"),
+                ("Proof source SHA-256", "source_sha256"),
+                ("Approved source SHA-256", "approved_sha256"),
+            ):
+                value = info.get(key)
+                parts.append(
+                    f"<p>{label}: {_text(value if isinstance(value, str) else 'Unavailable')}</p>"
+                )
+            environment = info.get("environment", {})
+            for label, key in (
+                ("Lean", "version"),
+                ("Toolchain SHA-256", "toolchain_sha256"),
+                ("Checker policy SHA-256", "policy_sha256"),
+            ):
+                value = environment.get(key) if isinstance(environment, dict) else None
+                parts.append(
+                    f"<p>{label}: {_text(value if isinstance(value, str) else 'Unavailable')}</p>"
+                )
+            if status != "pass":
+                parts.append(
+                    "<p>Outstanding proof obligation. A missing or rejected proof does not establish a product defect.</p>"
+                )
         for label, key in (("Expected", "expected"), ("Observed", "result")):
             value = info.get(key, check.get("expected" if key == "expected" else "observed"))
             if value in ("sat", "unsat", "unknown"):
@@ -398,6 +453,68 @@ def _cases_html(check):
     )
 
 
+def _assurance_html(claim, checks):
+    assurance = claim.get("assurance")
+    if assurance is None:
+        return "<p>Assurance metadata: Unavailable</p>"
+
+    def references(items):
+        if not items:
+            return "<p>Unavailable</p>"
+        rows = []
+        for item in items:
+            check = checks.get(item["check_id"], {})
+            owner = check.get("claim", "Unavailable")
+            outcome = check.get("status", "Unavailable")
+            cases = item.get("case_ids", [])
+            detail = "; cases: " + ", ".join(cases) if cases else ""
+            rows.append(
+                f"<li>{_text(item['check_id'])} · {_text(outcome)} · supporting claim {_text(owner)}{_text(detail)}</li>"
+            )
+        return "<ul>" + "".join(rows) + "</ul>"
+
+    parts = [
+        "<h5>Assurance</h5><p>Declarations require semantic review; their presence alone does not establish qualification.</p>"
+    ]
+    for label, key in (
+        ("Tested implementation correspondence", "implementation_checks"),
+        ("Reachability witnesses", "witness_checks"),
+    ):
+        parts.append(f"<h6>{label}</h6>" + references(assurance.get(key, [])))
+    parts.append("<h6>Operational bounds</h6>")
+    bounds = assurance.get("bounds", [])
+    if not bounds:
+        parts.append("<p>Unavailable</p>")
+    for bound in bounds:
+        parts.append(
+            f"<p>{_text(bound['id'])} · {_text(bound['kind'])}: {_text(bound['statement'])}</p>"
+        )
+        if bound.get("assumption"):
+            parts.append(f"<p>Assumption: {_text(bound['assumption'])}</p>")
+        else:
+            parts.append(references(bound.get("checks", [])))
+    for label, key in (
+        ("Excluded scenarios", "exclusions"),
+        ("Deviations from cited requirements", "deviations"),
+    ):
+        parts.append(f"<h6>{label}</h6>")
+        items = assurance.get(key, [])
+        if not items:
+            parts.append("<p>Unavailable</p>")
+        for item in items:
+            if key == "exclusions":
+                parts.append(
+                    f"<p>{_text(item['scenario'])}: {_text(item['reason'])}</p><p>Affected claims: {_text(', '.join(item['affected_claims']))}</p>"
+                )
+            else:
+                citation = item["citation"]
+                parts.append(
+                    f"<p>Cited source: {_text(citation['path'])} · {_text(citation['commit'])} · line {_text(citation['start_line'])}</p><p>{_text(item['rationale'])}</p>"
+                )
+            parts.append(f"<p>Guarantee impact: {_text(item['effect'])}</p>")
+    return "".join(parts)
+
+
 def _render(record, groups, manifest_digest, acceptance):
     review = record.get("claim_review", {})
     titles = review.get("titles", {})
@@ -411,10 +528,13 @@ def _render(record, groups, manifest_digest, acceptance):
     all_checks = [
         (claim, kind, check)
         for claim in all_claims
-        for kind in ("formal", "behavior")
+        for kind in ("formal", "behavior", "qualification")
         for check in claim[kind]
     ]
     counts = Counter(kind for _, kind, _ in all_checks)
+    primary_checks = {
+        check["id"]: check for _, kind, check in all_checks if kind != "qualification"
+    }
     behavior_count = f"{counts['behavior']} behavior"
     if record["behavior_skipped"]:
         behavior_count = (
@@ -476,9 +596,14 @@ def _render(record, groups, manifest_digest, acceptance):
                     + "".join(f"<li>{_text(item)}</li>" for item in claim["assumptions"])
                     + "</ul>"
                 )
+            parts.append(_assurance_html(claim, primary_checks))
             parts.extend(
-                _check_html(check, kind) for kind in ("formal", "behavior") for check in claim[kind]
+                _check_html(check, kind)
+                for kind in ("formal", "behavior", "qualification")
+                for check in claim[kind]
             )
+            if "source_mutation_checks" not in record:
+                parts.append("<p>Source mutation qualification: Unavailable</p>")
             parts.append("</details>")
         parts.append("</section>")
         areas.append("".join(parts))
@@ -519,6 +644,29 @@ dl {{ display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: .9rem
 <script>const controls=document.getElementById('controls'),search=document.getElementById('search'),filter=document.getElementById('filter'),count=document.getElementById('count'),empty=document.getElementById('empty'),claims=[...document.querySelectorAll('.claim')];controls.hidden=false;count.hidden=false;function update(){{let n=0;for(const item of claims){{const show=item.dataset.search.includes(search.value.toLowerCase())&&(!filter.value||item.dataset.status===filter.value);item.hidden=!show;if(show)n++;}}count.textContent=n+' of '+claims.length+' claims';empty.hidden=n!==0;}}search.addEventListener('input',update);filter.addEventListener('change',update);function reveal(hash){{if(!/^#claim-[1-9][0-9]*$/.test(hash))return;const target=document.getElementById(hash.slice(1));if(!claims.includes(target))return;search.value='';filter.value='';update();target.open=true;target.scrollIntoView();}}document.getElementById('findings').addEventListener('click',event=>{{const link=event.target.closest('a');if(link)reveal(link.getAttribute('href')||'');}});window.addEventListener('hashchange',()=>reveal(location.hash));update();reveal(location.hash);</script></main></body></html>"""
 
 
+def _write_html(state, output, content):
+    target = output.expanduser().absolute()
+    parent = target.parent.resolve(strict=True)
+    if not parent.is_dir() or parent.is_relative_to(state):
+        raise ValueError("Output must be outside the state directory with an existing parent")
+    target = parent / target.name
+    if target.exists() or target.is_symlink():
+        raise ValueError("Output already exists")
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            dir=parent, prefix=".mentat-report-", delete=False
+        ) as stream:
+            temporary = Path(stream.name)
+            stream.write(content.encode("utf-8"))
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.link(temporary, target, follow_symlinks=False)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
 def render_run(state: Path, run_id: str, output: Path) -> None:
     try:
         state = evidence.state_directory(state, create=False)
@@ -526,26 +674,163 @@ def render_run(state: Path, run_id: str, output: Path) -> None:
         groups = _validate(record)
         content = _render(
             record, groups, manifest_digest, _accepted(state, record, manifest_digest)
-        ).encode("utf-8")
-        target = output.expanduser().absolute()
-        parent = target.parent.resolve(strict=True)
-        if not parent.is_dir() or parent.is_relative_to(state):
-            raise ValueError("Output must be outside the state directory with an existing parent")
-        target = parent / target.name
-        if target.exists() or target.is_symlink():
-            raise ValueError("Output already exists")
-        temporary = None
-        try:
-            with tempfile.NamedTemporaryFile(
-                dir=parent, prefix=".mentat-report-", delete=False
-            ) as stream:
-                temporary = Path(stream.name)
-                stream.write(content)
-                stream.flush()
-                os.fsync(stream.fileno())
-            os.link(temporary, target, follow_symlinks=False)
-        finally:
-            if temporary is not None:
-                temporary.unlink(missing_ok=True)
+        )
+        _write_html(state, output, content)
     except (KeyError, TypeError, IndexError, AttributeError, UnicodeError) as exc:
         raise ValueError("Invalid saved verification record") from exc
+
+
+def render_comparison(
+    state: Path, before_id: str, after_id: str, output: Path, *, across_contracts=False
+):
+    """Render two validated snapshots without exposing runtime paths or raw evidence."""
+    try:
+        state = evidence.state_directory(state, create=False)
+        comparison = evidence.compare_runs(
+            state, before_id, after_id, across_contracts=across_contracts
+        )
+        records, claims, contexts, overviews = [], [], [], []
+        for label, run_id in (("Before", before_id), ("After", after_id)):
+            _, record, manifest = evidence.read_run_snapshot(state, run_id)
+            groups = _validate(record)
+            items = {claim["id"]: claim for _, area in groups for claim in area}
+            checks = {
+                check["id"]: check
+                for claim in items.values()
+                for kind in ("formal", "behavior")
+                for check in claim[kind]
+            }
+            records.append(record)
+            claims.append(items)
+            contexts.append(checks)
+            fields = [
+                ("Revision", record["revision"]),
+                ("Run", run_id),
+                ("Contract base", record["base"]),
+                ("Contract digest", record["contract_digest"]),
+                ("Manifest SHA-256", manifest),
+                ("Operator acceptance", _accepted(state, record, manifest)),
+            ]
+            overviews.append(
+                f'<section class="panel"><h2>{label} · {_status(record["status"])}</h2><dl>'
+                + "".join(f"<dt>{key}</dt><dd>{_text(value)}</dd>" for key, value in fields)
+                + "</dl></section>"
+            )
+
+        def signature(claim):
+            if claim is None:
+                return None
+            return [
+                (
+                    kind,
+                    {
+                        key: check.get(key)
+                        for key in (
+                            "id",
+                            "kind",
+                            "status",
+                            "case_results",
+                            "required_cases",
+                            "qualified",
+                            "outcome",
+                            "assertion_failed",
+                            "evidence",
+                        )
+                    },
+                )
+                for kind in ("formal", "behavior", "qualification")
+                for check in claim[kind]
+            ]
+
+        rows = []
+        for ident in dict.fromkeys((*claims[0], *claims[1])):
+            left, right = claims[0].get(ident), claims[1].get(ident)
+            fingerprints = [
+                record.get("comparison_inputs", {}).get("claims", {}).get(ident)
+                for record in records
+            ]
+            definition = (
+                "added"
+                if left is None
+                else "removed"
+                if right is None
+                else "unavailable"
+                if None in fingerprints
+                else "changed"
+                if fingerprints[0] != fingerprints[1]
+                else "unchanged"
+            )
+            available_definition_changed = (
+                left is not None
+                and right is not None
+                and any(
+                    left.get(key) != right.get(key)
+                    for key in ("statement", "assumptions", "assurance", "provenance")
+                )
+            )
+            changed = (
+                definition in {"added", "removed", "changed"}
+                or available_definition_changed
+                or signature(left) != signature(right)
+            )
+            rows.append((not changed, ident, definition, left, right))
+        rows.sort(key=lambda row: row[0])
+        sections = []
+        for unchanged, ident, definition, left, right in rows:
+            checks_by_side = [
+                {
+                    (kind, check["id"]): check
+                    for kind in ("formal", "behavior", "qualification")
+                    for check in (claim[kind] if claim else [])
+                }
+                for claim in (left, right)
+            ]
+            changed_checks = {
+                key
+                for key in checks_by_side[0].keys() | checks_by_side[1].keys()
+                if checks_by_side[0].get(key) != checks_by_side[1].get(key)
+            }
+            title = next(
+                (
+                    record.get("claim_review", {}).get("titles", {}).get(ident)
+                    for record in reversed(records)
+                    if record.get("claim_review", {}).get("titles", {}).get(ident)
+                ),
+                ident,
+            )
+            parts = [
+                f"<details><summary>{_text(title)} · {_text(ident)} · {'Unchanged' if unchanged else 'Changed'}</summary>",
+                f'<p>Claim definition: {_text(definition)}</p><div class="pair">',
+            ]
+            for side, claim in enumerate((left, right)):
+                label = "Before" if side == 0 else "After"
+                if claim is None:
+                    parts.append(f"<section><h3>{label}: Absent</h3></section>")
+                    continue
+                parts += [
+                    f"<section><h3>{label} · {_status(claim['status'])}</h3><p>{_text(claim['statement'])}</p>",
+                    "<h4>Assumptions</h4><ul>"
+                    + "".join(f"<li>{_text(item)}</li>" for item in claim.get("assumptions", []))
+                    + "</ul>",
+                    _assurance_html(claim, contexts[side]),
+                ]
+                ordered_checks = sorted(
+                    checks_by_side[side].items(), key=lambda item: item[0] not in changed_checks
+                )
+                parts += [_check_html(check, kind) for (kind, _), check in ordered_checks]
+                parts.append("</section>")
+            sections.append("".join(parts) + "</div></details>")
+        environment = "Changed" if comparison["environment_changed"] else "Unchanged"
+        content = """<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
+<title>Mentat run comparison</title><style>body{font-family:system-ui,sans-serif;background:#f5f7fb;color:#25324b;line-height:1.5;margin:0}main{max-width:1120px;margin:auto;padding:1rem}.panel,details{background:white;border:1px solid #dce3ee;padding:1rem;margin:1rem 0}.pair{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1rem}p,li,dd,summary{overflow-wrap:anywhere}dd{margin:0 0 .5rem}dt,summary,.status{font-weight:700}summary{cursor:pointer}.pass{color:#176447}.violation{color:#aa2540}.check{border-top:1px solid #dce3ee}@media(max-width:640px){.pair{grid-template-columns:1fr}}</style></head><body><main><h1>Run comparison</h1>
+<p>Changed claims and check evidence appear first. Both original verdicts and operator decisions describe their saved revisions.</p>
+<p>Claim text and diagnostic filenames may be sensitive. Inspect this report before sharing. Raw evidence remains in the original exports.</p>"""
+        content += '<div class="pair">' + "".join(overviews) + "</div>"
+        content += f"<p>Recorded tools or runner metadata: {environment}. Legacy definition metadata is labeled unavailable.</p>"
+        if across_contracts:
+            content += "<p>Explicit cross-contract history: changed definitions can explain a changed outcome.</p>"
+        content += "".join(sections) + "</main></body></html>"
+        _write_html(state, output, content)
+    except (KeyError, TypeError, IndexError, AttributeError, UnicodeError) as exc:
+        raise ValueError("Invalid saved verification comparison") from exc

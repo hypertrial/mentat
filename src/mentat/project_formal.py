@@ -71,6 +71,13 @@ def tool_info(project) -> dict:
     """Find selected tools without evaluating any project-controlled input."""
     result = {}
     engines = {check.engine for check in project.contract.formal}
+    if "lean-comparator" in engines:
+        from .proof_checker import checker_identity
+
+        try:
+            result["lean-comparator"] = checker_identity()
+        except (OSError, ValueError, subprocess.SubprocessError) as exc:
+            result["lean-comparator"] = {"error": str(exc)}
     if "z3" in engines:
         try:
             import z3
@@ -377,7 +384,23 @@ def main : IO Unit := do
 
 def run_formal(project, tools: dict) -> list[dict]:
     """Run each declared check using only the previously approved in-memory files."""
-    return [
-        (_run_z3 if check.engine == "z3" else _run_lean)(check, project.files, tools)
-        for check in project.contract.formal
-    ]
+    results = []
+    for check in project.contract.formal:
+        if check.engine == "z3":
+            results.append(_run_z3(check, project.files, tools))
+        elif check.engine == "lean":
+            results.append(_run_lean(check, project.files, tools))
+        else:
+            results.append(
+                {
+                    "id": check.id,
+                    "claim": check.claim,
+                    "kind": check.engine,
+                    "status": "incomplete",
+                    "detail": tools.get("lean-comparator", {}).get(
+                        "error", "A checked proof campaign is required"
+                    ),
+                    "evidence": {},
+                }
+            )
+    return results

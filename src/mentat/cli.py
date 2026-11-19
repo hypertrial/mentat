@@ -26,12 +26,14 @@ app = typer.Typer(no_args_is_help=True, pretty_exceptions_enable=False)
 spec_app = typer.Typer(no_args_is_help=True)
 claims_app = typer.Typer(no_args_is_help=True)
 evidence_app = typer.Typer(no_args_is_help=True)
+proof_app = typer.Typer(no_args_is_help=True)
 showcase_app = typer.Typer(no_args_is_help=True)
 app.add_typer(spec_app, name="spec", help="Review and approve a project contract.")
 app.add_typer(
     claims_app, name="claims", help="Render and publish review copies of contract claims."
 )
 app.add_typer(evidence_app, name="evidence", help="Inspect and export run evidence.")
+app.add_typer(proof_app, name="proof", help="Prepare and check approved Lean proof tasks.")
 app.add_typer(showcase_app, name="showcase", help="Try Mentat on a real project.")
 showcase_app.add_typer(polaris_app, name="polaris", help="Replay a Polaris configuration bug.")
 
@@ -307,6 +309,56 @@ def _reproduce(project: Project, state: Path, revision: str, context: str | None
     )
 
 
+@proof_app.command("prepare")
+def prepare_proof(
+    ctx: typer.Context,
+    repo: Repo,
+    base: Base,
+    rev: Annotated[str, typer.Option(help="Full candidate commit ID.")],
+    output: Annotated[Path, typer.Option("--out", help="New editable task directory.")],
+    runner: Runner = "docker",
+    target: Annotated[
+        list[str] | None,
+        typer.Option(help="Selected formal check ID; repeat for multiple targets."),
+    ] = None,
+    output_json: JsonOutput = False,
+) -> None:
+    """Freeze approved targets and create separate editable source tasks."""
+    from . import proof
+
+    try:
+        project = load_project(repo, base, runner)
+        state = _state(ctx, project)
+        result = proof.prepare(
+            state,
+            project,
+            snapshot(project.root, rev),
+            _approval(state, project),
+            output,
+            targets=target,
+        )
+        finish(result, output_json)
+    except _USER_ERRORS as exc:
+        _error(exc, output_json)
+
+
+@proof_app.command("check")
+def check_proof(
+    ctx: typer.Context,
+    campaign_id: str,
+    submission: Annotated[Path, typer.Option(exists=True, file_okay=False)],
+    output_json: JsonOutput = False,
+) -> None:
+    """Snapshot source submissions and record an independently checked attempt."""
+    from . import proof
+
+    try:
+        state = evidence.state_directory(ctx.obj["state"], create=False)
+        finish(proof.check(state, campaign_id, submission), output_json)
+    except _USER_ERRORS as exc:
+        _error(exc, output_json)
+
+
 @app.command()
 def verify(
     ctx: typer.Context,
@@ -314,6 +366,10 @@ def verify(
     base: Base,
     rev: Annotated[str, typer.Option(help="Full candidate commit ID.")],
     runner: Runner = "docker",
+    proof_campaign: Annotated[
+        list[str] | None,
+        typer.Option(help="Recheck a matching proof campaign; repeat for disjoint targets."),
+    ] = None,
     output_json: JsonOutput = False,
 ) -> None:
     """Run the approved formal and behavior checks for a commit."""
@@ -326,14 +382,72 @@ def verify(
         tools = tool_info(project)
         models = run_formal(project, tools)
         cases = []
+        qualifications = []
         artifacts = {}
+        if proof_campaign:
+            from . import proof
+
+            checked, artifacts = proof.recheck(state, project, candidate, approved, proof_campaign)
+            by_id = {item["id"]: item for item in checked}
+            if len(by_id) != len(checked) or set(by_id) - {
+                check.id for check in project.contract.formal if check.engine == "lean-comparator"
+            }:
+                raise ValueError("Proof recheck returned unexpected formal obligations")
+            models = [by_id.get(item["id"], item) for item in models]
+            from .runner import _MAX_RUN_OUTPUT
+
+            # Source evidence is required; proof diagnostics are optional.
+            retained = {}
+            remaining = _MAX_RUN_OUTPUT
+            for model in checked:
+                filename = model.get("artifacts", {}).get("proof-source")
+                if filename:
+                    data = artifacts[filename]
+                    if len(data) <= remaining:
+                        retained[filename] = data
+                        remaining -= len(data)
+                    else:
+                        model.update(
+                            status="incomplete",
+                            detail="Proof source evidence exceeded the run output budget",
+                        )
+                        del model["artifacts"]["proof-source"]
+                        model.setdefault("artifact_omissions", []).append(filename)
+            remaining = min(remaining, 1024 * 1024)
+            for model in checked:
+                for name, filename in list(model.get("artifacts", {}).items()):
+                    if name == "proof-source":
+                        continue
+                    data = artifacts[filename]
+                    if len(data) <= remaining:
+                        retained[filename] = data
+                        remaining -= len(data)
+                    else:
+                        del model["artifacts"][name]
+                        model.setdefault("artifact_omissions", []).append(filename)
+            artifacts = retained
         runtime = {"runner": runner}
         context = ctx.obj["docker"]
         if len(models) != len(project.contract.formal):
             raise ValueError("Formal runner returned incomplete check results")
         if evidence.status(models, incomplete_first=True) == "pass":
             runtime = runner_info(project, context)
-            behavior, artifacts = run_behavior(project, candidate, context, runtime, run_id)
+            if artifacts:
+                from .runner import _MAX_RUN_OUTPUT
+
+                behavior, behavior_artifacts = run_behavior(
+                    project,
+                    candidate,
+                    context,
+                    runtime,
+                    run_id,
+                    output_budget=_MAX_RUN_OUTPUT - sum(map(len, artifacts.values())),
+                )
+            else:
+                behavior, behavior_artifacts = run_behavior(
+                    project, candidate, context, runtime, run_id
+                )
+            artifacts.update(behavior_artifacts)
             if len(behavior) != len(project.contract.behavior):
                 raise ValueError("Behavior runner returned incomplete check results")
             cases = [
@@ -345,6 +459,22 @@ def verify(
             runtime["mentat_python"] = sys.executable
             runtime["invocation_path"] = os.environ.get("PATH", os.defpath)
             runtime["invocation_directory"] = str(Path.cwd())
+        if project.contract.source_mutations and cases:
+            from . import runner as behavior_runner
+            from .qualification import run_source_mutations
+
+            qualifications, mutation_artifacts = run_source_mutations(
+                project,
+                candidate,
+                context,
+                runtime,
+                run_id,
+                behavior,
+                output_budget=max(
+                    0, behavior_runner._MAX_RUN_OUTPUT - sum(map(len, artifacts.values()))
+                ),
+            )
+            artifacts.update(mutation_artifacts)
         if load_project(repo, base, runner).fingerprint != project.fingerprint:
             raise ValueError("Contract or verifier changed during the run. Repeat after approval")
         if _approval(state, project) != approved:
@@ -355,7 +485,7 @@ def verify(
             "run_id": run_id,
             "recorded_at": evidence.now(),
             **_scope(project),
-            "status": evidence.status([*models, *cases], incomplete_first=True),
+            "status": evidence.status([*models, *cases, *qualifications], incomplete_first=True),
             "revision": candidate.revision,
             "snapshot_digest": candidate.digest,
             "approval": approved,
@@ -375,6 +505,30 @@ def verify(
             "tools": tools,
             "reproduce": _reproduce(project, state, candidate.revision, runtime.get("context")),
         }
+        if proof_campaign:
+            record["proof_campaigns"] = proof_campaign
+            record["reproduce"] += " " + shlex.join(
+                [arg for campaign in proof_campaign for arg in ("--proof-campaign", campaign)]
+            )
+        if project.contract.source_mutations:
+            from .qualification import approved_mutations
+
+            checks = {check.id: check for check in project.contract.behavior}
+            record["source_mutation_checks"] = [
+                {
+                    "id": mutation["id"],
+                    "claim": mutation["claim"],
+                    "check": mutation["check"],
+                    "expected_case": mutation["expected_case"],
+                    "required_cases": checks[mutation["check"]].case_report.required_cases,
+                    "violation_exit_codes": checks[mutation["check"]].violation_exit_codes,
+                }
+                for mutation in approved_mutations(project.contract, project.files)
+            ]
+            record["source_qualifications"] = qualifications
+            record["source_mutation_manifest_sha256"] = evidence.digest(
+                project.files[project.contract.source_mutations]
+            )
         if runner == "host":
             args = shlex.split(record["reproduce"])[1:]
             launcher = [sys.executable, "-P", "-c", "from mentat.cli import app; app()"]
@@ -436,6 +590,9 @@ def compare_evidence(
     before_run: str,
     after_run: str,
     output_json: JsonOutput = False,
+    output: Annotated[
+        Path | None, typer.Option("--out", help="New offline HTML comparison path.")
+    ] = None,
     across_contracts: Annotated[
         bool, typer.Option(help="Review saved runs across approved contract revisions.")
     ] = False,
@@ -447,6 +604,18 @@ def compare_evidence(
         result = evidence.compare_runs(
             state, before_run, after_run, across_contracts=across_contracts
         )
+        if output is not None:
+            from .evidence_html import render_comparison
+
+            render_comparison(
+                state, before_run, after_run, output, across_contracts=across_contracts
+            )
+            result = {
+                **result,
+                "comparison_status": result["status"],
+                "status": "pass",
+                "report": str(output),
+            }
     except _USER_ERRORS as exc:
         _error(exc, output_json)
         return
@@ -493,6 +662,32 @@ def compare_evidence(
                         for name, filename in check[side].get(group, {}).items():
                             typer.echo(f"    {side} {name}  {bundle / filename}")
     finish(result, output_json)
+
+
+@evidence_app.command("pr-summary")
+def summarize_pr(
+    ctx: typer.Context,
+    run_id: str,
+    head: Annotated[str, typer.Option(help="Exact PR head commit, matching the saved run.")],
+    report_url: Annotated[str, typer.Option(help="Operator-authorized HTTPS report URL.")],
+    ci_status: Annotated[
+        Literal["pass", "fail", "incomplete", "unavailable"],
+        typer.Option(help="Exact-head lightweight CI result supplied by the host."),
+    ] = "unavailable",
+) -> None:
+    """Print a Markdown PR summary; preserve existing artifact access controls."""
+    from .evidence_html import _accepted, _validate
+    from .evidence_report import pr_summary
+
+    try:
+        state = evidence.state_directory(ctx.obj["state"], create=False)
+        _, record, digest = evidence.read_run_snapshot(state, run_id)
+        _validate(record)
+        typer.echo(
+            pr_summary(record, head, report_url, _accepted(state, record, digest), ci_status)
+        )
+    except _USER_ERRORS as exc:
+        _error(exc, False)
 
 
 @app.command()

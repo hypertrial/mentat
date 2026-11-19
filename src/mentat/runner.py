@@ -405,7 +405,13 @@ def _docker_artifact(context, name, artifact):
         return tar.extractfile(members[0]).read(_MAX_ARTIFACT + 1)
 
 
-def run_behavior(project, snapshot, context, info, run_id) -> tuple[list[dict], dict[str, bytes]]:
+def run_behavior(
+    project, snapshot, context, info, run_id, *, output_budget=None
+) -> tuple[list[dict], dict[str, bytes]]:
+    if output_budget is not None and (
+        type(output_budget) is not int or not 0 <= output_budget <= _MAX_RUN_OUTPUT
+    ):
+        raise ValueError("Invalid remaining run output budget")
     names = (
         dict.fromkeys(
             name for check in project.contract.behavior for name in check.host_environment
@@ -415,7 +421,7 @@ def run_behavior(project, snapshot, context, info, run_id) -> tuple[list[dict], 
     )
     inherited = {name: os.environ.get(name) for name in names}
     results, files = [], {}
-    remaining = _MAX_RUN_OUTPUT
+    remaining = _MAX_RUN_OUTPUT if output_budget is None else output_budget
     if project.runner == "docker":
         context = info["context"]
     elif "path" not in info:

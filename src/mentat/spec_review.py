@@ -17,7 +17,9 @@ def summary(project: Project) -> dict:
     staged = {file["staged"] for file in base_files.values()}
     return {
         "contract": contract.model_dump(mode="json", exclude_none=True),
-        "lean_runs_on_host": any(check.engine == "lean" for check in contract.formal),
+        "lean_runs_on_host": any(
+            check.engine in ("lean", "lean-comparator") for check in contract.formal
+        ),
         "approved_files": {
             name: digest(data) for name, data in project.files.items() if name not in staged
         },
@@ -29,6 +31,11 @@ def summary(project: Project) -> dict:
                 "statement": claim.statement,
                 "assumptions": claim.assumptions,
                 **({"provenance": claim.provenance.model_dump()} if claim.provenance else {}),
+                **(
+                    {"assurance": claim.assurance.model_dump(exclude_none=True)}
+                    if claim.assurance is not None
+                    else {}
+                ),
                 "formal": [
                     check.model_dump(mode="json", exclude_none=True)
                     for check in contract.formal
@@ -52,16 +59,38 @@ def comparison_inputs(project: Project) -> dict:
     contract = project.contract
     files = {name: digest(data) for name, data in project.files.items()}
     definitions = {}
+    check_index = {check.id: check for check in [*contract.formal, *contract.behavior]}
     for claim in contract.claims:
         formal = [item for item in contract.formal if item.claim == claim.id]
         behavior = [item for item in contract.behavior if item.claim == claim.id]
+        assurance = claim.assurance
+        refs = (
+            [
+                *assurance.implementation_checks,
+                *assurance.witness_checks,
+                *(ref for bound in assurance.bounds for ref in bound.checks),
+            ]
+            if assurance
+            else []
+        )
+        supporting = [
+            check_index[ident]
+            for ident in dict.fromkeys(ref.check_id for ref in refs)
+            if check_index[ident].claim != claim.id
+        ]
+        supporting_formal = [
+            check for check in supporting if check.id in {item.id for item in contract.formal}
+        ]
+        supporting_behavior = [
+            check for check in supporting if check.id in {item.id for item in contract.behavior}
+        ]
         direct_paths = {
             path
-            for check in formal
+            for check in [*formal, *supporting_formal]
             for path in (check.source, check.counterexample)
             if path is not None
         }
-        for check in behavior:
+        for check in [*behavior, *supporting_behavior]:
             argv = check.effective_argv()
             if check.negative_control:
                 argv = [*argv, *check.negative_control.args]
@@ -73,6 +102,21 @@ def comparison_inputs(project: Project) -> dict:
                 {
                     "statement": claim.statement,
                     "assumptions": claim.assumptions,
+                    **(
+                        {"assurance": claim.assurance.model_dump(exclude_none=True)}
+                        if claim.assurance is not None
+                        else {}
+                    ),
+                    **(
+                        {
+                            "supporting_checks": [
+                                check.model_dump(mode="json", exclude_none=True)
+                                for check in supporting
+                            ]
+                        }
+                        if supporting
+                        else {}
+                    ),
                     "formal": [
                         check.model_dump(mode="json", exclude_none=True) for check in formal
                     ],
@@ -97,7 +141,8 @@ def comparison_inputs(project: Project) -> dict:
         "runner_settings": digest(
             json_bytes(
                 contract.model_dump(
-                    mode="json", include={"docker_image", "allow_host", "host_requirements"}
+                    mode="json",
+                    include={"docker_image", "allow_host", "host_requirements", "source_mutations"},
                 )
             )
         ),
@@ -186,6 +231,8 @@ def show(review: dict) -> None:
             _line("  assumptions", claim["assumptions"])
         if "provenance" in claim:
             _line("  provenance", claim["provenance"])
+        if "assurance" in claim:
+            _line("  assurance", claim["assurance"])
         for check in claim["formal"]:
             _line(f"  formal {check['id']}", check)
         for check in claim["behavior"]:

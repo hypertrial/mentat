@@ -74,6 +74,75 @@ def _append_selectors(lines: list[str], contract: Contract, claim_id: str) -> No
         lines.extend(("", *selectors, *environment))
 
 
+def _assurance_lines(claim: Claim, contract: Contract) -> list[str]:
+    assurance = claim.assurance
+    if assurance is None:
+        return []
+    checks = {check.id: check for check in [*contract.formal, *contract.behavior]}
+    lines = ["Assurance · human-reviewed metadata"]
+
+    def reference(label, ref):
+        check = checks[ref.check_id]
+        support = (
+            f" · supporting claim {_code_span(check.claim)}" if check.claim != claim.id else ""
+        )
+        lines.append(f"- {label} {_code_span(ref.check_id)}{support}")
+        for case in ref.case_ids:
+            lines.append(f"- Assurance case {_code_span(case)}")
+
+    for ref in assurance.implementation_checks:
+        reference("Implementation check", ref)
+    for ref in assurance.witness_checks:
+        reference("Witness check", ref)
+    for bound in assurance.bounds:
+        lines.append(
+            f"- Bound {_code_span(bound.id)} · {bound.kind} · {_inline_prose(bound.statement)}"
+        )
+        if bound.assumption is not None:
+            lines.append("- Bound assumption · " + _inline_prose(bound.assumption))
+        for ref in bound.checks:
+            reference("Bound check", ref)
+    for exclusion in assurance.exclusions:
+        lines.append("- Exclusion · " + _inline_prose(exclusion.scenario))
+        lines.append("- Reason · " + _inline_prose(exclusion.reason))
+        lines.append("- Effect · " + _inline_prose(exclusion.effect))
+        lines.append(
+            "- Affected claims · "
+            + ", ".join(_code_span(item) for item in exclusion.affected_claims)
+        )
+    for deviation in assurance.deviations:
+        lines.append("- Deviation · " + _inline_prose(deviation.rationale))
+        lines.append("- Effect · " + _inline_prose(deviation.effect))
+        lines.extend(
+            provenance_lines(
+                {"origin": "declared", "citations": [deviation.citation.model_dump()]}
+            )[1:]
+        )
+    return lines
+
+
+def _contract_policy_lines(claim: Claim, contract: Contract, *, grouped: bool) -> list[str]:
+    lines = []
+    if contract.source_mutations is not None and claim.id == contract.claims[0].id:
+        lines.append("- Source mutations manifest · " + _inline_prose(contract.source_mutations))
+    if not grouped:
+        for check in contract.formal:
+            if check.claim == claim.id and check.engine == "lean-comparator":
+                lines.append(
+                    f"- Lean comparator {_code_span(check.id)} · theorem "
+                    + _inline_prose(check.theorem)
+                )
+                lines.append(
+                    "- Allowed imports · "
+                    + (", ".join(_code_span(name) for name in check.allowed_imports) or "None")
+                )
+                lines.append(
+                    "- Permitted axioms · "
+                    + (", ".join(_code_span(name) for name in check.permitted_axioms) or "None")
+                )
+    return lines
+
+
 def _review_intro(review: Review) -> list[str]:
     lines = [
         "# Claims Spec",
@@ -121,6 +190,10 @@ def _append_review_claim(
         trace += f" · Formal {formal}"
     if claim.provenance:
         lines.extend(("", *provenance_lines(claim.provenance.model_dump())))
+    if claim.assurance is not None:
+        lines.extend(("", *_assurance_lines(claim, contract)))
+    if policy := _contract_policy_lines(claim, contract, grouped=grouped):
+        lines.extend(("", *policy))
     lines.extend(("", trace))
 
 
@@ -170,9 +243,26 @@ def _grouped_claims(contract: Contract) -> bytes:
             (
                 "",
                 f"Formal check {_code_span(check.id)} · Claim {_code_span(check.claim)} · "
-                + ("Z3" if check.engine == "z3" else "Lean"),
+                + (
+                    "Z3"
+                    if check.engine == "z3"
+                    else "Lean comparator"
+                    if check.engine == "lean-comparator"
+                    else "Lean"
+                ),
             )
         )
+        if check.engine == "lean-comparator":
+            lines.append("")
+            lines.append("- Comparator theorem · " + _inline_prose(check.theorem))
+            lines.append(
+                "- Allowed imports · "
+                + (", ".join(_code_span(name) for name in check.allowed_imports) or "None")
+            )
+            lines.append(
+                "- Permitted axioms · "
+                + (", ".join(_code_span(name) for name in check.permitted_axioms) or "None")
+            )
         if check.claim not in shown and (assumptions := claims[check.claim].assumptions):
             lines.append("")
             lines.extend("- Assumption " + _inline_prose(item) for item in assumptions)
@@ -215,6 +305,10 @@ def render_claims(contract: Contract) -> bytes:
             lines.extend(("", "Checks"))
         if claim.provenance:
             lines.extend(("", *provenance_lines(claim.provenance.model_dump())))
+        if claim.assurance is not None:
+            lines.extend(("", *_assurance_lines(claim, contract)))
+        if policy := _contract_policy_lines(claim, contract, grouped=False):
+            lines.extend(("", *policy))
         _append_selectors(lines, contract, claim.id)
         lines.append("")
         for label, checks in (("Formal", contract.formal), ("Behavior", contract.behavior)):

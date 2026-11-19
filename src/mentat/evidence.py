@@ -201,6 +201,23 @@ def read_run_snapshot(state: Path, run_id: str) -> tuple[Path, dict, str]:
         path = bundle / name
         if path.is_symlink() or not path.is_file() or digest(path.read_bytes()) != expected:
             raise ValueError(f"Evidence artifact failed its integrity check: {name}")
+    proof_evidence(record)
+    if "source_mutation_checks" in record or "source_qualifications" in record:
+        qualifications = source_qualifications(record)
+        checks = record.get("model_checks")
+        if not isinstance(checks, list) or any(
+            not isinstance(check, dict)
+            or not isinstance(check.get("status"), str)
+            or check["status"] not in STATUSES
+            for check in checks
+        ):
+            raise ValueError("Invalid qualification formal context")
+        executed = [check for case in record["cases"] for check in case["checks"]]
+        if record["status"] != status(
+            checks + executed + [check for check in qualifications if check["status"] != "skipped"],
+            incomplete_first=True,
+        ):
+            raise ValueError("Saved verdict contradicts qualification evidence")
     return bundle, record, digest(raw)
 
 
@@ -209,9 +226,67 @@ def read_run(state: Path, run_id: str) -> tuple[Path, dict]:
     return bundle, record
 
 
+def proof_evidence(record: dict) -> None:
+    """Check saved proof identities without rerunning an historical toolchain."""
+    from .project_formal import _NAME
+
+    environments = []
+    for check in record.get("model_checks", []):
+        if not isinstance(check, dict) or check.get("kind") != "lean-comparator":
+            continue
+        info = check.get("evidence", {})
+        if not isinstance(info, dict):
+            raise ValueError("Invalid saved proof evidence")
+        if "campaign_id" not in info:
+            if check.get("status") == "pass":
+                raise ValueError("Passing proof has no campaign evidence")
+            continue
+        if not isinstance(info["campaign_id"], str) or not RUN_ID.fullmatch(info["campaign_id"]):
+            raise ValueError("Invalid saved proof campaign identity")
+        for key in ("source_sha256", "approved_sha256", "verifier_digest"):
+            value = info.get(key)
+            if value is None and key == "source_sha256" and check.get("status") != "pass":
+                continue
+            if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value):
+                raise ValueError("Invalid saved proof source identity")
+        theorem = info.get("theorem")
+        if not isinstance(theorem, str) or not _NAME.fullmatch(theorem):
+            raise ValueError("Invalid saved proof theorem identity")
+        expected = {key: record.get(key) for key in ("revision", "base", "contract_digest")}
+        expected["verifier_digest"] = record.get("comparison_inputs", {}).get("verifier")
+        if any(info.get(key) != value for key, value in expected.items()):
+            raise ValueError("Saved proof does not match its verification run")
+        environment = info.get("environment")
+        if not isinstance(environment, dict) or environment.get("version") != "4.35.0":
+            raise ValueError("Invalid saved proof environment")
+        for key in ("toolchain_sha256", "bwrap_sha256", "policy_sha256"):
+            value = environment.get(key)
+            if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value):
+                raise ValueError("Invalid saved proof environment hash")
+        if environments and environment != environments[0]:
+            raise ValueError("Saved proofs have conflicting checker environments")
+        environments.append(environment)
+        recorded_tool = record.get("tools", {}).get("lean-comparator")
+        if recorded_tool is not None and recorded_tool != environment:
+            raise ValueError("Saved proof environment does not match the recorded checker")
+        if check.get("status") == "pass":
+            source = check.get("artifacts", {}).get("proof-source")
+            if record.get("artifacts", {}).get(source) != info.get("source_sha256"):
+                raise ValueError("Passing proof source is missing or mismatched")
+
+
 def _check_evidence(check: dict, artifacts: dict) -> dict:
-    paths = dict(check.get("artifacts", {}))
+    paths = check.get("artifacts", {})
     logs = {stream: check[stream] for stream in ("stdout", "stderr") if stream in check}
+    if (
+        not isinstance(artifacts, dict)
+        or not isinstance(paths, dict)
+        or any(
+            not isinstance(key, str) or not isinstance(value, str) for key, value in paths.items()
+        )
+        or any(not isinstance(value, str) for value in logs.values())
+    ):
+        raise ValueError("Invalid saved check evidence references")
     if (set(paths.values()) | set(logs.values())) - artifacts.keys():
         raise ValueError("Saved check references files outside its evidence manifest")
     result = {
@@ -222,10 +297,251 @@ def _check_evidence(check: dict, artifacts: dict) -> dict:
     }
     if "command_status" in check:
         result.update(command_status=check["command_status"], exit_code=check["exit_code"])
-    for key in ("case_results", "required_cases", "qualified"):
+    for key in (
+        "case_results",
+        "required_cases",
+        "qualified",
+        "outcome",
+        "bindings",
+        "applied_count",
+        "assertion_failed",
+        "expected_case",
+        "check",
+    ):
         if key in check:
             result[key] = check[key]
+    if check.get("kind") == "lean-comparator":
+        info = check.get("evidence", {})
+        result["proof"] = {
+            key: info.get(key, "unavailable")
+            for key in ("campaign_id", "theorem", "source_sha256", "approved_sha256", "environment")
+        }
     return result
+
+
+def source_qualifications(record: dict) -> list[dict]:
+    """Validate source qualification bindings and project their evidence references."""
+    if not ({"source_mutation_checks", "source_qualifications"} & record.keys()):
+        return []
+    if (
+        not {"claims", "behavior_skipped", "cases"} <= record.keys()
+        or not isinstance(record["claims"], list)
+        or type(record["behavior_skipped"]) is not bool
+        or not isinstance(record["cases"], list)
+        or any(
+            not isinstance(case, dict)
+            or not isinstance(case.get("checks"), list)
+            or any(
+                not isinstance(check, dict)
+                or not isinstance(check.get("id"), str)
+                or not isinstance(check.get("status"), str)
+                or check["status"] not in STATUSES
+                for check in case["checks"]
+            )
+            for case in record["cases"]
+        )
+        or any(
+            not isinstance(claim, dict) or not isinstance(claim.get("id"), str)
+            for claim in record["claims"]
+        )
+    ):
+        raise ValueError("Invalid source qualification context")
+    inventory = record.get("source_mutation_checks")
+    results = record.get("source_qualifications")
+    if (
+        not isinstance(inventory, list)
+        or not inventory
+        or len(inventory) > 128
+        or not isinstance(results, list)
+    ):
+        raise ValueError("Invalid source qualification inventory")
+    claims = {claim["id"] for claim in record["claims"]}
+    declared = {}
+    for item in inventory:
+        if (
+            not isinstance(item, dict)
+            or not isinstance(item.get("id"), str)
+            or not item["id"]
+            or item["id"] in declared
+            or not isinstance(item.get("claim"), str)
+            or item["claim"] not in claims
+            or not isinstance(item.get("check"), str)
+            or not isinstance(item.get("required_cases"), list)
+            or not item["required_cases"]
+            or any(not isinstance(case, str) for case in item["required_cases"])
+            or len(set(item["required_cases"])) != len(item["required_cases"])
+            or item.get("expected_case") not in item["required_cases"]
+            or not isinstance(item.get("violation_exit_codes"), list)
+            or not item["violation_exit_codes"]
+            or any(
+                type(code) is not int or not 1 <= code <= 124
+                for code in item["violation_exit_codes"]
+            )
+        ):
+            raise ValueError("Invalid source qualification declaration")
+        declared[item["id"]] = item
+    if record["behavior_skipped"]:
+        if results:
+            raise ValueError("Source qualifications ran despite the formal gate")
+        return [
+            {**item, "status": "skipped", "detail": "Formal checks did not pass"}
+            for item in inventory
+        ]
+    baseline = {check["id"]: check for case in record["cases"] for check in case["checks"]}
+    if len(baseline) != sum(len(case["checks"]) for case in record["cases"]):
+        raise ValueError("Duplicate source qualification baseline check")
+    if (
+        not {
+            "run_id",
+            "revision",
+            "snapshot_digest",
+            "base",
+            "contract_digest",
+            "runner",
+            "runtime",
+            "comparison_inputs",
+            "source_mutation_manifest_sha256",
+        }
+        <= record.keys()
+        or not isinstance(record["runtime"], dict)
+        or not isinstance(record["comparison_inputs"], dict)
+        or not isinstance(record["comparison_inputs"].get("verifier"), str)
+        or not isinstance(record["source_mutation_manifest_sha256"], str)
+    ):
+        raise ValueError("Invalid source qualification context")
+    observed_ids = set()
+    projected = []
+    for result in results:
+        if (
+            not isinstance(result, dict)
+            or not isinstance(result.get("id"), str)
+            or result["id"] not in declared
+            or result["id"] in observed_ids
+        ):
+            raise ValueError("Invalid source qualification result")
+        observed_ids.add(result["id"])
+        item = declared[result["id"]]
+        binding = result.get("bindings")
+        expected_binding = {
+            key: record[key]
+            for key in ("run_id", "revision", "snapshot_digest", "base", "contract_digest")
+        }
+        expected_binding.update(
+            verifier_digest=record["comparison_inputs"]["verifier"],
+            approved_manifest_sha256=record["source_mutation_manifest_sha256"],
+        )
+        if (
+            type(result.get("schema_version")) is not int
+            or result["schema_version"] != 1
+            or any(result.get(key) != item[key] for key in ("claim", "check", "expected_case"))
+            or not isinstance(binding, dict)
+            or any(binding.get(key) != value for key, value in expected_binding.items())
+            or binding.get("runtime")
+            != {"runner": record["runner"], "sha256": digest(json_bytes(record["runtime"]))}
+            or not isinstance(result.get("outcome"), str)
+            or result["outcome"] not in {"killed", "survived", "error"}
+            or result.get("status")
+            != {"killed": "pass", "survived": "violation", "error": "incomplete"}.get(
+                result.get("outcome")
+            )
+            or type(result.get("applied_count")) is not int
+            or result["applied_count"] not in (0, 1)
+            or not isinstance(result.get("detail"), str)
+            or result.get("assertion_failed") is not None
+            and type(result["assertion_failed"]) is not bool
+        ):
+            raise ValueError("Source qualification bindings or outcome are invalid")
+        check = result.get("check_result")
+        cases = result.get("case_results")
+        if not isinstance(cases, dict) or any(
+            case not in item["required_cases"]
+            or not isinstance(outcome, str)
+            or outcome not in {"pass", "fail", "skip", "error"}
+            for case, outcome in cases.items()
+        ):
+            raise ValueError("Invalid source qualification cases")
+        refs = {}
+        if check is not None:
+            if (
+                not isinstance(check, dict)
+                or check.get("id") != item["check"]
+                or check.get("claim") != item["claim"]
+                or not isinstance(check.get("status"), str)
+                or check["status"] not in STATUSES
+                or check.get("case_results", {}) != cases
+                or result["assertion_failed"] != (cases.get(item["expected_case"]) == "fail")
+            ):
+                raise ValueError("Invalid mutated check attribution")
+            refs = {
+                key: check[key]
+                for key in ("artifacts", "stdout", "stderr", "artifact_omissions", "log_omissions")
+                if key in check
+            }
+            if "artifacts" in record:
+                _check_evidence(check, record["artifacts"])
+        elif cases or result["assertion_failed"] is not None:
+            raise ValueError("Source qualification lacks its underlying check")
+        if (
+            result["outcome"] == "error"
+            and check is not None
+            and set(cases) == set(item["required_cases"])
+            and all(value in {"pass", "fail"} for value in cases.values())
+            and not check.get("artifact_omissions")
+            and not check.get("log_omissions")
+            and (
+                (
+                    check["status"] == "violation"
+                    and check.get("exit_code") in item["violation_exit_codes"]
+                    and result["assertion_failed"] is True
+                )
+                or (
+                    check["status"] == "pass"
+                    and check.get("exit_code") == 0
+                    and all(value == "pass" for value in cases.values())
+                )
+            )
+        ):
+            raise ValueError("Source qualification error contradicts conclusive evidence")
+        if result["outcome"] != "error":
+            original = baseline.get(item["check"], {})
+            if (
+                original.get("status") != "pass"
+                or original.get("command_status") != "pass"
+                or original.get("exit_code") != 0
+                or original.get("claim") != item["claim"]
+                or original.get("case_results") != dict.fromkeys(item["required_cases"], "pass")
+                or result["applied_count"] != 1
+                or check is None
+                or set(cases) != set(item["required_cases"])
+                or any(value not in {"pass", "fail"} for value in cases.values())
+                or not all(
+                    isinstance(binding.get(key), str)
+                    and re.fullmatch(r"[0-9a-f]{64}", binding[key])
+                    for key in ("source_before_sha256", "source_after_sha256")
+                )
+                or binding["source_before_sha256"] == binding["source_after_sha256"]
+            ):
+                raise ValueError(
+                    "Source qualification lacks complete baseline or mutation evidence"
+                )
+            if result["outcome"] == "killed":
+                valid = (
+                    check["status"] == "violation"
+                    and check.get("exit_code") in item["violation_exit_codes"]
+                    and result["assertion_failed"] is True
+                )
+            else:
+                valid = (
+                    check["status"] == "pass"
+                    and check.get("exit_code") == 0
+                    and all(value == "pass" for value in cases.values())
+                )
+            if not valid:
+                raise ValueError("Source qualification contradicts the expected assertion")
+        projected.append({**result, **refs, "required_cases": item["required_cases"]})
+    if observed_ids != declared.keys():
+        raise ValueError("Missing source qualification result")
+    return projected
 
 
 def _checks_by_id(record: dict) -> dict[tuple[str, str], dict]:
@@ -233,9 +549,13 @@ def _checks_by_id(record: dict) -> dict[tuple[str, str], dict]:
     for kind, checks in (
         ("formal", record["model_checks"]),
         ("behavior", [check for case in record["cases"] for check in case["checks"]]),
+        ("source-mutation", source_qualifications(record)),
     ):
         for check in checks:
             key = kind, check["id"]
+            if kind == "source-mutation" and check["status"] == "skipped":
+                result[key] = {"claim": check["claim"], "status": "skipped"}
+                continue
             if key in result or check["status"] not in STATUSES:
                 raise ValueError("Invalid saved check results")
             artifact_index = record["artifacts"]

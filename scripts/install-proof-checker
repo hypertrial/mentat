@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+[[ $(uname -s) == Linux ]] || { echo 'The protected checker requires Linux' >&2; exit 2; }
+case $(uname -m) in
+  x86_64)
+    proof_archive=lean-4.35.0-linux.tar.zst
+    proof_sha=7289597a44543246c9227b8cae501767e095ce17f6d448b95fc4a8dc97268f6d
+    ;;
+  aarch64)
+    proof_archive=lean-4.35.0-linux_aarch64.tar.zst
+    proof_sha=c8f0f8a3920e839718b1343e6781fd80a3e9b1024fbcd7078eb30f54e806b028
+    ;;
+  *) echo 'Unsupported Lean 4.35.0 Linux architecture' >&2; exit 2 ;;
+esac
+proof_sudo=()
+if [[ $(id -u) != 0 ]]; then proof_sudo=(sudo -n); fi
+"${proof_sudo[@]}" apt-get update
+"${proof_sudo[@]}" apt-get install -y bubblewrap curl zstd
+if [[ -e /opt/lean-4.35.0 ]]; then
+  echo 'Refusing to replace an existing /opt/lean-4.35.0; validate that installation separately' >&2
+  exit 2
+fi
+proof_tmp=$(mktemp -d)
+trap 'rm -rf -- "$proof_tmp"' EXIT
+curl --fail --location --proto '=https' --tlsv1.2 --retry 3 \
+  "https://github.com/leanprover/lean4/releases/download/v4.35.0/$proof_archive" \
+  --output "$proof_tmp/$proof_archive"
+printf '%s  %s\n' "$proof_sha" "$proof_tmp/$proof_archive" | sha256sum --check -
+tar --zstd --extract --file "$proof_tmp/$proof_archive" --directory "$proof_tmp"
+"${proof_sudo[@]}" mkdir -p /opt
+"${proof_sudo[@]}" mv "$proof_tmp/${proof_archive%.tar.zst}" /opt/lean-4.35.0
+"${proof_sudo[@]}" chown -R root:root /opt/lean-4.35.0
+"${proof_sudo[@]}" chmod -R go-w /opt/lean-4.35.0
+/opt/lean-4.35.0/bin/lean --version
