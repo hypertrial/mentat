@@ -222,6 +222,7 @@ class Behavior(_Model):
     )
     artifacts: list[str] = Field(default_factory=list, max_length=128)
     selectors: list[str] | None = Field(default=None, max_length=128)
+    host_environment: list[str] = Field(default_factory=list, max_length=128)
     case_report: CaseReport | None = None
     negative_control: NegativeControl | None = None
 
@@ -259,6 +260,18 @@ class Behavior(_Model):
             for arg in self.argv
             for value in (self.selectors if arg == "{selectors}" else [arg])
         ]
+
+    @field_validator("host_environment")
+    @classmethod
+    def environment_names(cls, value):
+        if len(set(value)) != len(value) or any(
+            not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name)
+            or name.upper() in ("PATH", "HOME")
+            or name.upper().startswith("MENTAT_")
+            for name in value
+        ):
+            raise ValueError("invalid, reserved, or duplicate host environment name")
+        return value
 
     @field_validator("violation_exit_codes")
     @classmethod
@@ -345,6 +358,10 @@ class Contract(_Model):
 
     @model_validator(mode="after")
     def relationships(self):
+        if not self.allow_host and any(
+            "host_environment" in check.model_fields_set for check in self.behavior
+        ):
+            raise ValueError("host_environment requires allow_host")
         if self.review is not None and any(claim.title is None for claim in self.claims):
             raise ValueError("every claim requires a title when review is present")
         if self.docker_image is None:
@@ -738,6 +755,8 @@ def load_project(repo: Path, base: str, runner: str) -> Project:
         raise ValueError("stale .mentat/claims.md; run mentat claims render and commit it")
     if runner == "docker" and contract.docker_image is None:
         raise ValueError("contract allows only host execution; select --runner host")
+    if runner == "docker" and any(check.host_environment for check in contract.behavior):
+        raise ValueError("host_environment is not supported by the docker runner")
     if runner not in ("docker", "host") or (runner == "host" and not contract.allow_host):
         raise ValueError("runner is not allowed by contract")
     for check in contract.formal:

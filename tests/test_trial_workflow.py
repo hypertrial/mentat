@@ -371,7 +371,9 @@ def test_lean_resolution_survives_formal_staging_cwd(trial, tmp_path, monkeypatc
     )
 
 
-def test_missing_host_prerequisites_skip_all_behavior_before_execution(trial, tmp_path, monkeypatch):
+def test_missing_host_prerequisites_skip_all_behavior_before_execution(
+    trial, tmp_path, monkeypatch
+):
     from mentat import runner
 
     repo, manifest = trial
@@ -484,3 +486,176 @@ def test_nanoid_probe_classifies_candidate_results(tmp_path, candidate):
         assert "abc-d_E" not in witness
     if candidate == "historical":
         assert [record["stdout_length"] for record in records[:-1]] == [1, 2, 1]
+
+
+@pytest.mark.parametrize(
+    "names",
+    [
+        ["PATH"],
+        ["home"],
+        ["Mentat_secret"],
+        ["9BAD"],
+        ["a-b"],
+        [""],
+        ["REPEAT", "REPEAT"],
+        [f"VAR_{i}" for i in range(129)],
+    ],
+)
+def test_host_environment_rejects_invalid_names(trial, names):
+    repo, manifest = trial
+    manifest["behavior"][0]["host_environment"] = names
+    base = save(repo, manifest)
+    with pytest.raises(ValueError):
+        load_project(repo, base, "host")
+
+
+def test_host_environment_rejects_docker_and_requires_allow_host(trial):
+    repo, manifest = trial
+    manifest["docker_image"] = "example/test@sha256:" + "a" * 64
+    manifest["behavior"][0]["host_environment"] = ["PRIVATE_CONFIG"]
+    base = save(repo, manifest)
+    with pytest.raises(ValueError, match="docker"):
+        load_project(repo, base, "docker")
+    manifest["allow_host"] = False
+    manifest["behavior"][0]["host_environment"] = []
+    base = save(repo, manifest)
+    with pytest.raises(ValueError, match="allow_host"):
+        load_project(repo, base, "docker")
+
+
+def test_host_environment_is_per_check_and_reports_missing(trial, monkeypatch):
+    repo, manifest = trial
+    monkeypatch.setenv("SCOPED_CONFIG", "sensitive-value")
+    monkeypatch.setenv("UNDECLARED_CONFIG", "hidden-value")
+    monkeypatch.setenv("EMPTY_CONFIG", "")
+    manifest["behavior"][0]["host_environment"] = ["SCOPED_CONFIG"]
+    manifest["behavior"].append(
+        {
+            "id": "missing",
+            "claim": "claim",
+            "argv": [sys.executable, "{checks}/never.py"],
+            "host_environment": ["EMPTY_CONFIG", "ABSENT_CONFIG"],
+        }
+    )
+    (repo / ".mentat/check.py").write_text(
+        "import os\nassert os.environ['SCOPED_CONFIG'] == 'sensitive-' + 'value'\n"
+        "assert 'UNDECLARED_CONFIG' not in os.environ and 'EMPTY_CONFIG' not in os.environ\n"
+    )
+    (repo / ".mentat/never.py").write_text("raise Exception('must not run')\n")
+    base = save(repo, manifest)
+    project = load_project(repo, base, "host")
+    runtime = {"runner": "host", "path": os.environ["PATH"], "executables": {}}
+    checks, artifacts = run_behavior(project, snapshot(repo, base), None, runtime, "run")
+    assert [check["status"] for check in checks] == ["pass", "incomplete"]
+    assert "EMPTY_CONFIG" in checks[1]["detail"] and "ABSENT_CONFIG" in checks[1]["detail"]
+    assert runtime["prerequisites"]["host_environment"]["SCOPED_CONFIG"]["status"] == "available"
+    assert "sensitive-value" not in json.dumps([runtime, checks])
+    assert all(b"sensitive-value" not in item for item in artifacts.values())
+    doctor = CliRunner().invoke(cli.app, ["doctor", *scope(repo, base), "--json"])
+    assert doctor.exit_code == 2
+    assert "SCOPED_CONFIG" in doctor.output and "ABSENT_CONFIG" in doctor.output
+    assert "sensitive-value" not in doctor.output
+
+
+def test_host_environment_snapshot_includes_negative_control_and_later_checks(trial, monkeypatch):
+    from mentat import runner
+
+    repo, manifest = trial
+    monkeypatch.setenv("SNAPSHOT_CONFIG", "first")
+    manifest["behavior"][0].update(
+        host_environment=["SNAPSHOT_CONFIG"],
+        violation_exit_codes=[10],
+        negative_control={"args": ["--bad"], "violation_exit_code": 10},
+    )
+    manifest["behavior"].append(
+        {
+            "id": "second",
+            "claim": "claim",
+            "argv": [sys.executable, "{checks}/check.py"],
+            "host_environment": ["SNAPSHOT_CONFIG"],
+        }
+    )
+    (repo / ".mentat/check.py").write_text(
+        "import os, sys\nassert os.environ['SNAPSHOT_CONFIG'] == 'first'\nsys.exit(10 if len(sys.argv) > 1 else 0)\n"
+    )
+    base = save(repo, manifest)
+    project = load_project(repo, base, "host")
+    original = runner._process
+    calls = 0
+
+    def mutate(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        result = original(*args, **kwargs)
+        monkeypatch.setenv("SNAPSHOT_CONFIG", "changed")
+        return result
+
+    monkeypatch.setattr(runner, "_process", mutate)
+    results, _ = run_behavior(
+        project, snapshot(repo, base), None, {"path": os.environ["PATH"], "executables": {}}, "run"
+    )
+    assert calls == 3
+    assert [result["status"] for result in results] == ["pass", "pass"]
+    assert results[0]["negative_control"]["status"] == "violation"
+
+
+def test_host_environment_approval_claims_and_evidence_show_names_only(
+    trial, tmp_path, monkeypatch
+):
+    from mentat.claims import render_claims
+
+    repo, manifest = trial
+    old = save(repo, manifest)
+    manifest["behavior"][0]["host_environment"] = ["PRIVATE_CONFIG"]
+    new = save(repo, manifest)
+    monkeypatch.setenv("PRIVATE_CONFIG", "secret-unique-value")
+    project = load_project(repo, new, "host")
+    assert project.fingerprint != load_project(repo, old, "host").fingerprint
+    claims = render_claims(project.contract).decode()
+    assert "PRIVATE_CONFIG" in claims and "secret-unique-value" not in claims
+    runner = CliRunner()
+    prefix = ["--state", str(tmp_path / "state")]
+    args = scope(repo, new)
+    checked = runner.invoke(cli.app, prefix + ["spec", "check", *args, "--against", old, "--json"])
+    assert checked.exit_code == 0 and "PRIVATE_CONFIG" in checked.output
+    assert "secret-unique-value" not in checked.output
+    digest = json.loads(checked.output)["contract_digest"]
+    monkeypatch.setattr(cli, "operator_confirm", lambda _: None)
+    old_args = scope(repo, old)
+    old_check = runner.invoke(cli.app, prefix + ["spec", "check", *old_args, "--json"])
+    old_digest = json.loads(old_check.output)["contract_digest"]
+    assert (
+        runner.invoke(cli.app, prefix + ["spec", "approve", old_digest, *old_args]).exit_code == 0
+    )
+    not_approved = runner.invoke(cli.app, prefix + ["verify", *args, "--rev", new, "--json"])
+    assert not_approved.exit_code == 2
+    assert runner.invoke(cli.app, prefix + ["spec", "approve", digest, *args]).exit_code == 0
+    verified = runner.invoke(cli.app, prefix + ["verify", *args, "--rev", new, "--json"])
+    assert verified.exit_code == 0, verified.output
+    assert "PRIVATE_CONFIG" in verified.output and "secret-unique-value" not in verified.output
+    output = tmp_path / "evidence"
+    exported = runner.invoke(
+        cli.app,
+        prefix
+        + ["evidence", "export", json.loads(verified.output)["run_id"], "--out", str(output)],
+    )
+    assert exported.exit_code == 0
+    assert all(
+        b"secret-unique-value" not in path.read_bytes()
+        for path in output.rglob("*")
+        if path.is_file()
+    )
+
+
+@pytest.mark.parametrize("grouped", [False, True])
+def test_host_environment_appears_in_review_claims(trial, grouped):
+    from mentat.claims import render_claims
+
+    repo, manifest = trial
+    manifest["claims"][0]["title"] = "Example"
+    manifest["review"] = {"overview": "Overview", "scope_limits": ["Scope"]}
+    if grouped:
+        manifest["review"]["groups"] = [{"title": "Group", "claim_ids": ["claim"]}]
+    manifest["behavior"][0]["host_environment"] = ["SCOPED_CONFIG"]
+    base = save(repo, manifest)
+    assert "SCOPED_CONFIG" in render_claims(load_project(repo, base, "host").contract).decode()

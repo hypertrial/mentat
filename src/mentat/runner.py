@@ -131,6 +131,9 @@ def host_diagnostics(info):
         for name, item in prerequisites.get(group, {}).items()
         if item["status"] != "available"
     ]
+    for name, item in prerequisites.get("host_environment", {}).items():
+        if item["status"] != "available":
+            diagnostics.append(f"Host environment variable {name!r} is unavailable.")
     if prerequisites.get("loopback") and prerequisites["loopback"]["status"] != "available":
         diagnostics.append(
             "Host prerequisite loopback is unavailable. Check local bind permissions."
@@ -192,6 +195,11 @@ def _host_info(project):
             loopback = {"status": "available"}
         except OSError:
             loopback = {"status": "missing"}
+    environment = {
+        name: {"status": "available" if os.environ.get(name) else "missing"}
+        for check in project.contract.behavior
+        for name in check.host_environment
+    }
     return {
         "runner": "host",
         "platform": f"{platform.system()}/{platform.machine()}",
@@ -202,6 +210,7 @@ def _host_info(project):
             "python_distributions": packages,
             "python_executable": python if distributions else None,
             "loopback": loopback,
+            **({"host_environment": environment} if environment else {}),
         },
     }
 
@@ -397,6 +406,14 @@ def _docker_artifact(context, name, artifact):
 
 
 def run_behavior(project, snapshot, context, info, run_id) -> tuple[list[dict], dict[str, bytes]]:
+    names = (
+        dict.fromkeys(
+            name for check in project.contract.behavior for name in check.host_environment
+        )
+        if project.runner == "host"
+        else {}
+    )
+    inherited = {name: os.environ.get(name) for name in names}
     results, files = [], {}
     remaining = _MAX_RUN_OUTPUT
     if project.runner == "docker":
@@ -404,6 +421,12 @@ def run_behavior(project, snapshot, context, info, run_id) -> tuple[list[dict], 
     elif "path" not in info:
         info = runner_info(project, context)
     prerequisites = info.get("prerequisites", {})
+    if inherited:
+        prerequisites = info.setdefault("prerequisites", {})
+        prerequisites["host_environment"] = {
+            name: {"status": "available" if value else "missing"}
+            for name, value in inherited.items()
+        }
     missing = [
         name
         for group in ("executables", "python_distributions")
@@ -436,6 +459,7 @@ def run_behavior(project, snapshot, context, info, run_id) -> tuple[list[dict], 
                         "MENTAT_CANDIDATE_DIR": str(candidate),
                         "MENTAT_CHECKS_DIR": str(checks),
                         "MENTAT_ARTIFACTS_DIR": str(artifacts),
+                        **{name: inherited[name] for name in check.host_environment},
                     }
                     argv = _arguments([*check.effective_argv(), *args], str(checks))
                     code, stdout, stderr = _process(
@@ -643,7 +667,15 @@ def run_behavior(project, snapshot, context, info, run_id) -> tuple[list[dict], 
             result["required_cases"] = check.case_report.required_cases
         if project.runner == "host":
             if missing:
-                result["detail"] = f"Missing host prerequisites: {', '.join(missing)}. Run mentat doctor for details."
+                result["detail"] = (
+                    f"Missing host prerequisites: {', '.join(missing)}. Run mentat doctor for details."
+                )
+                continue
+            missing_environment = [name for name in check.host_environment if not inherited[name]]
+            if missing_environment:
+                result["detail"] = (
+                    "Missing host environment variables: " + ", ".join(missing_environment) + "."
+                )
                 continue
             command = check.effective_argv()[0]
             executable = info["executables"].get(command)

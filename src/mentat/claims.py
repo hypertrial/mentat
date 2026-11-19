@@ -64,8 +64,14 @@ def _append_selectors(lines: list[str], contract: Contract, claim_id: str) -> No
         if check.claim == claim_id
         for selector in (check.selectors or [])
     ]
-    if selectors:
-        lines.extend(("", *selectors))
+    environment = [
+        f"- Check `{check.id}` inherits host environment {_code_span(name)}"
+        for check in contract.behavior
+        if check.claim == claim_id
+        for name in check.host_environment
+    ]
+    if selectors or environment:
+        lines.extend(("", *selectors, *environment))
 
 
 def _review_intro(review: Review) -> list[str]:
@@ -140,6 +146,7 @@ def _grouped_claims(contract: Contract) -> bytes:
             row += " · Standalone check"
         lines.extend(("", row))
         details = [f"- Selector {_code_span(selector)}" for selector in check.selectors or []]
+        details.extend(f"- Host environment {_code_span(name)}" for name in check.host_environment)
         if check.case_report:
             details.extend(
                 f"- Required case {_code_span(case)}" for case in check.case_report.required_cases
