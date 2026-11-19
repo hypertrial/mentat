@@ -39,7 +39,10 @@ def checker_identity():
 
 
 def assert_result(result, expected, approved, source, identity, theorem="Proof.first"):
-    assert result["status"] == expected, result.get("detail")
+    logs = result.get("logs")
+    checker_log = logs.get("checker.txt", b"") if isinstance(logs, dict) else b""
+    excerpt = checker_log[:8192].decode("utf-8", errors="replace") if isinstance(checker_log, bytes) else ""
+    assert result["status"] == expected, f"{result.get('detail')}\nchecker.txt (first 8192 bytes):\n{excerpt}"
     assert result["approved_sha256"] == hashlib.sha256(approved).hexdigest()
     assert result["source_sha256"] == hashlib.sha256(source).hexdigest()
     assert result["theorem"] == theorem
@@ -51,6 +54,19 @@ def assert_result(result, expected, approved, source, identity, theorem="Proof.f
     assert all(isinstance(name, str) and isinstance(data, bytes) and len(data) <= 1_000_000
                for name, data in result["logs"].items())
     assert sum(map(len, result["logs"].values())) <= 1_000_000
+
+
+
+def test_checker_failure_diagnostic_is_bounded_and_decodes_invalid_bytes():
+    result = {"status": "incomplete", "detail": "synthetic failure", "logs": {
+        "checker.txt": b"diagnostic \xff" + b"x" * 8190 + b"outside-limit",
+    }}
+    with pytest.raises(AssertionError) as failure:
+        assert_result(result, "accepted", APPROVED, VALID, {})
+    message = str(failure.value)
+    assert "synthetic failure" in message
+    assert "diagnostic \ufffd" in message
+    assert "outside-limit" not in message
 
 
 def test_real_approved_audit_and_valid_proof_with_other_target_hole(checker_identity):
