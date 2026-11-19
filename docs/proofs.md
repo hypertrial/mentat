@@ -21,8 +21,14 @@ incomplete result. Mentat does not alter the machine's security policy.
 
 On a fresh Ubuntu machine, `bash scripts/install-proof-checker` installs the
 distribution tools and the checksum-pinned official Linux archive. It refuses to
-replace an existing toolchain and makes no AppArmor or sysctl changes. CI invokes
-this in its existing Ubuntu job and sets `MENTAT_REQUIRE_PROOF_CHECKER=1`; missing
+replace an existing toolchain and makes no AppArmor or sysctl changes by default.
+The existing Ubuntu CI and Linux release jobs explicitly use `--ci-profile` to
+load a checksum-pinned upstream bubblewrap profile on their disposable runners.
+It refuses existing policy or local overrides, verifies enforcement, and preserves
+the global namespace restriction. The profile permits bubblewrap setup and denies
+capabilities to its children; the checker supplies network and filesystem isolation.
+The CI environment guard prevents accidental use, rather than attesting host identity.
+CI sets `MENTAT_REQUIRE_PROOF_CHECKER=1`; missing
 checker prerequisites then fail the real fixtures instead of skipping them.
 The existing release matrix requires the checker on Linux and excludes only its
 Linux-only fixture module on macOS; all selected release tests retain their

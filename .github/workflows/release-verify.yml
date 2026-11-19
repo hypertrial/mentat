@@ -63,7 +63,7 @@ jobs:
           uv run --locked mentat claims check --repo . --base "$(git rev-parse HEAD)"
       - name: Install protected checker on Linux
         if: runner.os == 'Linux'
-        run: bash scripts/install-proof-checker
+        run: bash scripts/install-proof-checker --ci-profile
       - name: Run locked suite
         env:
           MENTAT_ICEBERG_FORMAL_TRACE: ${{ runner.temp }}/iceberg-formal-trace.jsonl
