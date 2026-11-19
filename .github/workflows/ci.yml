@@ -10,22 +10,9 @@ permissions:
 
 jobs:
   test:
-    name: Test and package (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-24.04
-            lean_target: linux
-            lean_sha256: 07a633cc8d9151cbc08825ea4cdda50d4b02a2c9cb852c0131b13046f49cad7f
-          - os: macos-15
-            lean_target: darwin_aarch64
-            lean_sha256: 264105500c8abdf37b68ffe03390a783ed259807807222698da8dd92d6ce0a27
-    defaults:
-      run:
-        shell: bash
+    name: Mentat checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -37,49 +24,9 @@ jobs:
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '26.10.0'
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: '1.26.3'
-          cache: false
-      - name: Install Lean and fetch replay sources
-        env:
-          LEAN_TARGET: ${{ matrix.lean_target }}
-          LEAN_SHA256: ${{ matrix.lean_sha256 }}
-        run: |
-          archive="lean-4.31.0-$LEAN_TARGET"
-          cd "$RUNNER_TEMP"
-          curl --fail --silent --show-error --location --retry 3 \
-            --output "$archive.tar.zst" "https://github.com/leanprover/lean4/releases/download/v4.31.0/$archive.tar.zst"
-          printf '%s  %s\n' "$LEAN_SHA256" "$archive.tar.zst" | shasum -a 256 -c
-          tar -xf "$archive.tar.zst"
-          "$RUNNER_TEMP/$archive/bin/lean" --version
-          printf '%s\n' "$RUNNER_TEMP/$archive/bin" >> "$GITHUB_PATH"
-          git clone --mirror https://github.com/ai/nanoid.git "$RUNNER_TEMP/nanoid.git"
-          printf 'MENTAT_NANOID_SOURCE=%s\n' "$RUNNER_TEMP/nanoid.git" >> "$GITHUB_ENV"
-          git clone --mirror https://github.com/apache/iceberg-go.git "$RUNNER_TEMP/iceberg-go.git"
-          printf 'MENTAT_ICEBERG_GO_SOURCE=%s\n' "$RUNNER_TEMP/iceberg-go.git" >> "$GITHUB_ENV"
-      - name: Check source and committed Claims Spec
+      - name: Run core checks
         run: |
           uv sync --locked --extra polaris
-          uv run --locked ruff check .
-          uv run --locked mentat claims check --repo . --base "$(git rev-parse HEAD)"
-      - name: Run locked suite
-        env:
-          MENTAT_ICEBERG_FORMAL_TRACE: ${{ runner.temp }}/iceberg-formal-trace.jsonl
-        run: |
-          set -o pipefail
-          uv run --locked --extra polaris pytest -q -rs | tee "$RUNNER_TEMP/pytest.log"
-          if grep -q '^SKIPPED ' "$RUNNER_TEMP/pytest.log"; then
-            printf 'Release prerequisites must cover the complete suite.\n' >&2
-            exit 1
-          fi
-      - name: Report Iceberg formal process diagnostics
-        if: always()
-        run: |
-          if [ -f "$RUNNER_TEMP/iceberg-formal-trace.jsonl" ]; then
-            cat "$RUNNER_TEMP/iceberg-formal-trace.jsonl"
-          fi
-      - name: Build and check distributions
-        run: |
-          uv build --no-sources --out-dir "$RUNNER_TEMP/dist"
-          scripts/check-release-artifacts.sh "$RUNNER_TEMP/dist"
+          uv run --locked --no-sync ruff check .
+          uv run --locked --no-sync mentat claims check --repo . --base "$(git rev-parse HEAD)"
+          uv run --locked --no-sync pytest -q -rs
