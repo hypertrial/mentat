@@ -371,22 +371,37 @@ def test_lean_resolution_survives_formal_staging_cwd(trial, tmp_path, monkeypatc
     )
 
 
-def test_missing_host_distribution_skips_all_behavior_before_execution(trial, tmp_path):
+def test_missing_host_prerequisites_skip_all_behavior_before_execution(trial, tmp_path, monkeypatch):
+    from mentat import runner
+
     repo, manifest = trial
     marker = tmp_path / "executed"
     (repo / ".mentat/check.py").write_text(
         f"from pathlib import Path\nPath({str(marker)!r}).write_text('executed')\n"
     )
     manifest["host_requirements"] = {
-        "executables": [],
+        "executables": ["mentat-missing-executable-one", "mentat-missing-executable-two"],
         "python_distributions": ["mentat-definitely-not-a-real-distribution-123456"],
-        "loopback": False,
+        "loopback": True,
     }
+
+    def denied(*args):
+        raise PermissionError("loopback denied")
+
+    monkeypatch.setattr(runner.socket, "socket", denied)
     manifest["behavior"].append({**manifest["behavior"][0], "id": "second"})
     base = save(repo, manifest)
     project = load_project(repo, base, "host")
     checks, _ = run_behavior(project, snapshot(repo, base), None, {"runner": "host"}, "run")
     assert [check["status"] for check in checks] == ["incomplete", "incomplete"]
+    for check in checks:
+        for missing in (
+            "mentat-missing-executable-one",
+            "mentat-missing-executable-two",
+            "mentat-definitely-not-a-real-distribution-123456",
+            "loopback",
+        ):
+            assert missing in check["detail"]
     assert not marker.exists()
 
 

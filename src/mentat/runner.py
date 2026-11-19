@@ -643,7 +643,7 @@ def run_behavior(project, snapshot, context, info, run_id) -> tuple[list[dict], 
             result["required_cases"] = check.case_report.required_cases
         if project.runner == "host":
             if missing:
-                result["detail"] = "Missing host prerequisites. Run mentat doctor for details."
+                result["detail"] = f"Missing host prerequisites: {', '.join(missing)}. Run mentat doctor for details."
                 continue
             command = check.effective_argv()[0]
             executable = info["executables"].get(command)
