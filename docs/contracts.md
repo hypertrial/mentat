@@ -164,6 +164,16 @@ Lean source compilation still executes reviewed code with host permissions. The 
 
 Verification exits `0` for pass, `1` for a confirmed violation in a completed run, and `2` for invalid input or an incomplete run. An incomplete check takes precedence in the exit status when another check reports a violation. The manifest retains each result. A model violation can prevent behavior execution. Timeouts, missing tools, and resource kills are incomplete. Behavior output is capped at 1 MiB per stream and 16 MiB per run across logs and artifacts. The manifest records any omitted logs or optional files.
 
+### Render an offline report
+
+```sh
+mentat --state "$STATE" evidence render "$RUN_ID" --out report.html
+```
+
+The report reads an intact saved project-verification run without loading its repository, executing checks, or requiring current approval. It refuses an existing output, symlink destination, missing parent, or a destination inside the state directory. The report identifies the verified manifest and distinguishes the original verdict from a matching local acceptance receipt. Acceptance reflects the saved revision, not a cryptographic identity or current approval; verifier changes still require renewed approval for new verification.
+
+The report omits runtime environment, repository paths, raw logs, witnesses, and artifact contents. Unrecognized diagnostics are omitted and artifact names are shown as text. Claim text, names, and filenames can still contain sensitive information; review before sharing. Open the self-contained report offline in a browser.
+
 ### Compare saved runs
 
 ```sh

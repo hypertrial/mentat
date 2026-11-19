@@ -414,6 +414,22 @@ def export_evidence(
         _error(exc, output_json)
 
 
+@evidence_app.command("render")
+def render_evidence(
+    ctx: typer.Context,
+    run_id: str,
+    output: Annotated[Path, typer.Option("--out", help="New HTML report path.")],
+) -> None:
+    """Render an intact saved project run as an offline HTML report."""
+    from .evidence_html import render_run
+
+    try:
+        render_run(evidence.state_directory(ctx.obj["state"], create=False), run_id, output)
+        typer.echo(f"Report written to {output}")
+    except _USER_ERRORS as exc:
+        _error(exc, False)
+
+
 @evidence_app.command("compare")
 def compare_evidence(
     ctx: typer.Context,

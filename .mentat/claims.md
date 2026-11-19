@@ -91,13 +91,13 @@ Claim `evidence.provenance` · Behavior `check.evidence.provenance`
 
 ### 12. Review outcomes by claim
 
-The verification report groups formal and behavior evidence by claim, identifies known violations and gaps, and links the checks to their saved artifacts.
+The Markdown report and standalone HTML report group formal and behavior evidence by claim and identify known violations and gaps. HTML rendering uses saved evidence, displays historical operator acceptance separately, and references artifact filenames without embedding logs, artifact contents, environment values, or reproduction commands.
 
 Claim `evidence.claim-results` · Behavior `check.evidence.claim-results`
 
 ### 13. Check the bundle before export
 
-Evidence export validates the saved manifest against its local receipt and checks the file set and artifact hashes before copying the bundle.
+Evidence export and HTML rendering validate the saved manifest against its local receipt and check the file set and artifact hashes. Rendering preserves saved state, publishes a complete report outside state without overwriting an existing destination, and rejects invalid evidence.
 
 Claim `evidence.integrity` · Behavior `check.integrity`
 

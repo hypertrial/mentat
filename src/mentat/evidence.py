@@ -181,7 +181,7 @@ def save_run(state: Path, record: dict, artifacts: dict[str, bytes]) -> Path:
     return destination
 
 
-def read_run(state: Path, run_id: str) -> tuple[Path, dict]:
+def read_run_snapshot(state: Path, run_id: str) -> tuple[Path, dict, str]:
     if not RUN_ID.fullmatch(run_id):
         raise ValueError("Invalid run identifier")
     bundle = state / "runs" / run_id
@@ -201,6 +201,11 @@ def read_run(state: Path, run_id: str) -> tuple[Path, dict]:
         path = bundle / name
         if path.is_symlink() or not path.is_file() or digest(path.read_bytes()) != expected:
             raise ValueError(f"Evidence artifact failed its integrity check: {name}")
+    return bundle, record, digest(raw)
+
+
+def read_run(state: Path, run_id: str) -> tuple[Path, dict]:
+    bundle, record, _ = read_run_snapshot(state, run_id)
     return bundle, record
 
 
