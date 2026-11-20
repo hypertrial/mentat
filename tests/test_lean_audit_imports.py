@@ -1,22 +1,9 @@
-import shutil
 import subprocess
 from types import SimpleNamespace
 
 import pytest
 
 from mentat import project_formal
-
-
-@pytest.fixture(scope="module")
-def lean_tools():
-    executable = shutil.which("lean")
-    if not executable:
-        pytest.skip("Lean 4.31.0 is unavailable")
-    version = subprocess.run([executable, "--version"], text=True, capture_output=True, check=True)
-    if "version 4.31.0" not in version.stdout:
-        pytest.skip("Lean 4.31.0 is required")
-    libdir = subprocess.run([executable, "--print-libdir"], text=True, capture_output=True, check=True)
-    return {"lean": {"version": "4.31.0", "executable": executable, "libdir": libdir.stdout.strip()}}
 
 
 def audit(source, theorem, tools):

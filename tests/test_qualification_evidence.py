@@ -1,10 +1,10 @@
 import copy
 import hashlib
 import json
-import subprocess
 import sys
 
 import pytest
+from helpers import git
 from typer.testing import CliRunner
 
 from mentat import cli, evidence
@@ -23,10 +23,6 @@ Path(os.environ["MENTAT_ARTIFACTS_DIR"], "cases.json").write_text(json.dumps({"s
 print("PRIVATE_LOG_CONTENT")
 sys.exit(10 if failed else 0)
 '''
-
-
-def git(repo, *args):
-    return subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True).stdout.strip()
 
 
 @pytest.fixture

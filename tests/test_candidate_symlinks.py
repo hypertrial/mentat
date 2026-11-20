@@ -11,6 +11,7 @@ from mentat.project import load_project, snapshot
 from mentat.runner import _stage, _stage_archive
 
 
+# Kept local: needs stdin data, bytes output, and core.precomposeUnicode=false.
 def git(repo, *args, data=None):
     return subprocess.run(["git", "-C", str(repo), "-c", "core.precomposeUnicode=false", *args], input=data, capture_output=True, check=True).stdout.strip()
 

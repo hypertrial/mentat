@@ -3,12 +3,12 @@
 import hashlib
 import json
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from helpers import git
 from typer.testing import CliRunner
 
 import mentat
@@ -16,12 +16,7 @@ from mentat import cli, evidence, proof
 from mentat.project import load_project, snapshot
 
 
-def git(repo, *args):
-    return subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True).stdout.strip()
-
-
-@pytest.fixture
-def campaign(tmp_path, monkeypatch, request):
+def _build_campaign(root, patch, param=None):
     identity = {"checker": "synthetic-v1", "version": "4.35.0", "toolchain_sha256": "a" * 64,
                 "bwrap_sha256": "b" * 64, "policy_sha256": "c" * 64}
     outcomes = []
@@ -50,9 +45,9 @@ def campaign(tmp_path, monkeypatch, request):
 
     fake = SimpleNamespace(checker_identity=lambda: identity.copy(), audit_approved=audit_approved,
                            check_submission=check_submission)
-    monkeypatch.setitem(sys.modules, "mentat.proof_checker", fake)
-    monkeypatch.setattr(mentat, "proof_checker", fake, raising=False)
-    repo = tmp_path / "repo"
+    patch.setitem(sys.modules, "mentat.proof_checker", fake)
+    patch.setattr(mentat, "proof_checker", fake, raising=False)
+    repo = root / "repo"
     repo.mkdir()
     git(repo, "init", "-q")
     git(repo, "config", "user.name", "Test")
@@ -71,18 +66,18 @@ def campaign(tmp_path, monkeypatch, request):
     }
     (checks / "contract.json").write_text(json.dumps(contract))
     (checks / "proof.lean").write_text("-- approved synthetic theorem\n")
-    (checks / "check.py").write_text("print('B' * 120)\n" if getattr(request, "param", None) == "output-budget" else "pass\n")
+    (checks / "check.py").write_text("print('B' * 120)\n" if param == "output-budget" else "pass\n")
     (repo / "source.txt").write_text("candidate one\n")
     git(repo, "add", "-A")
     git(repo, "commit", "-qm", "base")
     base = git(repo, "rev-parse", "HEAD")
     project = load_project(repo, base, "host")
     candidate = snapshot(repo, base)
-    state = evidence.state_directory(tmp_path / "state")
+    state = evidence.state_directory(root / "state")
     scope = ["--repo", str(repo), "--base", base, "--runner", "host"]
     def invoke(*args):
         return CliRunner().invoke(cli.app, ["--state", str(state), *args])
-    monkeypatch.setattr(cli, "operator_confirm", lambda _: None)
+    patch.setattr(cli, "operator_confirm", lambda _: None)
     checked = invoke("spec", "check", *scope, "--json")
     assert checked.exit_code == 0, checked.output
     digest = json.loads(checked.output)["contract_digest"]
@@ -91,12 +86,12 @@ def campaign(tmp_path, monkeypatch, request):
     approval = evidence.read_json(state / "approvals" / f"{digest}.json")
 
     def prepare(name="task", targets=None):
-        out = tmp_path / name
+        out = root / name
         result = proof.prepare(state, project, candidate, approval, out, targets=targets)
         return result["campaign_id"], out
 
     def submission(name, *targets):
-        directory = tmp_path / name
+        directory = root / name
         for target in targets:
             (directory / target).mkdir(parents=True)
             (directory / target / "Solution.lean").write_text(f"-- solution {target}\n")
@@ -105,6 +100,11 @@ def campaign(tmp_path, monkeypatch, request):
     return SimpleNamespace(repo=repo, base=base, state=state, project=project, candidate=candidate,
                            approval=approval, identity=identity, outcomes=outcomes, audits=audits, calls=calls, log_data=log_data,
                            prepare=prepare, submission=submission, invoke=invoke, scope=scope)
+
+
+@pytest.fixture
+def campaign(tmp_path, monkeypatch, request):
+    return _build_campaign(tmp_path, monkeypatch, getattr(request, "param", None))
 
 
 def test_prepare_check_recheck_bind_exact_inputs_with_synthetic_checker(campaign):
@@ -509,18 +509,32 @@ def test_cli_prepare_check_and_repeat_campaigns_recheck_formal_gate(campaign, tm
     assert len(c.calls) == 5  # two checks, one partial recheck, two full rechecks
 
 
+@pytest.fixture(scope="module")
+def recorded_source(tmp_path_factory):
+    with pytest.MonkeyPatch.context() as patch:
+        c = _build_campaign(tmp_path_factory.mktemp("recorded"), patch)
+        ident, _ = c.prepare(targets=["first", "second"])
+        submission = c.submission("saved-submission", "first", "second")
+        (submission / "first" / "Solution.lean").write_text('-- SECRET_PROOF <script>alert("x")</script>\n')
+        assert proof.check(c.state, ident, submission)["status"] == "pass"
+        verified = c.invoke("verify", "--rev", c.base, *c.scope, "--proof-campaign", ident, "--json")
+        assert verified.exit_code == 0, (verified.output, verified.exception)
+        run_id = json.loads(verified.output)["run_id"]
+    return c, submission, run_id
+
+
 @pytest.fixture
-def recorded_proof(campaign):
-    c = campaign
-    ident, _ = c.prepare(targets=["first", "second"])
-    submission = c.submission("saved-submission", "first", "second")
-    (submission / "first" / "Solution.lean").write_text('-- SECRET_PROOF <script>alert("x")</script>\n')
-    assert proof.check(c.state, ident, submission)["status"] == "pass"
-    verified = c.invoke("verify", "--rev", c.base, *c.scope, "--proof-campaign", ident, "--json")
-    assert verified.exit_code == 0, (verified.output, verified.exception)
-    run_id = json.loads(verified.output)["run_id"]
-    bundle, record, _ = evidence.read_run_snapshot(c.state, run_id)
-    return c, submission, bundle, record
+def recorded_proof(recorded_source, tmp_path):
+    c, submission, run_id = recorded_source
+    # Damage tests mutate the saved bundle and receipt, so each test gets its own copy.
+    # read_run_snapshot needs only these two items, and copytree keeps the 0700 modes.
+    state = evidence.state_directory(tmp_path / "state")
+    (state / "runs").mkdir(mode=0o700)
+    (state / "receipts").mkdir(mode=0o700)
+    shutil.copytree(c.state / "runs" / run_id, state / "runs" / run_id)
+    shutil.copy2(c.state / "receipts" / run_id, state / "receipts" / run_id)
+    bundle, record, _ = evidence.read_run_snapshot(state, run_id)
+    return SimpleNamespace(**{**vars(c), "state": state}), submission, bundle, record
 
 
 @pytest.mark.parametrize("damage", ["missing-source", "wrong-source", "source-hash", "approved-hash", "revision", "base", "contract", "verifier", "environment", "environment-hash", "environment-conflict", "theorem", "source-bytes", "source-symlink"])

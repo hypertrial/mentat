@@ -2,8 +2,8 @@ import copy
 import json
 
 import pytest
+from helpers import commit
 from markdown_it import MarkdownIt
-from test_project import commit
 from typer.testing import CliRunner
 
 from mentat import cli
