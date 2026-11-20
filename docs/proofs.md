@@ -123,7 +123,9 @@ change, guarantee impact and witness impact. Have it reviewed independently and
 renew operator approval before preparing changed targets. Authors cannot approve
 their own amendments or operator acceptance.
 
-Only a complete passing ordinary run can be accepted with `mentat accept` in an
-operator terminal. An accepted proof campaign alone does not authorize deployment
+Only a complete passing ordinary run can be accepted with `mentat accept`. The
+decision uses an operator terminal by default; `--trusted-chat-approval` permits an
+unverified agent relay and can be impersonated by any process running as your
+account. An accepted proof campaign alone does not authorize deployment
 or establish production readiness. Inspect reports and exported proof/log contents
 before sharing them; source, claims and diagnostics can contain sensitive text.

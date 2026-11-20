@@ -266,6 +266,9 @@ def approve_spec(
     base: Base,
     runner: Runner = "docker",
     against: Against = None,
+    trusted_chat_approval: bool = typer.Option(
+        False, "--trusted-chat-approval", help="Trust an unverified agent relay; bypass the terminal prompt."
+    ),
 ) -> None:
     """Approve the exact contract reviewed in the terminal."""
     try:
@@ -278,10 +281,13 @@ def approve_spec(
         decision = f"Approve contract {digest} for {runner} candidate execution"
         if summary["lean_runs_on_host"]:
             decision += " and allow the reviewed Lean source to execute on this host"
-        operator_confirm(f"{decision}?")
+        if not trusted_chat_approval:
+            operator_confirm(f"{decision}?")
         if load_project(repo, base, runner).fingerprint != digest:
             raise ValueError("Contract changed during approval")
         record = {**_scope(project), "approved_at": evidence.now()}
+        if trusted_chat_approval:
+            record["decision_source"] = "unverified_agent_relay"
         evidence.write_record(_approval_path(state, project), evidence.json_bytes(record))
         finish({"status": "pass", "contract_digest": digest}, False)
     except _USER_ERRORS as exc:
@@ -692,7 +698,10 @@ def summarize_pr(
 
 @app.command()
 def accept(
-    ctx: typer.Context, run_id: str, repo: Repo, base: Base, runner: Runner = "docker"
+    ctx: typer.Context, run_id: str, repo: Repo, base: Base, runner: Runner = "docker",
+    trusted_chat_approval: bool = typer.Option(
+        False, "--trusted-chat-approval", help="Trust an unverified agent relay; bypass the terminal prompt."
+    ),
 ) -> None:
     """Accept a complete passing run under the current approval."""
     try:
@@ -710,7 +719,8 @@ def accept(
                 "Only a complete passing run under the current approval can be accepted"
             )
         receipt = (state / "receipts" / run_id).read_text()
-        operator_confirm(f"Accept candidate {record['revision']} from run {run_id}?")
+        if not trusted_chat_approval:
+            operator_confirm(f"Accept candidate {record['revision']} from run {run_id}?")
         if load_project(repo, base, runner).fingerprint != project.fingerprint:
             raise ValueError("Contract changed during acceptance")
         evidence.read_run(state, run_id)
@@ -727,6 +737,7 @@ def accept(
                     "revision": record["revision"],
                     "contract_digest": project.fingerprint,
                     "accepted_at": evidence.now(),
+                    **({"decision_source": "unverified_agent_relay"} if trusted_chat_approval else {}),
                 }
             ),
         )

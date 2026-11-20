@@ -356,7 +356,7 @@ def test_pr_summary_separates_ci_verification_and_operator_decision(compare, out
     text = result.output.lower()
     assert "lightweight" in text and "host reported" in text and "pass" in text
     assert "full saved verification" in text and outcome in text
-    assert "operator acceptance" in text and "not recorded" in text
+    assert "acceptance" in text and "not recorded" in text
     assert "https://example.test/report" in result.output
 
 
@@ -476,7 +476,7 @@ def test_pr_summary_displays_actual_matching_recorded_acceptance(compare):
     result = CliRunner().invoke(app, ["--state", str(state), "evidence", "pr-summary", run_id,
                                     "--head", run_id + "0" * 8, "--report-url", "https://example.test/report"])
     assert result.exit_code == 0, result.output
-    assert "operator acceptance" in result.output.lower()
+    assert "acceptance" in result.output.lower()
     assert "recorded at 2026-01-02" in result.output.lower()
     assert "unavailable" in result.output.lower()
 

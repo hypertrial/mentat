@@ -91,7 +91,7 @@
     {
       "id": "approval.scope",
       "title": "Approve a specific contract",
-      "statement": "A reviewer sees which checks and declared test selectors support each claim, can compare two committed contracts, and confirms the displayed digest in a terminal. Verification requires approval for the same repository path, base commit, runner mode, and verifier fingerprint."
+      "statement": "A reviewer sees which checks and declared test selectors support each claim and can compare two committed contracts. Approval confirms the displayed digest in a terminal by default, or uses an explicitly trusted, unverified agent relay. Verification requires approval for the same repository path, base commit, runner mode, and verifier fingerprint."
     },
     {
       "id": "formal.z3-vacuity",
@@ -146,9 +146,9 @@
     {
       "id": "acceptance.complete-pass",
       "title": "Accept only a complete pass",
-      "statement": "Acceptance requires an intact passing run under the current approval and a separate operator confirmation in a terminal.",
+      "statement": "Acceptance requires an intact passing run under the current approval and a separate decision, confirmed in a terminal by default or supplied by an explicitly trusted, unverified agent relay.",
       "assumptions": [
-        "The bounded model represents status, current approval, evidence integrity, and operator confirmation as independent eligibility gates."
+        "The bounded model represents status, current approval, evidence integrity, and a declared decision as independent eligibility gates; it does not verify the source of a relayed decision."
       ]
     },
     {

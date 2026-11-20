@@ -705,3 +705,36 @@ def test_comparison_inputs_track_check_definition_and_mark_shared_changes(projec
     script = comparison_inputs(load_project(repo, commit(repo, "Change script"), "host"))
     assert script["claims"]["claim"] != control["claims"]["claim"]
     assert script["supporting_files"] != control["supporting_files"]
+
+
+def test_trusted_chat_relay_requires_valid_scope_and_records_source(project_repo, tmp_path):
+    from typer.testing import CliRunner
+
+    from mentat import cli
+
+    repo, base, _ = project_repo
+    state = tmp_path / "state"
+    state.mkdir(mode=0o700)
+    runner = CliRunner()
+    scope = ["--repo", str(repo), "--base", base, "--runner", "host"]
+    prefix = ["--state", str(state)]
+    checked = runner.invoke(cli.app, prefix + ["spec", "check", *scope, "--json"])
+    digest = json.loads(checked.output)["contract_digest"]
+    assert runner.invoke(cli.app, prefix + ["spec", "approve", digest, *scope]).exit_code != 0
+    assert runner.invoke(cli.app, prefix + ["spec", "approve", "bad", *scope, "--trusted-chat-approval"]).exit_code != 0
+    approved = runner.invoke(cli.app, prefix + ["spec", "approve", digest, *scope, "--trusted-chat-approval"])
+    assert approved.exit_code == 0, approved.output
+    approval = json.loads((state / "approvals" / f"{digest}.json").read_text())
+    assert approval["decision_source"] == "unverified_agent_relay"
+    verified = runner.invoke(cli.app, prefix + ["verify", "--rev", base, *scope, "--json"])
+    assert verified.exit_code == 0, verified.output
+    run_id = json.loads(verified.output)["run_id"]
+    assert runner.invoke(cli.app, prefix + ["accept", run_id, *scope]).exit_code != 0
+    accepted = runner.invoke(cli.app, prefix + ["accept", run_id, *scope, "--trusted-chat-approval"])
+    assert accepted.exit_code == 0, accepted.output
+    receipt = json.loads((state / "acceptances" / f"{run_id}.json").read_text())
+    assert receipt["decision_source"] == "unverified_agent_relay"
+    summary = runner.invoke(cli.app, prefix + ["evidence", "pr-summary", run_id, "--head", base, "--report-url", "https://example.test/report"])
+    assert "unverified agent relay" in summary.output
+    (state / "runs" / run_id / "report.md").write_text("tampered")
+    assert runner.invoke(cli.app, prefix + ["accept", run_id, *scope, "--trusted-chat-approval"]).exit_code != 0

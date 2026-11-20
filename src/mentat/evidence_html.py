@@ -312,7 +312,12 @@ def _accepted(state, record, digest):
         accepted = datetime.fromisoformat(_string(receipt.get("accepted_at")))
         if accepted.tzinfo is None:
             raise ValueError
-        return "Recorded at " + receipt["accepted_at"]
+        source = (
+            " (unverified agent relay)"
+            if receipt.get("decision_source") == "unverified_agent_relay"
+            else ""
+        )
+        return "Recorded at " + receipt["accepted_at"] + source
     except (OSError, ValueError, TypeError, KeyError):
         return "Invalid or mismatched receipt"
 
@@ -636,7 +641,7 @@ dl {{ display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: .9rem
 </style></head><body><main><h1>Verification report</h1><p>Saved evidence for a single verification run.</p>
 <p>Claims and diagnostic filenames may contain sensitive information. Review this report before sharing.</p>
 <nav><a href="#overview">Overview</a> · <a href="#findings">Findings</a> · <a href="#claims">Claims</a> · <a href="#limits">Limits</a></nav>
-<section class="panel" id="overview"><h2>Overview</h2><dl>{overview}</dl><p>Acceptance records a local operator decision for the saved revision. It does not establish identity or current approval.</p>
+<section class="panel" id="overview"><h2>Overview</h2><dl>{overview}</dl><p>Acceptance records a local decision for the saved revision. It does not establish identity or current approval.</p>
 <p>Primary checks: {counts["formal"]} formal, {behavior_count}; {case_count} required cases. Negative controls are excluded.</p>{gate}</section>
 <section class="panel" id="findings"><h2>Primary findings</h2>{findings_html}</section>
 <section class="panel" id="limits"><h2>Verification limits</h2>{limit_html}</section>

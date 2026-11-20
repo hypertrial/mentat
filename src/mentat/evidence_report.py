@@ -28,7 +28,7 @@ def pr_summary(record, head, report_url, acceptance, ci_status="unavailable"):
         f"Mentat review for `{head}`\n\n"
         f"- Lightweight CI (host reported): **{ci_status}**.\n"
         f"- Full saved verification: **{record['status']}**, run `{record['run_id']}`.\n"
-        f"- Operator acceptance for this saved revision: **{acceptance}**.\n"
+        f"- Acceptance for this saved revision: **{acceptance}**.\n"
         f"- [Review the evidence report]({link}).\n\n"
         "Model proofs, tested correspondence and qualification remain separate evidence.\n"
     )

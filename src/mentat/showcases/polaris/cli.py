@@ -106,7 +106,9 @@ def check_spec(ctx: typer.Context, output_json: bool = typer.Option(False, "--js
 
 
 @spec_app.command("approve")
-def approve_spec(ctx: typer.Context, digest: str) -> None:
+def approve_spec(ctx: typer.Context, digest: str, trusted_chat_approval: bool = typer.Option(
+        False, "--trusted-chat-approval", help="Trust an unverified agent relay; bypass the terminal prompt."
+    )) -> None:
     try:
         spec, fingerprint = contract_inputs(ctx)
         if digest != fingerprint:
@@ -117,12 +119,16 @@ def approve_spec(ctx: typer.Context, digest: str) -> None:
         if evidence.status(checks) != "pass":
             raise ValueError("Required formal checks must pass before approval")
         typer.echo(evidence.json_bytes(spec.as_dict()).decode().rstrip())
-        operator_confirm(f"Approve contract {fingerprint} for verification?")
+        if not trusted_chat_approval:
+            operator_confirm(f"Approve contract {fingerprint} for verification?")
         if model_evidence.pack_digest(load_spec(ctx.obj["spec"])) != fingerprint:
             raise ValueError("Contract changed during approval")
         evidence.write_record(
             state / "approval.json",
-            evidence.json_bytes({"contract_digest": fingerprint, "approved_at": evidence.now()}),
+            evidence.json_bytes({
+                "contract_digest": fingerprint, "approved_at": evidence.now(),
+                **({"decision_source": "unverified_agent_relay"} if trusted_chat_approval else {}),
+            }),
         )
         emit({"status": "pass", "contract_digest": fingerprint}, False)
     except (OSError, ValueError, KeyError) as exc:
@@ -344,7 +350,9 @@ def evaluate(
 
 
 @app.command()
-def accept(ctx: typer.Context, run_id: str) -> None:
+def accept(ctx: typer.Context, run_id: str, trusted_chat_approval: bool = typer.Option(
+        False, "--trusted-chat-approval", help="Trust an unverified agent relay; bypass the terminal prompt."
+    )) -> None:
     try:
         state = evidence.state_directory(ctx.obj["state"])
         _, fingerprint = contract_inputs(ctx)
@@ -359,7 +367,8 @@ def accept(ctx: typer.Context, run_id: str) -> None:
                 "Only a complete passing run under the current contract can be accepted"
             )
         receipt = (state / "receipts" / run_id).read_text()
-        operator_confirm(f"Accept candidate {record['revision']} from run {run_id}?")
+        if not trusted_chat_approval:
+            operator_confirm(f"Accept candidate {record['revision']} from run {run_id}?")
         if contract_inputs(ctx)[1] != fingerprint:
             raise ValueError("Contract changed during acceptance")
         evidence.read_run(state, run_id)
@@ -375,6 +384,7 @@ def accept(ctx: typer.Context, run_id: str) -> None:
                     "revision": record["revision"],
                     "contract_digest": fingerprint,
                     "accepted_at": evidence.now(),
+                    **({"decision_source": "unverified_agent_relay"} if trusted_chat_approval else {}),
                 }
             ),
         )

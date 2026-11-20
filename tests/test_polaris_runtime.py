@@ -355,3 +355,36 @@ def test_verify_prioritizes_violation_over_incomplete(tmp_path, monkeypatch, can
     )
     assert result.exit_code == 1, result.output
     assert json.loads(result.output)["status"] == "violation"
+
+
+def test_polaris_trusted_chat_relay_validates_and_records_decisions(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from mentat import evidence
+    from mentat.showcases.polaris import cli
+
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(mode=0o700)
+    digest = "a" * 64
+    spec = SimpleNamespace(as_dict=lambda: {})
+    monkeypatch.setattr(cli, "contract_inputs", lambda _: (spec, digest))
+    monkeypatch.setattr(cli, "load_spec", lambda _: spec)
+    monkeypatch.setattr(cli.model_evidence, "pack_digest", lambda _: digest)
+    monkeypatch.setattr(cli, "load_cases", lambda *_: None)
+    monkeypatch.setattr(cli, "run_formal", lambda *_: [{"status": "pass"}])
+    runner = CliRunner()
+    prefix = ["--state", str(state_dir), "showcase", "polaris"]
+    assert runner.invoke(app, prefix + ["spec", "approve", digest]).exit_code != 0
+    assert runner.invoke(app, prefix + ["spec", "approve", "bad", "--trusted-chat-approval"]).exit_code != 0
+    result = runner.invoke(app, prefix + ["spec", "approve", digest, "--trusted-chat-approval"])
+    assert result.exit_code == 0, result.output
+    assert evidence.read_json(state_dir / "approval.json")["decision_source"] == "unverified_agent_relay"
+    run_id = "b" * 32
+    evidence.save_run(state_dir, {"run_id": run_id, "kind": "verification", "status": "pass",
+                      "revision": "c" * 40, "contract_digest": digest, "reproduce": "example"}, {})
+    assert runner.invoke(app, prefix + ["accept", run_id]).exit_code != 0
+    result = runner.invoke(app, prefix + ["accept", run_id, "--trusted-chat-approval"])
+    assert result.exit_code == 0, result.output
+    assert evidence.read_json(state_dir / "acceptances" / f"{run_id}.json")["decision_source"] == "unverified_agent_relay"
+    (state_dir / "runs" / run_id / "report.md").write_text("tampered")
+    assert runner.invoke(app, prefix + ["accept", run_id, "--trusted-chat-approval"]).exit_code != 0
