@@ -40,7 +40,8 @@ jobs:
             --out "$RUNNER_TEMP/record-fixtures/v0.1.2" \
             --label v0.1.2 \
             --source-sha "$sha" \
-            --features basic
+            --features basic \
+            --require-all
       - name: Generate records with main-pre-split
         run: |
           sha=4be09f995b144254ad024b2d5501e88b3568f26f
@@ -54,7 +55,8 @@ jobs:
             --out "$RUNNER_TEMP/record-fixtures/main-pre-split" \
             --label main-pre-split \
             --source-sha "$sha" \
-            --features full
+            --features full \
+            --require-all
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: record-fixtures

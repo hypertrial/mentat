@@ -16,7 +16,21 @@ from mentat import evidence
 from mentat.cli import app
 
 ROOT = Path(__file__).parent / "fixtures" / "records"
+WORKFLOW = Path(__file__).parents[1] / ".github" / "workflows" / "record-fixtures.yml"
 REQUIRED_LABELS = ("main-pre-split", "v0.1.2")
+SOURCE_SHA = {
+    "main-pre-split": "4be09f995b144254ad024b2d5501e88b3568f26f",
+    "v0.1.2": "9e1fb56221e51a5cb7f843bc49022a340f685adb",
+}
+# Saved records each label must render, by (kind, schema_version).
+RENDERABLE = {label: {("project-verification", 2)} for label in SOURCE_SHA}
+# (label, run) pairs the renderer refuses, with the exit code and message it prints.
+UNRENDERABLE: dict[tuple[str, str], tuple[int, str]] = {}
+# Whether the current writer rebuilds report.md byte for byte. The report text is
+# presentation, not part of the compatibility guarantee, so v0.1.2 is pinned to what
+# the current writer does, not to what it should do.
+REPORT_IDENTICAL = {"main-pre-split": True, "v0.1.2": True}
+UNLISTED_FILE = "unlisted.txt"
 PLACEHOLDER = "<STATE>"
 UPDATE_GOLDENS = os.environ.get("MENTAT_UPDATE_GOLDENS") == "1"
 
@@ -31,11 +45,15 @@ def _state(label: str) -> Path:
     return ROOT / label / "state"
 
 
-def _index(label: str) -> dict:
+def _read_index(label: str) -> dict | None:
     path = ROOT / label / "index.json"
-    return (
-        json.loads(path.read_bytes()) if path.is_file() else {"scenarios": [], "compare_pairs": []}
-    )
+    return json.loads(path.read_bytes()) if path.is_file() else None
+
+
+def _index(label: str) -> dict:
+    index = _read_index(label)
+    assert index is not None, f"fixture corpus is missing index.json: {label}"
+    return index
 
 
 def _run_ids(label: str) -> list[str]:
@@ -43,18 +61,38 @@ def _run_ids(label: str) -> list[str]:
     return sorted(path.name for path in runs.glob("*") if path.is_dir()) if runs.is_dir() else []
 
 
-RUNS = [(label, run) for label in _labels() for run in _run_ids(label)] or [("missing", "no-runs")]
-COMPARE = [
-    (label, number)
-    for label in _labels()
-    for number in range(1, len(_index(label)["compare_pairs"]) + 1)
-] or [("missing", 0)]
-
-
 def _run(label: str, run_id: str) -> Path:
     run = _state(label) / "runs" / run_id
     assert run.is_dir(), f"fixture corpus is missing or has no runs: {label}/{run_id}"
     return run
+
+
+def _manifest(label: str, run_id: str) -> dict:
+    return json.loads((_run(label, run_id) / "manifest.json").read_bytes())
+
+
+def _scenario(label: str, run_id: str) -> dict:
+    matches = [item for item in _index(label)["scenarios"] if item["run_id"] == run_id]
+    assert len(matches) == 1, f"index.json does not list {label} run {run_id} exactly once"
+    return matches[0]
+
+
+def _pair(label: str, number: int) -> dict:
+    pairs = _index(label)["compare_pairs"]
+    assert 1 <= number <= len(pairs), f"index.json has no compare pair {number} for {label}"
+    return pairs[number - 1]
+
+
+def _across(pair: dict) -> list[str]:
+    return ["--across-contracts"] if pair["across_contracts"] else []
+
+
+def _expected_compare_exit(label: str, pair: dict) -> int:
+    statuses = {
+        _scenario(label, pair["before"])["expected_status"],
+        _scenario(label, pair["after"])["expected_status"],
+    }
+    return 2 if "incomplete" in statuses else 0
 
 
 def _copy_state(label: str, tmp_path: Path) -> Path:
@@ -65,15 +103,66 @@ def _copy_state(label: str, tmp_path: Path) -> Path:
     return state
 
 
-def _scenario(label: str, run_id: str) -> dict:
-    matches = [item for item in _index(label)["scenarios"] if item["run_id"] == run_id]
-    assert len(matches) == 1, f"index.json does not list {label} run {run_id} exactly once"
-    return matches[0]
+def _rebuild(state_root: Path, label: str, run_id: str) -> tuple[Path, Path]:
+    """Save a corpus run again through the current writer; return (rebuilt, original) bundles."""
+    run = _run(label, run_id)
+    record = json.loads((run / "manifest.json").read_bytes())
+    artifacts = {
+        path.name: path.read_bytes()
+        for path in run.iterdir()
+        if path.name not in {"manifest.json", "report.md"}
+    }
+    record.pop("artifacts")
+    state = evidence.state_directory(state_root)
+    return evidence.save_run(state, record, artifacts), run
+
+
+def _tamper_cases() -> list[tuple[str, str, str]]:
+    runs = [(label, run) for label in _labels() for run in _run_ids(label)]
+    if not runs:
+        return [("missing", "no-runs", "manifest.json")]
+    # Tamper the run with the most evidence files, so every kind of file is exercised.
+    label, run = max(runs, key=lambda item: (len(_manifest(*item)["artifacts"]), item[0], item[1]))
+    names = sorted(_manifest(label, run)["artifacts"])
+    return [(label, run, name) for name in ["manifest.json", *names, UNLISTED_FILE]]
+
+
+RUNS = [(label, run) for label in _labels() for run in _run_ids(label)] or [("missing", "no-runs")]
+COMPARE = [
+    (label, number)
+    for label in _labels()
+    for number in range(1, len((_read_index(label) or {}).get("compare_pairs", [])) + 1)
+] or [("missing", 0)]
+COMPARE_HTML = [
+    (label, number)
+    for label, number in COMPARE
+    if (_read_index(label) or {}).get("features") == "full"
+] or [("missing", 0)]
+TAMPER = _tamper_cases()
 
 
 def test_corpus_covers_both_released_and_pre_split_labels():
     for label in REQUIRED_LABELS:
         assert _run_ids(label), f"fixture corpus is missing or has no runs: {label}"
+
+
+@pytest.mark.parametrize("label", _labels())
+def test_index_names_its_label_and_source_revision(label):
+    index = _index(label)
+    assert index["label"] == label
+    assert index["source_sha"] == SOURCE_SHA.get(label), f"unexpected source for {label}"
+
+
+@pytest.mark.parametrize("label", _labels())
+def test_every_scenario_ran(label):
+    assert _index(label)["not_run"] == {}
+
+
+def test_workflow_pins_the_corpus_sources_and_requires_every_scenario():
+    text = WORKFLOW.read_text()
+    for sha in SOURCE_SHA.values():
+        assert sha in text, f"record-fixtures workflow does not pin {sha}"
+    assert text.count("--require-all") == len(SOURCE_SHA)
 
 
 @pytest.mark.parametrize(("label", "run_id"), RUNS)
@@ -122,25 +211,31 @@ def test_saved_snapshot_reads_with_indexed_status(label, run_id):
 
 
 @pytest.mark.parametrize(("label", "run_id"), RUNS)
-def test_project_verification_records_render(label, run_id, tmp_path):
-    _run(label, run_id)
-    record = json.loads((_state(label) / "runs" / run_id / "manifest.json").read_bytes())
-    if record.get("kind") != "project-verification" or record.get("schema_version") != 2:
-        return
+def test_saved_records_render_as_declared(label, run_id, tmp_path):
+    record = _manifest(label, run_id)
+    kind = (record.get("kind"), record.get("schema_version"))
     state = _copy_state(label, tmp_path)
     output = tmp_path / f"{run_id}.html"
     result = CliRunner().invoke(
         app, ["--state", str(state), "evidence", "render", run_id, "--out", str(output)]
     )
-    assert result.exit_code == 0, result.output
-    assert output.is_file()
+    if kind in RENDERABLE.get(label, set()):
+        assert result.exit_code == 0, result.output
+        assert output.stat().st_size > 0
+    else:
+        assert (label, run_id) in UNRENDERABLE, f"{label} run {run_id} has undeclared kind {kind}"
+        exit_code, message = UNRENDERABLE[(label, run_id)]
+        assert result.exit_code == exit_code, result.output
+        assert message in result.output
+        assert not output.exists()
 
 
 @pytest.mark.parametrize(("label", "number"), COMPARE)
 def test_compare_matches_golden(label, number, tmp_path):
-    if label == "missing":
-        raise AssertionError(f"fixture corpus is missing or has no comparisons: {label}")
-    pair = _index(label)["compare_pairs"][number - 1]
+    pair = _pair(label, number)
+    golden = ROOT / label / f"compare-{number}.json"
+    if UPDATE_GOLDENS and os.environ.get("CI"):
+        pytest.fail("MENTAT_UPDATE_GOLDENS is refused when CI is set; regenerate locally")
     state = _copy_state(label, tmp_path)
     result = CliRunner().invoke(
         app,
@@ -152,25 +247,83 @@ def test_compare_matches_golden(label, number, tmp_path):
             pair["before"],
             pair["after"],
             "--json",
+            *_across(pair),
         ],
     )
-    assert result.exit_code == 0, result.output
-    text = result.output.replace(str(state.resolve()), PLACEHOLDER).replace(str(state), PLACEHOLDER)
-    golden = ROOT / label / f"compare-{number}.json"
+    assert result.exit_code == _expected_compare_exit(label, pair) == pair["exit_code"], (
+        result.output
+    )
+    text = result.output.replace(str(state.resolve()), PLACEHOLDER)
+    text = text.replace(str(state), PLACEHOLDER)
     if UPDATE_GOLDENS:
         golden.write_bytes(text.encode())
+        print(f"rewrote {golden}")
         return
     assert golden.is_file(), f"missing {golden.name}; regenerate with MENTAT_UPDATE_GOLDENS=1"
     assert text.encode() == golden.read_bytes(), golden.name
 
 
-@pytest.mark.parametrize(("label", "run_id"), RUNS[:1])
-def test_flipped_manifest_byte_fails_integrity(label, run_id, tmp_path):
+@pytest.mark.parametrize(("label", "number"), COMPARE_HTML)
+def test_comparison_report_is_written(label, number, tmp_path):
+    pair = _pair(label, number)
+    state = _copy_state(label, tmp_path)
+    output = tmp_path / f"comparison-{number}.html"
+    result = CliRunner().invoke(
+        app,
+        [
+            "--state",
+            str(state),
+            "evidence",
+            "compare",
+            pair["before"],
+            pair["after"],
+            "--out",
+            str(output),
+            *_across(pair),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert output.stat().st_size > 0
+
+
+@pytest.mark.parametrize(("label", "run_id"), RUNS)
+def test_writer_rebuilds_saved_run_byte_for_byte(label, run_id, tmp_path):
+    rebuilt, original = _rebuild(tmp_path / "state", label, run_id)
+    old = json.loads((original / "manifest.json").read_bytes())
+    new = json.loads((rebuilt / "manifest.json").read_bytes())
+    # report.md is checked separately; its digest is excluded from the manifest comparison.
+    old["artifacts"].pop("report.md")
+    new["artifacts"].pop("report.md")
+    assert evidence.json_bytes(new) == evidence.json_bytes(old)
+    for path in original.iterdir():
+        if path.name not in {"manifest.json", "report.md"}:
+            assert (rebuilt / path.name).read_bytes() == path.read_bytes(), path.name
+    evidence.read_run_snapshot(tmp_path / "state", run_id)
+
+
+@pytest.mark.parametrize("label", _labels())
+def test_report_text_matches_expectation(label, tmp_path):
+    runs = _run_ids(label)
+    assert runs, f"fixture corpus is missing or has no runs: {label}"
+    different = []
+    for run_id in runs:
+        rebuilt, original = _rebuild(tmp_path / "state", label, run_id)
+        if (rebuilt / "report.md").read_bytes() != (original / "report.md").read_bytes():
+            different.append(run_id)
+    assert (not different) is REPORT_IDENTICAL[label], different
+
+
+@pytest.mark.parametrize(("label", "run_id", "target"), TAMPER)
+def test_tampered_bundle_fails_integrity(label, run_id, target, tmp_path):
     _run(label, run_id)
     state = _copy_state(label, tmp_path)
-    manifest = state / "runs" / run_id / "manifest.json"
-    raw = bytearray(manifest.read_bytes())
-    raw[0] ^= 0x01
-    manifest.write_bytes(bytes(raw))
+    bundle = state / "runs" / run_id
+    if target == UNLISTED_FILE:
+        (bundle / target).write_bytes(b"unlisted")
+    else:
+        path = bundle / target
+        raw = bytearray(path.read_bytes() or b"\0")
+        raw[0] ^= 0x01
+        path.write_bytes(bytes(raw))
     with pytest.raises(ValueError):
         evidence.read_run_snapshot(state, run_id)

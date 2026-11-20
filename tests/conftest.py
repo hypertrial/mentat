@@ -23,9 +23,9 @@ def canonical_saved_manifests(monkeypatch):
     def checked_save_run(state, record, artifacts):
         destination = save_run(state, record, artifacts)
         raw = (destination / "manifest.json").read_bytes()
-        assert evidence.json_bytes(json.loads(raw)) == raw
+        assert evidence.json_bytes(json.loads(raw)) == raw, "saved manifest is not canonical JSON"
         receipt = (state / "receipts" / record["run_id"]).read_bytes()
-        assert receipt == evidence.digest(raw).encode()
+        assert receipt == evidence.digest(raw).encode(), "receipt does not match the manifest"
         return destination
 
     monkeypatch.setattr(evidence, "save_run", checked_save_run)
