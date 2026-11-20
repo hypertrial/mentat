@@ -149,7 +149,9 @@ def test_host_exit_and_timeout_semantics(project_repo, source, status):
 
     repo, base, _ = project_repo
     project = load_project(repo, base, "host")
-    check = project.contract.behavior[0].model_copy(update={"timeout_seconds": 1})
+    # Only the sleeping case needs a short limit; the others must not race a loaded machine.
+    limit = 1 if "sleep" in source else 30
+    check = project.contract.behavior[0].model_copy(update={"timeout_seconds": limit})
     contract = project.contract.model_copy(update={"behavior": [check]})
     project = replace(
         project, contract=contract, files={**project.files, "check.py": source.encode()}

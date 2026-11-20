@@ -3,5 +3,4 @@ set -eu
 cd "$(dirname "$0")/.."
 uv run --locked --no-sync ruff check .
 sh -c 'uv run --locked --no-sync mentat claims check --repo . --base "$(git rev-parse HEAD)"'
-# Extra arguments go to pytest; pass `-n 0` for a serial run.
-uv run --locked --no-sync pytest -q -rs -n auto --dist loadgroup "$@"
+uv run --locked --no-sync pytest -q -rs

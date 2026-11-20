@@ -7,7 +7,7 @@ uv sync --locked --extra polaris
 scripts/verify
 ```
 
-`scripts/verify` runs ruff, the claims check, and the test suite in parallel. Extra arguments go to pytest; `scripts/verify -n 0` runs the tests serially.
+`scripts/verify` runs ruff, the claims check, then the test suite. Tests run in parallel by default (`addopts` in `pyproject.toml`); add `-n 0` to a `pytest` command for a serial run.
 
 Expect the Lean tests and the opt-in Nano ID and Iceberg Go upstream replays to skip when their prerequisites are absent. The required check runs on pull requests and pushes to `main`.
 

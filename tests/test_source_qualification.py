@@ -88,7 +88,8 @@ def execute(project, candidate, baseline=None, info=None):
 ])
 def test_real_host_qualification_requires_the_named_failure(tmp_path, mode, expected_status, expected_outcome, failed):
     # Only the timeout case needs a short limit; the rest must not race a loaded machine.
-    limit = {"timeout_seconds": 1} if mode == "timeout" else {}
+    # Its baseline must still start within the limit, so allow 2 of the 3 seconds it sleeps.
+    limit = {"timeout_seconds": 2} if mode == "timeout" else {}
     project_value, candidate = project(tmp_path, {"example": mutation(after=mode)}, **limit)
     before = copy.deepcopy(candidate.files)
     info = {"runner": "host", "path": os.environ.get("PATH", ""), "executables": {}}
