@@ -67,27 +67,39 @@ def _run(args, *, input=None, cwd=None, timeout=_TIMEOUT, env=None):
         )
 
 
-def _probe_lean(executable: str) -> dict:
-    """Check one Lean binary under the clean environment used for every formal run."""
+_LAUNCHER_ENV = ("HOME", "ELAN_HOME", "ELAN_TOOLCHAIN")
+
+
+def _probe_lean(executable: str) -> tuple[dict, bool]:
+    """Check one Lean binary under the clean environment used for every formal run.
+
+    The second value is False when the binary could not run at all.
+    """
     p = _run([executable, "--version"], timeout=5)
     match = re.search(r"\bversion (\d+\.\d+\.\d+)\b", p.stdout)
     if p.returncode or not match or match.group(1) != _LEAN_VERSION:
         return {
-            "error": "Lean 4.31.0 is required; check the executable on PATH. "
+            "error": "Lean 4.31.0 is required; check the Lean executable. "
             "With elan, select it with ELAN_TOOLCHAIN=leanprover/lean4:v4.31.0."
-        }
+        }, not p.returncode
     lib = _run([executable, "--print-libdir"], timeout=5)
     if lib.returncode or not Path(lib.stdout.strip()).is_dir():
-        return {"error": "Could not locate Lean's standard library."}
-    return {"version": match.group(1), "executable": executable, "libdir": lib.stdout.strip()}
+        return {"error": "Could not locate Lean's standard library."}, True
+    return {
+        "version": match.group(1),
+        "executable": executable,
+        "libdir": lib.stdout.strip(),
+    }, True
 
 
 def _toolchain_lean(launcher: str) -> str | None:
     """Ask a toolchain launcher such as elan where the selected Lean is installed."""
-    # The launcher needs the operator's environment to find its toolchains. An empty
-    # working directory keeps project toolchain files from steering it.
+    # The launcher finds its toolchains through the operator's HOME, so pass only the
+    # variables it needs. A fresh directory keeps the project's toolchain file out of
+    # the lookup.
+    env = {**_env(), **{name: os.environ[name] for name in _LAUNCHER_ENV if name in os.environ}}
     with tempfile.TemporaryDirectory(prefix="mentat-lean-") as empty:
-        p = _run([launcher, "--print-prefix"], cwd=empty, timeout=5, env=dict(os.environ))
+        p = _run([launcher, "--print-prefix"], cwd=empty, timeout=5, env=env)
     prefix = p.stdout.strip()
     if p.returncode or not prefix or "\n" in prefix or not os.path.isabs(prefix):
         return None
@@ -120,15 +132,15 @@ def tool_info(project) -> dict:
         if not executable:
             result["lean"] = {"error": "Install Lean 4.31.0 and put its bin directory on PATH."}
         else:
-            executable = os.path.abspath(executable)
+            found, executable = executable, os.path.abspath(executable)
             try:
-                info = _probe_lean(executable)
-                if "error" in info:
-                    # A launcher such as elan fails without the operator's HOME. Use the
-                    # binary it selects only if that binary passes the same clean probe.
+                info, ran = _probe_lean(executable)
+                if not ran and os.path.isabs(found):
+                    # A launcher such as elan cannot run without the operator's HOME. Use
+                    # the binary it selects only if that binary passes the same clean probe.
                     resolved = _toolchain_lean(executable)
                     if resolved:
-                        info = _probe_lean(resolved)
+                        info, _ = _probe_lean(resolved)
                 result["lean"] = info
             except (OSError, subprocess.TimeoutExpired) as exc:
                 result["lean"] = {"error": f"Could not run Lean: {exc}"}

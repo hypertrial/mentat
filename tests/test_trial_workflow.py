@@ -405,7 +405,7 @@ def _launcher(tmp_path, monkeypatch, prefix_output):
         tmp_path / "launcher/lean",
         'test -f "$HOME/toolchain-prefix" || { echo "no default toolchain" >&2; exit 1; }\n'
         'test "$1" = --print-prefix || { echo "Lean (version 9.9.9)"; exit 0; }\n'
-        'ls -A > "$HOME/listing"\ncat "$HOME/toolchain-prefix"\n',
+        'ls -A > "$HOME/listing"\nenv > "$HOME/env"\ncat "$HOME/toolchain-prefix"\n',
     )
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("PATH", f"{tmp_path / 'launcher'}{os.pathsep}{os.environ['PATH']}")
@@ -419,14 +419,31 @@ def test_lean_launcher_resolves_to_installed_toolchain_binary(trial, tmp_path, m
     prefix = tmp_path / "toolchain"
     lean = _toolchain(prefix)
     home = _launcher(tmp_path, monkeypatch, f"{prefix}\n")
+    monkeypatch.setenv("ELAN_TOOLCHAIN", "leanprover/lean4:v4.31.0")
+    monkeypatch.setenv("UNDECLARED_SECRET", "sentinel")
     monkeypatch.chdir(project.root)
-    assert project_formal.tool_info(project)["lean"] == {
+    tools = project_formal.tool_info(project)
+    assert tools["lean"] == {
         "version": "4.31.0",
         "executable": str(lean),
         "libdir": str(prefix / "lib/lean"),
     }
     # The launcher ran in an empty directory, away from any project toolchain file.
     assert (home / "listing").read_text() == ""
+    # It received the toolchain selection but not the rest of the operator's environment.
+    launcher_env = (home / "env").read_text().splitlines()
+    assert "ELAN_TOOLCHAIN=leanprover/lean4:v4.31.0" in launcher_env
+    assert not any(line.startswith("UNDECLARED_SECRET=") for line in launcher_env)
+    # Formal checks then run the resolved binary, not the launcher.
+    calls = []
+
+    def record(args, **kwargs):
+        calls.append(args[0])
+        return subprocess.CompletedProcess(args, 1, "", "")
+
+    monkeypatch.setattr(project_formal, "_run", record)
+    assert project_formal.run_formal(project, tools)[0]["status"] == "incomplete"
+    assert calls and set(calls) == {str(lean)}
 
 
 @pytest.mark.parametrize(
@@ -449,6 +466,10 @@ def test_lean_launcher_that_cannot_select_the_pinned_toolchain_is_rejected(
     home = _launcher(tmp_path, monkeypatch, output)
     if case == "launcher-fails":
         (home / "toolchain-prefix").unlink()
+    if case == "relative":
+        # The relative prefix names a real toolchain from here; only its form rejects it.
+        monkeypatch.chdir(tmp_path)
+        assert Path("toolchain/bin/lean").is_file()
     with pytest.raises(ValueError, match="ELAN_TOOLCHAIN"):
         project_formal.tool_info(project)
 
@@ -477,8 +498,21 @@ def test_direct_lean_install_is_not_resolved_through_its_prefix(
     else:
         with pytest.raises(ValueError, match="Lean 4.31.0 is required"):
             project_formal.tool_info(project)
-        # Its own prefix names the same binary, so it is probed only once.
-        assert log.read_text().split() == ["--version", "--print-prefix"]
+        # It ran, so it is not a launcher and is never asked for a prefix.
+        assert log.read_text().split() == ["--version"]
+
+
+def test_lean_launcher_on_a_relative_path_entry_is_not_resolved(trial, tmp_path, monkeypatch):
+    from mentat import project_formal
+
+    project = _lean_project(trial)
+    _toolchain(tmp_path / "toolchain")
+    home = _launcher(tmp_path, monkeypatch, f"{tmp_path / 'toolchain'}\n")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PATH", "launcher" + os.pathsep + os.environ["PATH"].split(os.pathsep, 1)[1])
+    with pytest.raises(ValueError, match="Lean 4.31.0 is required"):
+        project_formal.tool_info(project)
+    assert not (home / "listing").exists()
 
 
 def test_missing_host_prerequisites_skip_all_behavior_before_execution(
