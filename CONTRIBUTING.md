@@ -65,10 +65,10 @@ verification evidence bundles.
 
 ## Regenerate the saved-record corpus
 
-`tests/fixtures/records/` holds records saved by Mentat v0.1.2 and by the
-pre-split main revision. Saved records embed absolute paths, the interpreter
-path, and `PATH`, so commit only output from the **Record fixtures** workflow,
-never records generated on a workstation.
+The saved-record corpus lives in `tests/fixtures/records/`, with one directory per
+label (`v0.1.2` and `main-pre-split`). Saved records embed absolute paths, the
+interpreter path, and `PATH`, so the corpus must come only from the **Record
+fixtures** workflow, never from a workstation.
 
 1. Run the **Record fixtures** workflow on the branch, from the Actions tab or
    with `gh workflow run record-fixtures.yml --ref BRANCH`.
@@ -76,11 +76,13 @@ never records generated on a workstation.
 3. Replace `tests/fixtures/records/v0.1.2/` and
    `tests/fixtures/records/main-pre-split/` with the matching directories from
    the artifact.
-4. Write the goldens once, then run the corpus tests without the variable and
-   review the diff.
+4. Write the goldens once. `MENTAT_UPDATE_GOLDENS=1` rewrites each
+   `compare-<n>.json` golden and fails if `CI` is set, so run it locally. Use
+   `-s` to print each rewritten golden path. Then review the diff and run the
+   tests without the variable.
 
 ```sh
-MENTAT_UPDATE_GOLDENS=1 uv run --locked --no-sync pytest -q tests/test_record_fixtures.py -n 0
+MENTAT_UPDATE_GOLDENS=1 uv run --locked --no-sync pytest -q -s tests/test_record_fixtures.py -n 0
 uv run --locked --no-sync pytest -q tests/test_record_fixtures.py -n 0
 ```
 
