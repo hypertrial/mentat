@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Let host behavior checks declare approved `host_environment` variable names.
+  Each check receives only its own operator-supplied values; doctor, evidence,
+  and local and Notion Claims Specs show names and availability, never values.
+- Add `mentat evidence render` for a standalone offline HTML report of saved runs.
+- Add approved Lean proof campaigns (`mentat proof prepare` and `proof check`)
+  on a dedicated Linux checker, plus explicit claim assurance and
+  source-mutation qualification, with bounded diagnostics for checker failures.
+- Add `--trusted-chat-approval` to `spec approve` and `accept` for an agent
+  relaying the user's explicit decision. Mentat cannot verify the relay and
+  records its source as `unverified_agent_relay`.
+- Install the proof checker with a restrictive bubblewrap policy on hosted CI
+  runners (`scripts/install-proof-checker --ci-profile`).
 - Batch OpenSpec blob reads while preserving valid neighboring specs, ordered
   diagnostics, provenance, and input limits.
 - Explain incomplete Polaris native regressions by stage in JSON, terminal
