@@ -25,7 +25,10 @@ jobs:
         with:
           node-version: '26.10.0'
       - name: Run core checks
+        env:
+          MENTAT_REQUIRE_PROOF_CHECKER: '1'
         run: |
+          bash scripts/install-proof-checker --ci-profile
           uv sync --locked --extra polaris
           uv run --locked --no-sync ruff check .
           uv run --locked --no-sync mentat claims check --repo . --base "$(git rev-parse HEAD)"

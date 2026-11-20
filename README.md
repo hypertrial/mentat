@@ -67,6 +67,13 @@ PASSING_RUN='paste the passing run ID'
 mentat --state "$STATE" accept "$PASSING_RUN" --repo "$DEMO" --base "$BASE" --runner host
 ```
 
+Development source checkouts also provide an [offline HTML report](docs/contracts.md#render-an-offline-report) for saved runs. This command is not included in the v0.1.2 tag used above.
+
+Development checkouts support [approved Lean proof campaigns](docs/proofs.md) on a
+dedicated Linux checker, plus explicit claim assurance and source-mutation
+qualification. Proofs establish model properties; implementation checks remain
+separate evidence.
+
 ## Try approved pytest checks on a src-layout project
 
 This example requires pytest in the `python3` environment on `PATH`. It creates a fresh Git repository with a working base and a bad candidate that also weakens its own test. The contract runs the base's approved tests and fixture against the candidate's `src` directory.

@@ -61,12 +61,20 @@ jobs:
           uv sync --locked --extra polaris
           uv run --locked ruff check .
           uv run --locked mentat claims check --repo . --base "$(git rev-parse HEAD)"
+      - name: Install protected checker on Linux
+        if: runner.os == 'Linux'
+        run: bash scripts/install-proof-checker --ci-profile
       - name: Run locked suite
         env:
           MENTAT_ICEBERG_FORMAL_TRACE: ${{ runner.temp }}/iceberg-formal-trace.jsonl
+          MENTAT_REQUIRE_PROOF_CHECKER: ${{ runner.os == 'Linux' && '1' || '0' }}
         run: |
           set -o pipefail
-          uv run --locked --extra polaris pytest -q -rs | tee "$RUNNER_TEMP/pytest.log"
+          platform_args=()
+          if [[ "$RUNNER_OS" == macOS ]]; then
+            platform_args+=(--ignore=tests/test_proof_checker.py)
+          fi
+          uv run --locked --extra polaris pytest -q -rs "${platform_args[@]}" | tee "$RUNNER_TEMP/pytest.log"
           if grep -q '^SKIPPED ' "$RUNNER_TEMP/pytest.log"; then
             printf 'Release prerequisites must cover the complete suite.\n' >&2
             exit 1

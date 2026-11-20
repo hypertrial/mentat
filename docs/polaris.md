@@ -82,3 +82,5 @@ The smoke command exits nonzero if prerequisites, expected results, or resource 
 The public release exposes the Polaris workflow under `mentat showcase polaris`. Run `spec check` and approve the new fingerprint before replaying. Export existing run IDs with the shared `mentat evidence export` command.
 
 On interruption, the replay cleans up its disposable resources. After a hard kill, inspect `docker --context colima-mentat ps -a --filter label=org.hypertrial.mentat.run` and `docker --context colima-mentat network ls --filter label=org.hypertrial.mentat.run` and remove only the orphaned run's resources.
+
+For an agent relaying your explicit decision, `spec approve` and `accept` also accept `--trusted-chat-approval`. This bypasses the terminal prompt; Mentat cannot verify the chat or the decision, and any process running as your account can impersonate it. Use it only when you trust that relay. Records identify this source as `unverified_agent_relay`; contract and evidence checks still apply.

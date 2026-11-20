@@ -18,12 +18,14 @@ _SOURCE = re.compile(r"Source commit: `(?:[0-9a-f]{40}|[0-9a-f]{64})` · ([1-9][
 _DRAFT = re.compile(r"Source: working-tree draft · ([1-9][0-9]{0,2}) claims?")
 _PAGE_ID = r"[0-9a-fA-F]{32}|[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}"
 _LIMIT = 4_000_000
-_CODE = re.compile(r"<code>([A-Za-z0-9_.-]+)</code>")
+_CODE = re.compile(r"<code>([A-Za-z0-9_.\'-]+)</code>")
 _CLAIM_HEADING = re.compile(r"## (?:[A-Za-z0-9_.-]|\\_)+")
 _ID = r"[A-Za-z0-9_][A-Za-z0-9_.-]*"
 _CHECK_IDS = rf"`{_ID}`(?:, `{_ID}`)*"
 _LEGACY_SELECTOR = re.compile(rf"(- Check (?:`{_ID}`|<code>{_ID}</code>) selects )(.*)")
 _SELECTOR = "- Selector "
+_HOST_ENVIRONMENT = "- Host environment "
+_ASSURANCE_CASE = "- Assurance case "
 _REQUIRED_CASE = "- Required case "
 _CONTROL = re.compile(
     r"(- Negative control requires exit )(?:`([1-9][0-9]{0,2})`|<code>([1-9][0-9]{0,2})</code>)"
@@ -35,7 +37,7 @@ _CITATION = re.compile(rf"(- Source )(.+)( · commit {_OID_SPAN} · blob {_OID_S
 _ESCAPE_OR_GREATER_THAN = re.compile(r"\\.|>")
 _BLOCK_QUOTE = re.compile(r"^[ \t]*(?:(?:[-+*]|[0-9]+[.)])[ \t]+)*>")
 _BEHAVIOR_CHECK = re.compile(rf"Check `({_ID})` · Claim `({_ID})`( · Standalone check)?")
-_FORMAL_CHECK = re.compile(rf"Formal check `({_ID})` · Claim `({_ID})` · (?:Z3|Lean)")
+_FORMAL_CHECK = re.compile(rf"Formal check `({_ID})` · Claim `({_ID})` · (Z3|Lean|Lean comparator)")
 _INVENTORY = re.compile(
     r"Inventory · ([0-9]+) behavior checks? · ([0-9]+) formal checks? · ([0-9]+) declared selectors?"
 )
@@ -225,7 +227,12 @@ def _normalized(markdown: str) -> list[str]:
     for raw in StringIO(markdown, newline=""):
         line = raw.rstrip("\r\n")
         if prefix := next(
-            (item for item in (_SELECTOR, _REQUIRED_CASE) if line.startswith(item)), None
+            (
+                item
+                for item in (_SELECTOR, _HOST_ENVIRONMENT, _REQUIRED_CASE, _ASSURANCE_CASE)
+                if line.startswith(item)
+            ),
+            None,
         ):
             if (value := _selector_value(line.removeprefix(prefix))) is not None:
                 line = prefix + _code_span(value)
@@ -304,6 +311,9 @@ def _behavior_inventory(lines: list[str]) -> tuple[dict[str, str], int] | None:
                 not (
                     line.startswith(_SELECTOR)
                     and line[len(_SELECTOR) :]
+                    or line.startswith(_HOST_ENVIRONMENT)
+                    and (name := _selector_value(line[len(_HOST_ENVIRONMENT) :]))
+                    and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name)
                     or line.startswith(_REQUIRED_CASE)
                     and _selector_value(line[len(_REQUIRED_CASE) :])
                     or _control_summary(line)
@@ -326,8 +336,36 @@ def _formal_inventory(lines: list[str]) -> dict[str, str] | None:
         if (
             not match
             or match[1] in checks
-            or any(not line.startswith("- Assumption ") for line in body)
+            or any(
+                not line.startswith(
+                    (
+                        "- Assumption ",
+                        "- Comparator theorem · ",
+                        "- Allowed imports · ",
+                        "- Permitted axioms · ",
+                    )
+                )
+                for line in body
+            )
         ):
+            return None
+        policy = [line for line in body if not line.startswith("- Assumption ")]
+        if match[3] == "Lean comparator":
+            if (
+                len(policy) != 3
+                or not policy[0].startswith("- Comparator theorem · ")
+                or not policy[0].removeprefix("- Comparator theorem · ")
+                or not re.fullmatch(
+                    r"- Allowed imports · (?:None|`(?:Init|Std|Lean)(?:\.[A-Za-z_][A-Za-z0-9_']*)*`(?:, `(?:Init|Std|Lean)(?:\.[A-Za-z_][A-Za-z0-9_']*)*`)*)",
+                    policy[1],
+                )
+                or not re.fullmatch(
+                    r"- Permitted axioms · (?:None|`(?:propext|Classical\.choice|Quot\.sound)`(?:, `(?:propext|Classical\.choice|Quot\.sound)`)*)",
+                    policy[2],
+                )
+            ):
+                return None
+        elif policy:
             return None
         checks[match[1]] = match[2]
     return checks

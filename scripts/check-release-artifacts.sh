@@ -31,8 +31,11 @@ for artifact in "$dist_dir/"*.whl "$dist_dir/"*.tar.gz; do
         "$venv/bin/python" - "$expected_version" <<'PY'
 from importlib.metadata import distribution
 from pathlib import Path
+import subprocess
 import sys
+import tempfile
 
+from mentat import evidence
 from mentat.showcases.polaris.spec import PACK
 
 dist = distribution("hypertrial-mentat")
@@ -54,6 +57,46 @@ for path in (
     "runtime/requirements.txt",
 ):
     assert (PACK / path).is_file(), path
+assert Path(evidence.__file__).is_relative_to(Path(sys.prefix))
+with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:
+    root = Path(directory)
+    state = evidence.state_directory(root / "state")
+    run_id = "a" * 32
+    evidence.save_run(
+        state,
+        {
+            "schema_version": 2,
+            "kind": "project-verification",
+            "run_id": run_id,
+            "revision": "b" * 40,
+            "base": "c" * 40,
+            "contract_digest": "d" * 64,
+            "runner": "host",
+            "status": "pass",
+            "claims": [{"id": "wheel", "statement": "Wheel <claim>"}],
+            "model_checks": [{
+                "id": "model", "claim": "wheel", "kind": "z3",
+                "status": "pass", "detail": "Z3 returned sat",
+            }],
+            "cases": [{"checks": [{
+                "id": "behavior", "claim": "wheel", "status": "pass",
+                "detail": "Check passed", "artifacts": {"result.txt": "result.txt"},
+            }]}],
+            "behavior_skipped": False,
+            "reproduce": "PRIVATE_REPRODUCTION_COMMAND",
+        },
+        {"result.txt": b"PRIVATE_ARTIFACT_CONTENTS"},
+    )
+    output = root / "report.html"
+    subprocess.run(
+        [str(Path(sys.executable).with_name("mentat")), "--state", str(state),
+         "evidence", "render", run_id, "--out", str(output)],
+        check=True,
+    )
+    html = output.read_text()
+    assert "Wheel &lt;claim&gt;" in html and run_id in html
+    assert "PRIVATE_REPRODUCTION_COMMAND" not in html
+    assert "PRIVATE_ARTIFACT_CONTENTS" not in html
 PY
     )
 done

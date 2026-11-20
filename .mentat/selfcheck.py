@@ -348,6 +348,30 @@ def claim_results(root):
     ):
         assert expected in report, report
 
+    state_before = {p.relative_to(f.state): p.read_bytes() for p in f.state.rglob("*") if p.is_file()}
+    output = root / "report.html"
+    rendered = f.invoke("evidence", "render", run["run_id"], "--out", str(output))
+    assert rendered.exit_code == 0, rendered.output
+    html = output.read_text()
+    for expected in (
+        run["revision"],
+        run["contract_digest"],
+        "Observe fixture",
+        "behavior0",
+        "behavior1",
+        "violation",
+        "incomplete",
+    ):
+        assert expected in html, expected
+    assert state_before == {
+        p.relative_to(f.state): p.read_bytes() for p in f.state.rglob("*") if p.is_file()
+    }
+    assert f.invoke("evidence", "render", run["run_id"], "--out", str(output)).exit_code == 2
+    (Path(run["bundle"]) / "report.md").write_text("tampered")
+    rejected_output = root / "tampered.html"
+    rejected = f.invoke("evidence", "render", run["run_id"], "--out", str(rejected_output))
+    assert rejected.exit_code == 2 and not rejected_output.exists(), rejected.output
+
 
 def case_evidence(root):
     f = Fixture(root)

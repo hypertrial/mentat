@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+proof_ci_profile=false
+if (( $# )); then
+  [[ $# == 1 && $1 == --ci-profile ]] || { echo 'Usage: install-proof-checker [--ci-profile]' >&2; exit 2; }
+  [[ ${GITHUB_ACTIONS:-} == true && ${RUNNER_ENVIRONMENT:-} == github-hosted && ${RUNNER_OS:-} == Linux ]] || {
+    echo '--ci-profile is reserved for the disposable GitHub-hosted Linux jobs' >&2
+    exit 2
+  }
+  proof_ci_profile=true
+fi
+[[ $(uname -s) == Linux ]] || { echo 'The protected checker requires Linux' >&2; exit 2; }
+case $(uname -m) in
+  x86_64)
+    proof_archive=lean-4.35.0-linux.tar.zst
+    proof_sha=7289597a44543246c9227b8cae501767e095ce17f6d448b95fc4a8dc97268f6d
+    ;;
+  aarch64)
+    proof_archive=lean-4.35.0-linux_aarch64.tar.zst
+    proof_sha=c8f0f8a3920e839718b1343e6781fd80a3e9b1024fbcd7078eb30f54e806b028
+    ;;
+  *) echo 'Unsupported Lean 4.35.0 Linux architecture' >&2; exit 2 ;;
+esac
+proof_sudo=()
+if [[ $(id -u) != 0 ]]; then proof_sudo=(sudo -n); fi
+if [[ $proof_ci_profile == true ]]; then
+  command -v apparmor_parser >/dev/null || { echo 'AppArmor parser is required for CI setup' >&2; exit 2; }
+  proof_userns_before=$(sysctl -n kernel.apparmor_restrict_unprivileged_userns)
+  [[ $proof_userns_before == 0 || $proof_userns_before == 1 ]]
+fi
+"${proof_sudo[@]}" apt-get update
+"${proof_sudo[@]}" apt-get install -y bubblewrap curl zstd
+if [[ -e /opt/lean-4.35.0 ]]; then
+  echo 'Refusing to replace an existing /opt/lean-4.35.0; validate that installation separately' >&2
+  exit 2
+fi
+proof_tmp=$(mktemp -d)
+trap 'rm -rf -- "$proof_tmp"' EXIT
+curl --fail --location --proto '=https' --tlsv1.2 --retry 3 \
+  "https://github.com/leanprover/lean4/releases/download/v4.35.0/$proof_archive" \
+  --output "$proof_tmp/$proof_archive"
+printf '%s  %s\n' "$proof_sha" "$proof_tmp/$proof_archive" | sha256sum --check -
+tar --zstd --extract --file "$proof_tmp/$proof_archive" --directory "$proof_tmp"
+"${proof_sudo[@]}" mkdir -p /opt
+"${proof_sudo[@]}" mv "$proof_tmp/${proof_archive%.tar.zst}" /opt/lean-4.35.0
+"${proof_sudo[@]}" chown -R root:root /opt/lean-4.35.0
+"${proof_sudo[@]}" chmod -R go-w /opt/lean-4.35.0
+/opt/lean-4.35.0/bin/lean --version
+if [[ $proof_ci_profile == true ]]; then
+  for proof_existing in /etc/apparmor.d/bwrap /etc/apparmor.d/bwrap-userns-restrict \
+    /etc/apparmor.d/local/bwrap-userns-restrict /etc/apparmor.d/local/unpriv_bwrap; do
+    [[ ! -e $proof_existing && ! -L $proof_existing ]] || {
+      echo 'Refusing to replace existing bubblewrap policy or local overrides' >&2; exit 2;
+    }
+  done
+  proof_profiles=$("${proof_sudo[@]}" cat /sys/kernel/security/apparmor/profiles)
+  if grep -Eq '^(bwrap|unpriv_bwrap|/usr/bin/bwrap)([ /]|$)' <<<"$proof_profiles"; then
+    echo 'Refusing to replace loaded bubblewrap profiles' >&2; exit 2
+  fi
+  proof_profile=$proof_tmp/bwrap-userns-restrict
+  curl --fail --location --proto '=https' --tlsv1.2 --retry 3 \
+    'https://gitlab.com/apparmor/apparmor/-/raw/1979af7710d0f38db6680bd7c19c80902f11f969/profiles/apparmor/profiles/extras/bwrap-userns-restrict' \
+    --output "$proof_profile"
+  proof_profile_sha=634d3d3427c483f123cb5ed53b71ea13040187e07d9f67ca74421d42a6170f0e
+  printf '%s  %s\n' "$proof_profile_sha" "$proof_profile" | sha256sum --check -
+  "${proof_sudo[@]}" apparmor_parser --skip-kernel-load --skip-cache "$proof_profile"
+  "${proof_sudo[@]}" install -o root -g root -m 0644 "$proof_profile" /etc/apparmor.d/bwrap-userns-restrict
+  printf '%s  %s\n' "$proof_profile_sha" /etc/apparmor.d/bwrap-userns-restrict | sha256sum --check -
+  "${proof_sudo[@]}" apparmor_parser --replace /etc/apparmor.d/bwrap-userns-restrict
+  proof_profiles=$("${proof_sudo[@]}" cat /sys/kernel/security/apparmor/profiles)
+  if ! grep -Fxq 'bwrap (enforce)' <<<"$proof_profiles" || ! grep -Fxq 'unpriv_bwrap (enforce)' <<<"$proof_profiles"; then
+    echo 'CI bubblewrap profiles are not both enforced' >&2; exit 2
+  fi
+  [[ $(sysctl -n kernel.apparmor_restrict_unprivileged_userns) == "$proof_userns_before" ]] || {
+    echo 'Global namespace restriction changed during setup' >&2; exit 2;
+  }
+  "${proof_sudo[@]}" runuser -u nobody -- /usr/bin/bwrap --unshare-user --unshare-net \
+    --ro-bind / / --proc /proc --dev /dev /bin/true
+fi

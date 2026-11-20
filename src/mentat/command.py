@@ -21,7 +21,16 @@ def emit(result: dict, output_json: bool) -> None:
         return
     title = result.get("status", "pass" if result.get("ok") else "incomplete")
     typer.echo(f"Mentat {title}")
-    for key in ("detail", "context", "contract_digest", "run_id", "bundle", "next_action"):
+    for key in (
+        "detail",
+        "context",
+        "contract_digest",
+        "run_id",
+        "bundle",
+        "next_action",
+        "campaign_id",
+        "task_directory",
+    ):
         if result.get(key):
             typer.echo(f"{key.replace('_', ' ')}  {result[key]}")
     for regression in result.get("regressions", []):
@@ -31,6 +40,12 @@ def emit(result: dict, output_json: bool) -> None:
                 parts = [check.get("name", "check"), check.get("status", "incomplete")]
                 parts.extend(check[key] for key in ("stage", "detail") if check.get(key))
                 typer.echo(visible_text("  " + "  ".join(parts)))
+    if result.get("campaign_id"):
+        for target in result.get("targets", []):
+            if isinstance(target, dict):
+                typer.echo(visible_text(f"{target['id']}  {target['status']}  {target['detail']}"))
+            else:
+                typer.echo(visible_text(f"target  {target}"))
     if result.get("kind") == "project-verification":
         from .evidence_report import terminal_overview
 

@@ -33,7 +33,7 @@ Claim `contract.base-pinning` · Behavior `check.base-pinning`
 
 ### 3. Approve a specific contract
 
-A reviewer sees which checks and declared test selectors support each claim, can compare two committed contracts, and confirms the displayed digest in a terminal. Verification requires approval for the same repository path, base commit, runner mode, and verifier fingerprint.
+A reviewer sees which checks and declared test selectors support each claim and can compare two committed contracts. Approval confirms the displayed digest in a terminal by default, or uses an explicitly trusted, unverified agent relay. Verification requires approval for the same repository path, base commit, runner mode, and verifier fingerprint.
 
 Claim `approval.scope` · Behavior `check.approval.scope`
 
@@ -91,13 +91,13 @@ Claim `evidence.provenance` · Behavior `check.evidence.provenance`
 
 ### 12. Review outcomes by claim
 
-The verification report groups formal and behavior evidence by claim, identifies known violations and gaps, and links the checks to their saved artifacts.
+The Markdown report and standalone HTML report group formal and behavior evidence by claim and identify known violations and gaps. HTML rendering uses saved evidence, displays historical operator acceptance separately, and references artifact filenames without embedding logs, artifact contents, environment values, or reproduction commands.
 
 Claim `evidence.claim-results` · Behavior `check.evidence.claim-results`
 
 ### 13. Check the bundle before export
 
-Evidence export validates the saved manifest against its local receipt and checks the file set and artifact hashes before copying the bundle.
+Evidence export and HTML rendering validate the saved manifest against its local receipt and check the file set and artifact hashes. Rendering preserves saved state, publishes a complete report outside state without overwriting an existing destination, and rejects invalid evidence.
 
 Claim `evidence.integrity` · Behavior `check.integrity`
 
@@ -109,7 +109,7 @@ Claim `evidence.comparison` · Behavior `check.evidence.comparison`
 
 ### 15. Accept only a complete pass
 
-Acceptance requires an intact passing run under the current approval and a separate operator confirmation in a terminal.
+Acceptance requires an intact passing run under the current approval and a separate decision, confirmed in a terminal by default or supplied by an explicitly trusted, unverified agent relay.
 
 Claim `acceptance.complete-pass` · Behavior `check.acceptance` · Formal `acceptance.eligibility`
 
@@ -181,6 +181,6 @@ Check `check.claims.openspec-draft` · Claim `claims.openspec-draft` · Standalo
 
 Formal check `acceptance.eligibility` · Claim `acceptance.complete-pass` · Z3
 
-- Assumption The bounded model represents status, current approval, evidence integrity, and operator confirmation as independent eligibility gates.
+- Assumption The bounded model represents status, current approval, evidence integrity, and a declared decision as independent eligibility gates; it does not verify the source of a relayed decision.
 
 Inventory · 17 behavior checks · 1 formal check · 4 declared selectors

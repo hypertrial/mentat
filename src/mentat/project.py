@@ -64,12 +64,78 @@ class ClaimProvenance(_Model):
     citations: list[ClaimCitation] = Field(min_length=1, max_length=16)
 
 
+class EvidenceRef(_Model):
+    check_id: str
+    case_ids: list[str] = Field(default_factory=list, max_length=128)
+
+    @model_validator(mode="after")
+    def valid_reference(self):
+        if (
+            not _NAME.fullmatch(self.check_id)
+            or len(set(self.case_ids)) != len(self.case_ids)
+            or any(
+                not case or len(case) > 256 or any(unicodedata.category(c) == "Cc" for c in case)
+                for case in self.case_ids
+            )
+        ):
+            raise ValueError("invalid evidence reference")
+        return self
+
+
+class Bound(_Model):
+    id: str
+    statement: str = Field(pattern=r"\S", max_length=4096)
+    kind: Literal["enforced", "assumed"]
+    checks: list[EvidenceRef] = Field(default_factory=list, max_length=128)
+    assumption: str | None = Field(default=None, min_length=1, max_length=4096)
+
+    @model_validator(mode="after")
+    def valid_bound(self):
+        if not _NAME.fullmatch(self.id):
+            raise ValueError("invalid bound ID")
+        if self.kind == "enforced":
+            if not self.checks or "assumption" in self.model_fields_set:
+                raise ValueError("enforced bounds require checks and forbid an assumption")
+        elif self.checks or not self.assumption:
+            raise ValueError("assumed bounds require an assumption and forbid checks")
+        return self
+
+
+class Exclusion(_Model):
+    scenario: str = Field(pattern=r"\S", max_length=4096)
+    reason: str = Field(pattern=r"\S", max_length=4096)
+    effect: str = Field(pattern=r"\S", max_length=4096)
+    affected_claims: list[str] = Field(min_length=1, max_length=128)
+
+
+class Deviation(_Model):
+    citation: ClaimCitation
+    rationale: str = Field(pattern=r"\S", max_length=4096)
+    effect: str = Field(pattern=r"\S", max_length=4096)
+
+
+class Assurance(_Model):
+    implementation_checks: list[EvidenceRef] = Field(default_factory=list, max_length=128)
+    witness_checks: list[EvidenceRef] = Field(default_factory=list, max_length=128)
+    bounds: list[Bound] = Field(default_factory=list, max_length=128)
+    exclusions: list[Exclusion] = Field(default_factory=list, max_length=128)
+    deviations: list[Deviation] = Field(default_factory=list, max_length=128)
+
+    @model_validator(mode="after")
+    def distinct_bounds(self):
+        ids = [bound.id for bound in self.bounds]
+        if len(ids) != len(set(ids)):
+            raise ValueError("duplicate bound ID")
+        return self
+
+
 class Claim(_Model):
     id: str
     statement: str = Field(min_length=1, max_length=4096)
     assumptions: list[str] = Field(default_factory=list, max_length=128)
     title: str | None = Field(default=None, min_length=1, max_length=256)
     provenance: ClaimProvenance | None = None
+    assurance: Assurance | None = Field(default=None, exclude_if=lambda value: value is None)
 
     @field_validator("title")
     @classmethod
@@ -171,15 +237,48 @@ class Review(_Model):
 class Formal(_Model):
     id: str
     claim: str
-    engine: Literal["z3", "lean"]
+    engine: Literal["z3", "lean", "lean-comparator"]
     source: str
     expected: Literal["sat", "unsat"] | None = None
     counterexample: str | None = None
     theorem: str | None = None
+    allowed_imports: list[str] | None = Field(
+        default=None, max_length=128, exclude_if=lambda value: value is None
+    )
+    permitted_axioms: list[str] | None = Field(
+        default=None, max_length=3, exclude_if=lambda value: value is None
+    )
 
     @model_validator(mode="after")
     def shape(self):
-        if self.engine == "z3":
+        policy = {"allowed_imports", "permitted_axioms"}
+        if self.engine != "lean-comparator" and policy & self.model_fields_set:
+            raise ValueError("Lean comparator policy is only valid for lean-comparator")
+        if self.engine == "lean-comparator":
+            from .project_formal import _NAME as lean_name
+
+            if (
+                {"expected", "counterexample"} & self.model_fields_set
+                or not self.theorem
+                or not policy <= self.model_fields_set
+                or self.allowed_imports is None
+                or self.permitted_axioms is None
+            ):
+                raise ValueError(
+                    "lean-comparator requires theorem and explicit policy and forbids z3 fields"
+                )
+            if not lean_name.fullmatch(self.theorem):
+                raise ValueError("lean-comparator requires a plain qualified Lean theorem name")
+            if len(set(self.allowed_imports)) != len(self.allowed_imports) or any(
+                not re.fullmatch(r"(?:Init|Std|Lean)(?:\.[A-Za-z_][A-Za-z0-9_']*)*", name)
+                for name in self.allowed_imports
+            ):
+                raise ValueError("invalid allowed Lean imports")
+            if len(set(self.permitted_axioms)) != len(self.permitted_axioms) or set(
+                self.permitted_axioms
+            ) - {"propext", "Classical.choice", "Quot.sound"}:
+                raise ValueError("invalid permitted Lean axioms")
+        elif self.engine == "z3":
             if self.expected is None or "theorem" in self.model_fields_set:
                 raise ValueError("z3 requires expected and forbids theorem")
             if (self.expected == "unsat") != (self.counterexample is not None) or (
@@ -222,6 +321,7 @@ class Behavior(_Model):
     )
     artifacts: list[str] = Field(default_factory=list, max_length=128)
     selectors: list[str] | None = Field(default=None, max_length=128)
+    host_environment: list[str] = Field(default_factory=list, max_length=128)
     case_report: CaseReport | None = None
     negative_control: NegativeControl | None = None
 
@@ -259,6 +359,18 @@ class Behavior(_Model):
             for arg in self.argv
             for value in (self.selectors if arg == "{selectors}" else [arg])
         ]
+
+    @field_validator("host_environment")
+    @classmethod
+    def environment_names(cls, value):
+        if len(set(value)) != len(value) or any(
+            not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name)
+            or name.upper() in ("PATH", "HOME")
+            or name.upper().startswith("MENTAT_")
+            for name in value
+        ):
+            raise ValueError("invalid, reserved, or duplicate host environment name")
+        return value
 
     @field_validator("violation_exit_codes")
     @classmethod
@@ -322,6 +434,7 @@ class Contract(_Model):
     review: Review | None = None
     base_files: list[str] = Field(default_factory=list, max_length=_MAX_FILES)
     host_requirements: HostRequirements | None = None
+    source_mutations: str | None = Field(default=None, exclude_if=lambda value: value is None)
 
     @field_validator("base_files")
     @classmethod
@@ -345,6 +458,10 @@ class Contract(_Model):
 
     @model_validator(mode="after")
     def relationships(self):
+        if not self.allow_host and any(
+            "host_environment" in check.model_fields_set for check in self.behavior
+        ):
+            raise ValueError("host_environment requires allow_host")
         if self.review is not None and any(claim.title is None for claim in self.claims):
             raise ValueError("every claim requires a title when review is present")
         if self.docker_image is None:
@@ -366,6 +483,49 @@ class Contract(_Model):
             raise ValueError("checks must reference claims and every claim needs behavior")
         if any(not s or len(s) > 4096 for claim in self.claims for s in claim.assumptions):
             raise ValueError("invalid assumption")
+        checks = {item.id: item for item in [*self.formal, *self.behavior]}
+        for claim in self.claims:
+            assurance = claim.assurance
+            if not assurance:
+                continue
+            refs = [
+                *assurance.implementation_checks,
+                *assurance.witness_checks,
+                *(ref for bound in assurance.bounds for ref in bound.checks),
+            ]
+            if any(
+                not isinstance(checks.get(ref.check_id), Behavior)
+                for ref in assurance.implementation_checks
+            ):
+                raise ValueError("implementation checks must reference behavior checks")
+            for ref in refs:
+                check = checks.get(ref.check_id)
+                if check is None:
+                    raise ValueError("assurance references an unknown check")
+                if ref.case_ids and (
+                    not isinstance(check, Behavior)
+                    or not check.case_report
+                    or not set(ref.case_ids) <= set(check.case_report.required_cases)
+                ):
+                    raise ValueError("assurance references unknown or unsupported cases")
+            if any(
+                bound.kind == "assumed" and bound.assumption not in claim.assumptions
+                for bound in assurance.bounds
+            ):
+                raise ValueError("assumed bound must reference an existing claim assumption")
+            for exclusion in assurance.exclusions:
+                if (
+                    len(set(exclusion.affected_claims)) != len(exclusion.affected_claims)
+                    or not set(exclusion.affected_claims) <= claims
+                ):
+                    raise ValueError("exclusion references invalid claims")
+            if any(
+                claim.provenance is None or deviation.citation not in claim.provenance.citations
+                for deviation in assurance.deviations
+            ):
+                raise ValueError("deviation must reference an existing claim citation")
+        if self.source_mutations is not None:
+            _path(self.source_mutations)
         return self
 
 
@@ -738,6 +898,8 @@ def load_project(repo: Path, base: str, runner: str) -> Project:
         raise ValueError("stale .mentat/claims.md; run mentat claims render and commit it")
     if runner == "docker" and contract.docker_image is None:
         raise ValueError("contract allows only host execution; select --runner host")
+    if runner == "docker" and any(check.host_environment for check in contract.behavior):
+        raise ValueError("host_environment is not supported by the docker runner")
     if runner not in ("docker", "host") or (runner == "host" and not contract.allow_host):
         raise ValueError("runner is not allowed by contract")
     for check in contract.formal:
@@ -756,6 +918,14 @@ def load_project(repo: Path, base: str, runner: str) -> Project:
                 and _path(arg.removeprefix(CHECKS_PREFIX)) not in files
             ):
                 raise ValueError("invalid approved checks path")
+    if contract.source_mutations is not None:
+        if contract.source_mutations not in files or contract.source_mutations in {
+            f"base/{path}" for path in contract.base_files
+        }:
+            raise ValueError("missing approved .mentat source mutations manifest")
+        from .qualification import approved_mutations
+
+        approved_mutations(contract, files)
     verifier = {p.name: (0o644, p.read_bytes()) for p in Path(__file__).parent.glob("*.py")}
     verifier_digest = _digest(verifier)
     binding = hashlib.sha256()
