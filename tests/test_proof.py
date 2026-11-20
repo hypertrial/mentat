@@ -526,15 +526,21 @@ def recorded_source(tmp_path_factory):
 @pytest.fixture
 def recorded_proof(recorded_source, tmp_path):
     c, submission, run_id = recorded_source
-    # Damage tests mutate the saved bundle and receipt, so each test gets its own copy.
-    # read_run_snapshot needs only these two items, and copytree keeps the 0700 modes.
+    # Damage tests mutate the saved bundle and receipt, so each test reads and writes its
+    # own copy, through both `state` and `invoke`. read_run_snapshot and the HTML report
+    # need only these two items, and copytree keeps the 0700 modes.
     state = evidence.state_directory(tmp_path / "state")
     (state / "runs").mkdir(mode=0o700)
     (state / "receipts").mkdir(mode=0o700)
     shutil.copytree(c.state / "runs" / run_id, state / "runs" / run_id)
     shutil.copy2(c.state / "receipts" / run_id, state / "receipts" / run_id)
     bundle, record, _ = evidence.read_run_snapshot(state, run_id)
-    return SimpleNamespace(**{**vars(c), "state": state}), submission, bundle, record
+
+    def invoke(*args):
+        return CliRunner().invoke(cli.app, ["--state", str(state), *args])
+
+    copy = SimpleNamespace(**{**vars(c), "state": state, "invoke": invoke})
+    return copy, submission, bundle, record
 
 
 @pytest.mark.parametrize("damage", ["missing-source", "wrong-source", "source-hash", "approved-hash", "revision", "base", "contract", "verifier", "environment", "environment-hash", "environment-conflict", "theorem", "source-bytes", "source-symlink"])
