@@ -40,8 +40,8 @@ exclude = ["/.git"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# Parallel by default; add `-n 0` for a serial run. Grouped tests share one worker.
-addopts = "-n auto --dist loadgroup"
+# Parallel by default; add `-n 0` for a serial run.
+addopts = "-n auto"
 
 [tool.ruff]
 target-version = "py312"
