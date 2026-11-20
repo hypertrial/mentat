@@ -629,6 +629,8 @@ def compare_evidence(
         _error(ValueError("Invalid saved verification record"), output_json)
         return
     if not output_json:
+        if "report" in result:
+            typer.echo(f"Report written to {result['report']}")
         for side in ("before", "after"):
             run = result[side]
             typer.echo(f"{side.title()}  {run['revision']}  {run['status']}  (run {run['run_id']})")

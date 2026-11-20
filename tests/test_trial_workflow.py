@@ -523,6 +523,17 @@ def test_host_environment_rejects_docker_and_requires_allow_host(trial):
         load_project(repo, base, "docker")
 
 
+def test_empty_host_environment_is_omitted_from_serialized_checks(trial):
+    repo, manifest = trial
+    project = load_project(repo, save(repo, manifest), "host")
+    assert "host_environment" not in project.contract.behavior[0].model_dump(exclude_none=True)
+    manifest["behavior"][0]["host_environment"] = ["PRIVATE_CONFIG"]
+    project = load_project(repo, save(repo, manifest), "host")
+    assert project.contract.behavior[0].model_dump(exclude_none=True)["host_environment"] == [
+        "PRIVATE_CONFIG"
+    ]
+
+
 def test_host_environment_is_per_check_and_reports_missing(trial, monkeypatch):
     repo, manifest = trial
     monkeypatch.setenv("SCOPED_CONFIG", "sensitive-value")
