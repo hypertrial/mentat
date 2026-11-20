@@ -7,23 +7,12 @@ import sys
 from pathlib import Path
 
 import pytest
+from helpers import commit, git
 from typer.testing import CliRunner
 
 from mentat import cli
 from mentat.project import load_project, snapshot
 from mentat.runner import run_behavior
-
-
-def git(repo, *args):
-    return subprocess.run(
-        ["git", "-C", str(repo), *args], check=True, capture_output=True, text=True
-    ).stdout.strip()
-
-
-def commit(repo):
-    git(repo, "add", "-A")
-    git(repo, "commit", "-qm", "fixture")
-    return git(repo, "rev-parse", "HEAD")
 
 
 @pytest.fixture

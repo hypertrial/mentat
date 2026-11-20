@@ -1,15 +1,11 @@
 import hashlib
-import subprocess
 from unittest.mock import MagicMock
 
 import pytest
+from helpers import git
 
 from mentat.showcases.polaris import evaluation, replay
 from mentat.showcases.polaris.cli import candidate_repo
-
-
-def git(repo, *args):
-    return subprocess.check_output(["git", "-C", str(repo), *args]).decode().strip()
 
 
 def test_snapshot_batches_and_preserves_bytes_and_digest(tmp_path, monkeypatch):

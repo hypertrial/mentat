@@ -107,6 +107,7 @@ def test_setup_commits_contract_with_global_excludes_and_accepts_own_checkout(tm
     )
     env["GIT_CONFIG_GLOBAL"] = str(config)
 
+    # Kept local: runs with this test's custom env (GIT_CONFIG_GLOBAL), which the shared helper lacks.
     def git(repo, *args):
         return subprocess.run(
             ["git", "-C", str(repo), *args],

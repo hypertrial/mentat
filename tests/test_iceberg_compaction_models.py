@@ -1,4 +1,3 @@
-import shutil
 import subprocess
 from pathlib import Path
 
@@ -24,10 +23,8 @@ def test_z3_preservation_and_missing_whole_file_assumption():
     assert solve(model.replace(assumption, "") + "\n" + counterexample) == "sat"
 
 
-def test_lean_model_compiles_without_sorry(tmp_path):
-    lean = shutil.which("lean")
-    if lean is None:
-        pytest.skip("Lean is required for the formal model")
+def test_lean_model_compiles_without_sorry(tmp_path, lean_tools):
+    lean = lean_tools["lean"]["executable"]
     model = (CONTRACT / "Model.lean").read_text()
     audit = tmp_path / "Audit.lean"
     audit.write_text(model + "\n#print axioms IcebergCompaction.rows_preserved\n")

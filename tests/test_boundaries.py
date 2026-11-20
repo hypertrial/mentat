@@ -1,9 +1,9 @@
 import json
 import os
-import subprocess
 from pathlib import Path
 
 import pytest
+from helpers import git
 from pydantic import ValidationError
 from typer.testing import CliRunner
 
@@ -196,12 +196,6 @@ def test_polaris_recomputes_models_with_legacy_cache_present(tmp_path, monkeypat
         ]
     assert len(solver_calls) == 2
     assert legacy.read_bytes() == b"an existing legacy cache"
-
-
-def git(repo, *args):
-    return subprocess.run(
-        ["git", "-C", str(repo), *args], check=True, capture_output=True, text=True
-    ).stdout.strip()
 
 
 def test_snapshot_uses_committed_tree_and_full_revision(tmp_path):

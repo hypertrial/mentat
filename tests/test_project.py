@@ -3,14 +3,9 @@ import json
 import subprocess
 
 import pytest
+from helpers import commit, git
 
 from mentat.project import load_project, snapshot
-
-
-def git(repo, *args):
-    return subprocess.run(
-        ["git", "-C", str(repo), *args], check=True, capture_output=True, text=True
-    ).stdout.strip()
 
 
 @pytest.fixture
@@ -52,12 +47,6 @@ def project_repo(tmp_path):
     git(repo, "add", ".")
     git(repo, "commit", "-qm", "base")
     return repo, git(repo, "rev-parse", "HEAD"), manifest
-
-
-def commit(repo, message):
-    git(repo, "add", "-A")
-    git(repo, "commit", "-qm", message)
-    return git(repo, "rev-parse", "HEAD")
 
 
 def test_trusted_base_and_candidate_snapshots_are_committed_and_separate(project_repo):

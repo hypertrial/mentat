@@ -1,14 +1,9 @@
 import subprocess
 
 import pytest
+from helpers import commit, git
 
 from mentat import openspec
-
-
-def git(repo, *args):
-    return subprocess.run(
-        ["git", "-C", str(repo), *args], check=True, capture_output=True, text=True
-    ).stdout.strip()
 
 
 @pytest.fixture
@@ -17,12 +12,6 @@ def repo(tmp_path):
     git(tmp_path, "config", "user.name", "Test")
     git(tmp_path, "config", "user.email", "test@example.invalid")
     return tmp_path
-
-
-def commit(repo):
-    git(repo, "add", "-A")
-    git(repo, "-c", "commit.gpgsign=false", "commit", "-qm", "spec")
-    return git(repo, "rev-parse", "HEAD")
 
 
 def write(repo, path, content):
