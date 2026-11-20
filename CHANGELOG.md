@@ -9,6 +9,8 @@
 - Add approved Lean proof campaigns (`mentat proof prepare` and `proof check`)
   on a dedicated Linux checker, plus explicit claim assurance and
   source-mutation qualification, with bounded diagnostics for checker failures.
+  Checking and verification take campaign targets and approved proof source
+  from the approved contract, so edited campaign state cannot weaken a target.
 - Add `--trusted-chat-approval` to `spec approve` and `accept` for an agent
   relaying the user's explicit decision. Mentat cannot verify the relay and
   records its source as `unverified_agent_relay`.

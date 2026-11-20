@@ -158,6 +158,17 @@ def _current(state, manifest):
     ):
         raise ValueError("Proof campaign inputs changed; prepare a new campaign")
     _fresh(state, project, candidate, manifest["approval"])
+    # Campaign state is writable by same-account code; targets must come from the contract.
+    expected, _ = _targets(project)
+    ids = [target["id"] for target in expected]
+    selected = manifest["targets"]
+    if (
+        _json(manifest["all_targets"]) != _json(expected)
+        or not isinstance(selected, list)
+        or not selected
+        or selected != [item for item in ids if item in selected]
+    ):
+        raise ValueError("Proof campaign targets do not match the approved contract")
     if proof_checker.checker_identity() != manifest["checker_identity"]:
         raise ValueError("Proof checker identity changed; prepare a new campaign")
     return project, candidate
@@ -293,33 +304,12 @@ def _task_text(manifest):
     ).encode()
 
 
-def prepare(state: Path, project, candidate, approval: dict, out: Path, *, targets=None) -> dict:
-    from . import proof_checker
-
-    state = Path(state).resolve()
-    out = Path(out).expanduser().absolute()
-    resolved = out.resolve()
-    for protected in (project.root.resolve(), state):
-        if resolved.is_relative_to(protected) or protected.is_relative_to(resolved):
-            raise ValueError(
-                "Proof task directory must be outside the candidate and operator state"
-            )
-    project, candidate = _fresh(state, project, candidate, approval)
-    identity = proof_checker.checker_identity()
-    checks = [item for item in project.contract.formal if item.engine == "lean-comparator"]
-    ids = {item.id for item in checks}
-    selected = list(ids) if targets is None else targets
-    if (
-        not isinstance(selected, list)
-        or not selected
-        or any(not isinstance(item, str) or item not in ids for item in selected)
-        or len(selected) != len(set(selected))
-    ):
-        raise ValueError("Select distinct declared lean-comparator target IDs")
-    selected = [check.id for check in checks if check.id in selected]
+def _targets(project):
     groups = {}
     all_targets = []
-    for check in checks:
+    for check in project.contract.formal:
+        if check.engine != "lean-comparator":
+            continue
         data = project.files[check.source]
         if len(data) > _LIMIT:
             raise ValueError("Approved proof source exceeds the size limit")
@@ -343,6 +333,33 @@ def prepare(state: Path, project, candidate, approval: dict, out: Path, *, targe
                 "approved_sha256": _hash(data),
             }
         )
+    return all_targets, groups
+
+
+def prepare(state: Path, project, candidate, approval: dict, out: Path, *, targets=None) -> dict:
+    from . import proof_checker
+
+    state = Path(state).resolve()
+    out = Path(out).expanduser().absolute()
+    resolved = out.resolve()
+    for protected in (project.root.resolve(), state):
+        if resolved.is_relative_to(protected) or protected.is_relative_to(resolved):
+            raise ValueError(
+                "Proof task directory must be outside the candidate and operator state"
+            )
+    project, candidate = _fresh(state, project, candidate, approval)
+    identity = proof_checker.checker_identity()
+    all_targets, groups = _targets(project)
+    ids = [target["id"] for target in all_targets]
+    selected = list(ids) if targets is None else targets
+    if (
+        not isinstance(selected, list)
+        or not selected
+        or any(not isinstance(item, str) or item not in ids for item in selected)
+        or len(selected) != len(set(selected))
+    ):
+        raise ValueError("Select distinct declared lean-comparator target IDs")
+    selected = [item for item in ids if item in selected]
     with _lock(state / "proof-build.lock", blocking=False):
         for source, group in groups.items():
             audit = proof_checker.audit_approved(
@@ -456,7 +473,7 @@ def _submissions(directory, targets):
     return solutions
 
 
-def _run_attempt(path, manifest, ledger, target, solution, *, recheck=False):
+def _run_attempt(path, manifest, ledger, target, solution, approved, *, recheck=False):
     from . import proof_checker
 
     reserved, finished, total = _usage(ledger)
@@ -495,7 +512,7 @@ def _run_attempt(path, manifest, ledger, target, solution, *, recheck=False):
     start = time.monotonic()
     try:
         checked = proof_checker.check_submission(
-            _source(path / "approved" / f"{target['id']}.lean"),
+            approved,
             solution,
             theorem=target["theorem"],
             allowed_imports=target["allowed_imports"],
@@ -540,13 +557,16 @@ def check(state: Path, campaign_id: str, submission: Path) -> dict:
     solutions = _submissions(submission, set(manifest["targets"]))
     with _lock(path / "ledger.lock"):
         path, manifest = _campaign(state, campaign_id)
-        _current(state, manifest)
+        project, _ = _current(state, manifest)
         ledger = _ledger(path)
         targets = {target["id"]: target for target in manifest["all_targets"]}
         outcomes = []
         with _lock(state / "proof-build.lock", blocking=False):
             for target_id, solution in solutions.items():
-                outcome = _run_attempt(path, manifest, ledger, targets[target_id], solution)
+                target = targets[target_id]
+                outcome = _run_attempt(
+                    path, manifest, ledger, target, solution, project.files[target["source"]]
+                )
                 outcomes.append({"id": target_id, **outcome})
         status = (
             "incomplete"
@@ -576,24 +596,25 @@ def recheck(state: Path, project, candidate, approval: dict, campaign_ids: list[
         raise ValueError("Proof campaign IDs must be distinct")
     results, artifacts, seen = [], {}, set()
     for campaign_id in campaign_ids:
-        path, manifest = _campaign(state, campaign_id)
-        if seen.intersection(manifest["targets"]):
-            raise ValueError("Proof campaigns have overlapping targets")
-        seen.update(manifest["targets"])
-        if (
-            manifest["repo"] != str(project.root)
-            or manifest["base"] != project.base
-            or manifest["runner"] != project.runner
-            or manifest["revision"] != candidate.revision
-            or manifest["snapshot_digest"] != candidate.digest
-            or manifest["contract_digest"] != project.fingerprint
-            or manifest["verifier_digest"] != project.verifier_digest
-            or manifest["approval"] != approval
-        ):
-            raise ValueError("Proof campaign does not match this verification")
+        path, _ = _campaign(state, campaign_id)
         with _lock(path / "ledger.lock"):
+            # Bind the same manifest read that is checked; state may change while waiting.
             path, manifest = _campaign(state, campaign_id)
+            if (
+                manifest["repo"] != str(project.root)
+                or manifest["base"] != project.base
+                or manifest["runner"] != project.runner
+                or manifest["revision"] != candidate.revision
+                or manifest["snapshot_digest"] != candidate.digest
+                or manifest["contract_digest"] != project.fingerprint
+                or manifest["verifier_digest"] != project.verifier_digest
+                or manifest["approval"] != approval
+            ):
+                raise ValueError("Proof campaign does not match this verification")
             _current(state, manifest)
+            if seen.intersection(manifest["targets"]):
+                raise ValueError("Proof campaigns have overlapping targets")
+            seen.update(manifest["targets"])
             ledger = _ledger(path)
             targets = {item["id"]: item for item in manifest["all_targets"]}
             with _lock(state / "proof-build.lock", blocking=False):
@@ -615,10 +636,22 @@ def recheck(state: Path, project, candidate, approval: dict, campaign_ids: list[
                         "status": "incomplete",
                         "detail": "Latest proof submission is not accepted",
                     }
+                    solution = (
+                        _source(path / "submissions" / f"{latest['attempt']}.lean")
+                        if latest
+                        else None
+                    )
+                    if latest and _hash(solution) != latest["source_sha256"]:
+                        raise ValueError("Proof submission failed integrity validation")
                     if completion and completion["status"] == "accepted":
-                        solution = _source(path / "submissions" / f"{latest['attempt']}.lean")
                         outcome = _run_attempt(
-                            path, manifest, ledger, target, solution, recheck=True
+                            path,
+                            manifest,
+                            ledger,
+                            target,
+                            solution,
+                            project.files[target["source"]],
+                            recheck=True,
                         )
                     result = {
                         "id": target_id,
@@ -630,7 +663,7 @@ def recheck(state: Path, project, candidate, approval: dict, campaign_ids: list[
                         "evidence": {
                             "campaign_id": campaign_id,
                             "theorem": target["theorem"],
-                            "source_sha256": latest["source_sha256"] if latest else None,
+                            "source_sha256": _hash(solution) if latest else None,
                             "approved_sha256": target["approved_sha256"],
                             "environment": manifest["checker_identity"],
                             "revision": manifest["revision"],
@@ -641,9 +674,7 @@ def recheck(state: Path, project, candidate, approval: dict, campaign_ids: list[
                     }
                     if latest:
                         source_name = f"proof-{campaign_id}-{target_id}-Solution.lean"
-                        artifacts[source_name] = _source(
-                            path / "submissions" / f"{latest['attempt']}.lean"
-                        )
+                        artifacts[source_name] = solution
                         result.setdefault("artifacts", {})["proof-source"] = source_name
                     for name, digest in outcome.get("logs", {}).items():
                         data = _regular(path / "logs" / name)

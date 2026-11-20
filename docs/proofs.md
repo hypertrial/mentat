@@ -9,8 +9,10 @@ Existing `lean` checks still use Lean 4.31; Z3 behavior is unchanged.
 
 Use a dedicated Linux VM with cgroup v2, systemd, Python, bubblewrap and the official
 Lean 4.35.0 distribution at `/opt/lean-4.35.0`. The toolchain must be root-owned
-and not writable by proof authors. The operator needs noninteractive permission
-to create and stop the bounded system services. Do not mount host directories,
+and not writable by proof authors. The operator account runs `systemd-run`,
+`systemctl`, `chown` and `rm` through `sudo -n`. That grant is root-equivalent:
+`systemd-run` can start any command as root. Grant it only in a dedicated VM
+whose operator account you already trust with root. Do not mount host directories,
 forward credentials or put readable secrets in the guest filesystem. The source
 sandbox can read the guest system; read-only access does not hide secrets.
 
@@ -63,11 +65,16 @@ to the verifier, base, repository location or runner requires renewed approval.
 
 ```sh
 mentat --state "$STATE" proof prepare --repo "$REPO" --base "$BASE" \
-  --rev "$CANDIDATE" --runner host --out "$TASKS"
+  --rev "$CANDIDATE" --out "$TASKS"
 mentat --state "$STATE" proof check "$CAMPAIGN" --submission "$SUBMISSION" --json
 mentat --state "$STATE" verify --repo "$REPO" --base "$BASE" \
-  --rev "$CANDIDATE" --runner host --proof-campaign "$CAMPAIGN" --json
+  --rev "$CANDIDATE" --proof-campaign "$CAMPAIGN" --json
 ```
+
+Use the default Docker runner for untrusted candidates. Host-runner behavior
+checks run candidate code as the operator account. That code, or a process it
+leaves running, can rewrite approvals, campaigns, ledgers and saved runs in the
+operator state.
 
 Preparation freezes every declared target and creates a new task directory outside
 the repository and operator state. Repeat `--target FORMAL_ID` to select a subset
@@ -82,15 +89,23 @@ or their supporting definitions.
 `proof check` exits zero for accepted submissions, one for a definitive rejection,
 and two when checking cannot complete. A failed attempt is retained. Only the
 latest submission for a target is eligible; a later failure cannot fall back to an
-earlier accepted proof. Ordinary verification independently checks those frozen
-source bytes again. Missing or rejected proofs make formal obligations incomplete,
+earlier accepted proof. `proof check` results are advisory. Ordinary verification
+checks an accepted latest submission again against the approved source from the
+base commit. Missing or rejected proofs make formal obligations incomplete,
 and the formal gate skips behavior checks. They do not demonstrate a product defect.
 
 Repeat `--proof-campaign` to combine campaigns with disjoint targets and identical
 candidate, contract, approval, verifier and checker identity. Verification records
 the proof source as an artifact, its hash, the approved source hash, theorem,
-campaign and toolchain/environment identity. Local receipts detect changes; they
-are not signatures and cannot protect state from an actor controlling the account.
+campaign and toolchain/environment identity. Verification binds each campaign to
+the repository, base, runner and candidate it was given. A campaign is used only
+if its targets, theorems, import and axiom policies and approved-source hashes
+equal those in that base contract. The checker receives approved source bytes
+from the base contract. Edited campaign files therefore cannot substitute a
+weaker target, but this does not make state trustworthy. Campaign and saved-run
+manifests have local receipts; ledgers, submissions and logs are only hash-linked
+and can be rewritten together. Receipts are not signatures and cannot protect
+state, including approval records, from an actor controlling the account.
 
 The checker uses fresh, separate approved and submission caches. Only internally
 generated data exports cross into the verdict process; it never imports submitted
