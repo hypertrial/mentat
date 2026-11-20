@@ -28,11 +28,13 @@
   audit source text that the trusted Lean driver no longer emits, and run every
   self-check case in the test suite. Approvals of Mentat's own contract must be
   renewed because an approved check file changed.
-- Accept Lean installed through a toolchain launcher such as elan. Mentat asks
-  the launcher once for the selected toolchain, then runs that toolchain's own
-  `lean` under the clean environment and records it in evidence. Runs recorded
-  through an elan launcher path will show a tools change in comparisons.
-  Direct installs are unaffected.
+- Accept Lean installed through a toolchain launcher such as elan. When the
+  launcher cannot run in the clean environment, Mentat asks it once for the
+  selected toolchain, passing only `PATH`, `HOME`, `ELAN_HOME`, `ELAN_TOOLCHAIN`
+  and the locale, then runs that toolchain's own `lean` under the clean
+  environment. Evidence records that toolchain binary, so comparing runs across
+  a switch between a direct install and elan shows a tools change. Direct
+  installs are unaffected.
 
 ## v0.1.2
 
