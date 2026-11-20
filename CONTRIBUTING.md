@@ -4,10 +4,10 @@ Use Python 3.12, uv, Git, and Node.js 26.10.0. To reproduce the required Linux c
 
 ```sh
 uv sync --locked --extra polaris
-uv run --locked --no-sync ruff check .
-uv run --locked --no-sync mentat claims check --repo . --base "$(git rev-parse HEAD)"
-uv run --locked --no-sync pytest -q -rs
+scripts/verify
 ```
+
+`scripts/verify` runs ruff, the claims check, and the test suite in parallel. Extra arguments go to pytest; `scripts/verify -n 0` runs the tests serially.
 
 Expect the Lean tests and the opt-in Nano ID and Iceberg Go upstream replays to skip when their prerequisites are absent. The required check runs on pull requests and pushes to `main`.
 

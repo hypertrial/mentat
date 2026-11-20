@@ -23,6 +23,7 @@ def test_z3_preservation_and_missing_whole_file_assumption():
     assert solve(model.replace(assumption, "") + "\n" + counterexample) == "sat"
 
 
+@pytest.mark.xdist_group("lean")
 def test_lean_model_compiles_without_sorry(tmp_path, lean_tools):
     lean = lean_tools["lean"]["executable"]
     model = (CONTRACT / "Model.lean").read_text()

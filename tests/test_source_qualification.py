@@ -50,7 +50,7 @@ def mutation(**changes):
 
 def project(tmp_path, mutants=None, **behavior_changes):
     check = {"id": "behavior", "claim": "claim", "argv": [sys.executable, "{checks}/check.py"],
-             "timeout_seconds": 1, "violation_exit_codes": [10], "artifacts": ["cases.json"],
+             "timeout_seconds": 30, "violation_exit_codes": [10], "artifacts": ["cases.json"],
              "case_report": {"artifact": "cases.json", "required_cases": ["first", "second"]},
              **behavior_changes}
     contract = Contract.model_validate({
@@ -87,7 +87,9 @@ def execute(project, candidate, baseline=None, info=None):
     ("timeout", "incomplete", "error", None),
 ])
 def test_real_host_qualification_requires_the_named_failure(tmp_path, mode, expected_status, expected_outcome, failed):
-    project_value, candidate = project(tmp_path, {"example": mutation(after=mode)})
+    # Only the timeout case needs a short limit; the rest must not race a loaded machine.
+    limit = {"timeout_seconds": 1} if mode == "timeout" else {}
+    project_value, candidate = project(tmp_path, {"example": mutation(after=mode)}, **limit)
     before = copy.deepcopy(candidate.files)
     info = {"runner": "host", "path": os.environ.get("PATH", ""), "executables": {}}
     baseline, _ = runner.run_behavior(project_value, candidate, None, info, "run-identifier")

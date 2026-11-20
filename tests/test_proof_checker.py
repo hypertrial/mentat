@@ -22,6 +22,9 @@ VALID = APPROVED.replace(
 )
 POLICY = {"theorem": "Proof.first", "allowed_imports": ["Init"], "permitted_axioms": []}
 
+# The real checker takes a host-wide non-blocking build lock, so keep these in one worker.
+pytestmark = pytest.mark.xdist_group("proof-checker")
+
 
 @pytest.fixture(scope="module")
 def checker_identity():

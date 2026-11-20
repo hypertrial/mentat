@@ -5,6 +5,9 @@ import pytest
 
 from mentat import project_formal
 
+# Real Lean runs have short limits; keep them off each other's cores.
+pytestmark = pytest.mark.xdist_group("lean")
+
 
 def audit(source, theorem, tools):
     check = SimpleNamespace(id="proof", claim="claim", source="Model.lean", theorem=theorem)

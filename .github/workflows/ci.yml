@@ -30,6 +30,4 @@ jobs:
         run: |
           bash scripts/install-proof-checker --ci-profile
           uv sync --locked --extra polaris
-          uv run --locked --no-sync ruff check .
-          uv run --locked --no-sync mentat claims check --repo . --base "$(git rev-parse HEAD)"
-          uv run --locked --no-sync pytest -q -rs
+          scripts/verify
