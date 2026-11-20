@@ -803,8 +803,15 @@ def render_comparison(
                 ),
                 ident,
             )
+            verdict = (
+                "Changed"
+                if not unchanged
+                else "Definition unavailable"
+                if definition == "unavailable"
+                else "Unchanged"
+            )
             parts = [
-                f"<details><summary>{_text(title)} · {_text(ident)} · {'Unchanged' if unchanged else 'Changed'}</summary>",
+                f"<details><summary>{_text(title)} · {_text(ident)} · {verdict}</summary>",
                 f'<p>Claim definition: {_text(definition)}</p><div class="pair">',
             ]
             for side, claim in enumerate((left, right)):

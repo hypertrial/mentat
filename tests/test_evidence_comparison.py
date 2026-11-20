@@ -289,6 +289,7 @@ def test_html_comparison_accepts_violation_and_incomplete_and_keeps_original_sta
     output = tmp_path / "comparison.html"
     result = run(before, after, "--out", str(output))
     assert result.exit_code == 0, (result.output, result.exception)
+    assert f"Report written to {output}" in result.output
     html = output.read_text()
     assert "violation" in html.lower() and "incomplete" in html.lower()
     assert before in html and after in html
@@ -581,5 +582,6 @@ def test_legacy_changed_claim_content_sorts_first_without_inventing_definition_h
     html = output.read_text()
     assert html.index("Changed title") < html.index("Stable title")
     assert "Changed title · changed · Changed" in html
+    assert "Stable title · stable · Definition unavailable" in html
     assert "Claim definition: unavailable" in html
     assert _state_snapshot(state) == before_state

@@ -321,7 +321,10 @@ class Behavior(_Model):
     )
     artifacts: list[str] = Field(default_factory=list, max_length=128)
     selectors: list[str] | None = Field(default=None, max_length=128)
-    host_environment: list[str] = Field(default_factory=list, max_length=128)
+    # Omit when empty so claim fingerprints match contracts written before this field.
+    host_environment: list[str] = Field(
+        default_factory=list, max_length=128, exclude_if=lambda value: not value
+    )
     case_report: CaseReport | None = None
     negative_control: NegativeControl | None = None
 
