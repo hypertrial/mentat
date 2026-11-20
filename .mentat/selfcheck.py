@@ -614,9 +614,11 @@ def lean_audit(root):
                 return subprocess.CompletedProcess(args, 0, "", "")
             audit_source = Path(args[-1]).read_text()
             assert f"let decl := `{theorem}" in audit_source
-            assert "env.getModuleIdxFor? decl == env.getModuleIdx? `Model" in audit_source
-            assert "match info with" in audit_source and ".thmInfo" in audit_source
-            assert f"#print axioms {theorem}" in audit_source
+            assert "let some idx := env.getModuleIdx? `Model" in audit_source
+            assert "unless env.getModuleIdxFor? decl == some idx do" in audit_source
+            assert "match env.checked.get.find? decl with" in audit_source
+            assert ".thmInfo" in audit_source
+            assert "collectAxioms decl" in audit_source and "loadExts := false" in audit_source
             return subprocess.CompletedProcess(args, code, audit, "")
 
         target = project.contract.model_copy(

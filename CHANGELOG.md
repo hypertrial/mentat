@@ -24,6 +24,10 @@
   the original JSON claim text.
 - Add developer-only runtime profiling and a repeatable OpenSpec import
   benchmark, with no timing fields added to verification evidence.
+- Repair Mentat's own `check.formal.lean-audit` self-check, which asserted
+  audit source text that the trusted Lean driver no longer emits, and run every
+  self-check case in the test suite. Approvals of Mentat's own contract must be
+  renewed because an approved check file changed.
 
 ## v0.1.2
 
