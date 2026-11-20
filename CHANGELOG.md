@@ -36,8 +36,8 @@
   Evidence records that toolchain binary, so comparing runs across a switch
   between a direct install and elan shows a tools change. Direct installs are
   unaffected.
-- Run the test suite in parallel in `scripts/verify`, and have CI call
-  `scripts/verify` so the local gate and the required check cannot drift apart.
+- Run the test suite in parallel by default, and have CI call `scripts/verify`
+  so the local gate and the required check cannot drift apart.
 
 ## v0.1.2
 

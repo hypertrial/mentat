@@ -74,7 +74,7 @@ jobs:
           if [[ "$RUNNER_OS" == macOS ]]; then
             platform_args+=(--ignore=tests/test_proof_checker.py)
           fi
-          uv run --locked --extra polaris pytest -q -rs "${platform_args[@]}" | tee "$RUNNER_TEMP/pytest.log"
+          uv run --locked --extra polaris pytest -q -rs -n 0 "${platform_args[@]}" | tee "$RUNNER_TEMP/pytest.log"
           if grep -q '^SKIPPED ' "$RUNNER_TEMP/pytest.log"; then
             printf 'Release prerequisites must cover the complete suite.\n' >&2
             exit 1

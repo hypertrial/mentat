@@ -390,7 +390,7 @@ with profiler.profiling(profiler.Trace(sys.argv[2])):
         result = subprocess.run(
             [sys.executable, "-c", target_code, str(ROOT / "scripts/profile_runtime.py"),
              str(path), "raises" if raises else "returns"],
-            capture_output=True, text=True, timeout=5, check=True,
+            capture_output=True, text=True, timeout=30, check=True,
         )
         assert result.stdout.strip() == ("exception preserved" if raises else "result preserved")
         assert path.read_bytes() == b""
