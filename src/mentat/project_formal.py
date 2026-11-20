@@ -67,6 +67,36 @@ def _run(args, *, input=None, cwd=None, timeout=_TIMEOUT, env=None):
         )
 
 
+def _probe_lean(executable: str) -> dict:
+    """Check one Lean binary under the clean environment used for every formal run."""
+    p = _run([executable, "--version"], timeout=5)
+    match = re.search(r"\bversion (\d+\.\d+\.\d+)\b", p.stdout)
+    if p.returncode or not match or match.group(1) != _LEAN_VERSION:
+        return {
+            "error": "Lean 4.31.0 is required; check the executable on PATH. "
+            "With elan, select it with ELAN_TOOLCHAIN=leanprover/lean4:v4.31.0."
+        }
+    lib = _run([executable, "--print-libdir"], timeout=5)
+    if lib.returncode or not Path(lib.stdout.strip()).is_dir():
+        return {"error": "Could not locate Lean's standard library."}
+    return {"version": match.group(1), "executable": executable, "libdir": lib.stdout.strip()}
+
+
+def _toolchain_lean(launcher: str) -> str | None:
+    """Ask a toolchain launcher such as elan where the selected Lean is installed."""
+    # The launcher needs the operator's environment to find its toolchains. An empty
+    # working directory keeps project toolchain files from steering it.
+    with tempfile.TemporaryDirectory(prefix="mentat-lean-") as empty:
+        p = _run([launcher, "--print-prefix"], cwd=empty, timeout=5, env=dict(os.environ))
+    prefix = p.stdout.strip()
+    if p.returncode or not prefix or "\n" in prefix or not os.path.isabs(prefix):
+        return None
+    candidate = Path(prefix, "bin", "lean")
+    if not candidate.is_file() or candidate.samefile(launcher):
+        return None
+    return str(candidate)
+
+
 def tool_info(project) -> dict:
     """Find selected tools without evaluating any project-controlled input."""
     result = {}
@@ -92,22 +122,14 @@ def tool_info(project) -> dict:
         else:
             executable = os.path.abspath(executable)
             try:
-                p = _run([executable, "--version"], timeout=5)
-                match = re.search(r"\bversion (\d+\.\d+\.\d+)\b", p.stdout)
-                if p.returncode or not match or match.group(1) != _LEAN_VERSION:
-                    result["lean"] = {
-                        "error": "Lean 4.31.0 is required; check the executable on PATH."
-                    }
-                else:
-                    lib = _run([executable, "--print-libdir"], timeout=5)
-                    if lib.returncode or not Path(lib.stdout.strip()).is_dir():
-                        result["lean"] = {"error": "Could not locate Lean's standard library."}
-                    else:
-                        result["lean"] = {
-                            "version": match.group(1),
-                            "executable": executable,
-                            "libdir": lib.stdout.strip(),
-                        }
+                info = _probe_lean(executable)
+                if "error" in info:
+                    # A launcher such as elan fails without the operator's HOME. Use the
+                    # binary it selects only if that binary passes the same clean probe.
+                    resolved = _toolchain_lean(executable)
+                    if resolved:
+                        info = _probe_lean(resolved)
+                result["lean"] = info
             except (OSError, subprocess.TimeoutExpired) as exc:
                 result["lean"] = {"error": f"Could not run Lean: {exc}"}
     errors = [info["error"] for info in result.values() if "error" in info]

@@ -371,6 +371,116 @@ def test_lean_resolution_survives_formal_staging_cwd(trial, tmp_path, monkeypatc
     )
 
 
+def _script(path, body):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("#!/bin/sh\n" + body)
+    path.chmod(0o755)
+
+
+def _lean_project(trial):
+    repo, manifest = trial
+    manifest["formal"] = [
+        {"id": "proof", "claim": "claim", "engine": "lean", "source": "Model.lean", "theorem": "t"}
+    ]
+    (repo / ".mentat/Model.lean").write_text("theorem t : True := trivial\n")
+    return load_project(repo, save(repo, manifest), "host")
+
+
+def _toolchain(prefix, version="4.31.0"):
+    (prefix / "lib/lean").mkdir(parents=True)
+    _script(
+        prefix / "bin/lean",
+        f'case "$1" in --version) echo "Lean (version {version})";; '
+        f'--print-libdir) echo "{prefix}/lib/lean";; esac\n',
+    )
+    return prefix / "bin/lean"
+
+
+def _launcher(tmp_path, monkeypatch, prefix_output):
+    # Like elan, this launcher finds its toolchains only through the operator's HOME.
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "toolchain-prefix").write_text(prefix_output)
+    _script(
+        tmp_path / "launcher/lean",
+        'test -f "$HOME/toolchain-prefix" || { echo "no default toolchain" >&2; exit 1; }\n'
+        'test "$1" = --print-prefix || { echo "Lean (version 9.9.9)"; exit 0; }\n'
+        'ls -A > "$HOME/listing"\ncat "$HOME/toolchain-prefix"\n',
+    )
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("PATH", f"{tmp_path / 'launcher'}{os.pathsep}{os.environ['PATH']}")
+    return home
+
+
+def test_lean_launcher_resolves_to_installed_toolchain_binary(trial, tmp_path, monkeypatch):
+    from mentat import project_formal
+
+    project = _lean_project(trial)
+    prefix = tmp_path / "toolchain"
+    lean = _toolchain(prefix)
+    home = _launcher(tmp_path, monkeypatch, f"{prefix}\n")
+    monkeypatch.chdir(project.root)
+    assert project_formal.tool_info(project)["lean"] == {
+        "version": "4.31.0",
+        "executable": str(lean),
+        "libdir": str(prefix / "lib/lean"),
+    }
+    # The launcher ran in an empty directory, away from any project toolchain file.
+    assert (home / "listing").read_text() == ""
+
+
+@pytest.mark.parametrize(
+    "case", ["empty", "relative", "two-lines", "no-binary", "wrong-version", "launcher-fails"]
+)
+def test_lean_launcher_that_cannot_select_the_pinned_toolchain_is_rejected(
+    trial, tmp_path, monkeypatch, case
+):
+    from mentat import project_formal
+
+    project = _lean_project(trial)
+    prefix = tmp_path / "toolchain"
+    if case != "no-binary":
+        _toolchain(prefix, "4.36.0" if case == "wrong-version" else "4.31.0")
+    else:
+        prefix.mkdir()
+    output = {"empty": "", "relative": "toolchain\n", "two-lines": f"{prefix}\n{prefix}\n"}.get(
+        case, f"{prefix}\n"
+    )
+    home = _launcher(tmp_path, monkeypatch, output)
+    if case == "launcher-fails":
+        (home / "toolchain-prefix").unlink()
+    with pytest.raises(ValueError, match="ELAN_TOOLCHAIN"):
+        project_formal.tool_info(project)
+
+
+@pytest.mark.parametrize("version", ["4.31.0", "4.36.0"])
+def test_direct_lean_install_is_not_resolved_through_its_prefix(
+    trial, tmp_path, monkeypatch, version
+):
+    from mentat import project_formal
+
+    project = _lean_project(trial)
+    prefix = tmp_path / "direct"
+    log = tmp_path / "calls"
+    (prefix / "lib/lean").mkdir(parents=True)
+    _script(
+        prefix / "bin/lean",
+        f'echo "$1" >> "{log}"\n'
+        f'case "$1" in --version) echo "Lean (version {version})";; '
+        f'--print-libdir) echo "{prefix}/lib/lean";; --print-prefix) echo "{prefix}";; esac\n',
+    )
+    monkeypatch.setenv("PATH", f"{prefix / 'bin'}{os.pathsep}{os.environ['PATH']}")
+    if version == "4.31.0":
+        selected = project_formal.tool_info(project)["lean"]
+        assert selected["executable"] == str(prefix / "bin/lean")
+        assert "--print-prefix" not in log.read_text()
+    else:
+        with pytest.raises(ValueError, match="Lean 4.31.0 is required"):
+            project_formal.tool_info(project)
+        # Its own prefix names the same binary, so it is probed only once.
+        assert log.read_text().split() == ["--version", "--print-prefix"]
+
+
 def test_missing_host_prerequisites_skip_all_behavior_before_execution(
     trial, tmp_path, monkeypatch
 ):
