@@ -20,10 +20,12 @@ def _cases():
 
 
 @pytest.mark.parametrize("case", sorted(set(_cases())))
-def test_selfcheck_case_passes_against_working_tree(case):
+def test_selfcheck_case_passes_against_working_tree(case, tmp_path):
+    # Like a host behavior check: a clean environment, so the operator's Git
+    # configuration cannot change the result. -B keeps bytecode out of the tree.
     result = subprocess.run(
-        [sys.executable, "-I", str(ROOT / ".mentat/selfcheck.py"), case],
-        env={**os.environ, "MENTAT_CANDIDATE_DIR": str(ROOT)},
+        [sys.executable, "-I", "-B", str(ROOT / ".mentat/selfcheck.py"), case],
+        env={"PATH": os.environ["PATH"], "HOME": str(tmp_path), "MENTAT_CANDIDATE_DIR": str(ROOT)},
         capture_output=True,
         text=True,
         check=False,
