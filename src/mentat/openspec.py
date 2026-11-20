@@ -1,6 +1,7 @@
 """Read OpenSpec requirements from an immutable Git revision as draft claims."""
 
 import hashlib
+import subprocess
 import time
 from contextlib import closing
 from itertools import pairwise
@@ -53,14 +54,49 @@ def import_spec(repo: Path, base: str) -> dict:
     if not entries and not diagnostics:
         diagnostic("openspec/specs", 1, "no capability specs found")
 
+    def read_batch(batch):
+        path = batch[0][0]
+        if time.monotonic() >= deadline:
+            yield path, None, None, "spec import exceeded time limit", True
+            return True
+        try:
+            blobs = _read_blobs(root, dict(batch))
+        except (ValueError, OSError, subprocess.SubprocessError) as exc:
+            cause = exc
+            while cause is not None:
+                if isinstance(cause, (OSError, subprocess.SubprocessError)):
+                    yield path, None, None, str(exc), True
+                    return True
+                cause = cause.__cause__
+            if len(batch) == 1:
+                yield path, batch[0][1], None, str(exc), False
+                return False
+            midpoint = len(batch) // 2
+            if (yield from read_batch(batch[:midpoint])):
+                return True
+            return (yield from read_batch(batch[midpoint:]))
+        for path, entry in batch:
+            yield path, entry, blobs.pop(path)[1], None, False
+        return False
+
+    def read_specs():
+        ordered = sorted(entries.items())
+        for start in range(0, len(ordered), 32):
+            if (yield from read_batch(ordered[start : start + 32])):
+                return
+
     parser = MarkdownIt("commonmark")
     total = 0
-    for path, entry in sorted(entries.items()):
+    for path, entry, data, error, stop in read_specs():
+        if error is not None:
+            diagnostic(path, 1, error)
+            if stop:
+                break
+            continue
         if time.monotonic() >= deadline:
             diagnostic(path, 1, "spec import exceeded time limit")
             break
         try:
-            data = _read_blobs(root, {path: entry})[path][1]
             total += len(data)
             if total > _MAX_TOTAL:
                 diagnostic(path, 1, "spec files exceed total size limit")

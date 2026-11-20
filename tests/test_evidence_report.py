@@ -109,3 +109,25 @@ def test_terminal_verification_groups_claims_and_keeps_failure_details(capsys):
     skipped = capsys.readouterr().out
     assert "one · First claim  skipped  Formal 1 pass  Behavior 1 skipped" in skipped
     assert "other · Second claim  skipped  Behavior 1 skipped" in skipped
+
+
+def test_native_regressions_render_diagnostics_and_accept_legacy_without_checks(capsys):
+    from mentat.command import emit
+
+    record = _record()
+    record.update(kind="verification", cases=[], model_checks=[], regressions=[
+        {"case_id": "current", "status": "incomplete", "checks": [
+            {"name": "pytest", "status": "incomplete", "stage": "source copy",
+             "detail": "Candidate source copy failed"},
+            {"name": "cleanup", "status": "incomplete", "stage": "cleanup",
+             "detail": "Container could not be removed"},
+        ]},
+        {"case_id": "legacy", "status": "pass"},
+    ])
+    emit(record, False)
+    terminal = capsys.readouterr().out
+    markdown = evidence.report(record).decode()
+    for output in (terminal, markdown):
+        assert "current" in output and "legacy" in output
+        assert "Candidate source copy failed" in output
+        assert "Container could not be removed" in output

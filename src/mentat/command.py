@@ -24,6 +24,13 @@ def emit(result: dict, output_json: bool) -> None:
     for key in ("detail", "context", "contract_digest", "run_id", "bundle", "next_action"):
         if result.get(key):
             typer.echo(f"{key.replace('_', ' ')}  {result[key]}")
+    for regression in result.get("regressions", []):
+        typer.echo(visible_text(f"Native pytest  {regression['case_id']}  {regression['status']}"))
+        for check in regression.get("checks", []):
+            if check.get("status") != "pass":
+                parts = [check.get("name", "check"), check.get("status", "incomplete")]
+                parts.extend(check[key] for key in ("stage", "detail") if check.get(key))
+                typer.echo(visible_text("  " + "  ".join(parts)))
     if result.get("kind") == "project-verification":
         from .evidence_report import terminal_overview
 

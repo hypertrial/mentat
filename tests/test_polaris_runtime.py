@@ -274,7 +274,9 @@ def test_verify_reproduces_operational_replay_violation_before_emitting_artifact
     monkeypatch.setattr(cli, "contract_inputs", lambda ctx: (spec, "fingerprint"))
     monkeypatch.setattr(cli.model_evidence, "pack_digest", lambda spec: "fingerprint")
     monkeypatch.setattr(cli.model_evidence, "approval", lambda *args: {})
-    monkeypatch.setattr(cli, "run_formal", lambda *args: [{"status": "pass"}])
+    monkeypatch.setattr(cli, "run_formal", lambda *args: [
+        {"status": "pass", "kind": "z3", "detail": "verified"}
+    ])
     monkeypatch.setattr(cli, "candidate_repo", lambda repo, state: repo)
     monkeypatch.setattr(cli, "snapshot", lambda *args: candidate)
     monkeypatch.setattr(cli, "load_cases", lambda *args: [fixture])
@@ -285,13 +287,22 @@ def test_verify_reproduces_operational_replay_violation_before_emitting_artifact
     monkeypatch.setattr(cli, "run_case", docker_runtime.run_case)
     called = []
     monkeypatch.setattr(
-        docker_runtime, "run_pytest", lambda *args: called.append(args) or {"status": native_status}
+        docker_runtime, "run_pytest", lambda *args: called.append(args) or {
+            "status": native_status,
+            "checks": [{"name": "pytest", "status": native_status,
+                        "stage": "source copy", "detail": "Candidate source copy failed"}],
+        }
     )
     saved = []
+    save_run = cli.evidence.save_run
+
+    def save(state, record, artifacts):
+        bundle = save_run(state, record, artifacts)
+        saved.append((record, artifacts, bundle))
+        return bundle
+
     monkeypatch.setattr(
-        cli.evidence,
-        "save_run",
-        lambda state, record, artifacts: saved.append((record, artifacts)) or state,
+        cli.evidence, "save_run", save,
     )
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -314,6 +325,20 @@ def test_verify_reproduces_operational_replay_violation_before_emitting_artifact
     assert len(called) == 1
     assert saved[0][0]["regressions"][0]["status"] == native_status
     assert bool(saved[0][1]) == (native_status == "violation")
+    assert json.loads(result.output)["regressions"] == saved[0][0]["regressions"]
+    if native_status != "pass":
+        from mentat import evidence
+
+        assert "Candidate source copy failed" in (saved[0][2] / "report.md").read_text()
+        _, loaded = evidence.read_run(tmp_path / "state", saved[0][0]["run_id"])
+        assert loaded["regressions"] == saved[0][0]["regressions"]
+        monkeypatch.setattr(docker_runtime, "_docker", replay_docker("export", 1, False))
+        human = CliRunner().invoke(
+            app, ["--state", str(tmp_path / "state"), "showcase", "polaris", "verify",
+                  "--repo", str(repo), "--rev", candidate.revision], color=True,
+        )
+        assert human.exit_code == 1, human.output
+        assert "Candidate source copy failed" in human.output
 
 
 def test_verify_prioritizes_violation_over_incomplete(tmp_path, monkeypatch, candidate):
@@ -355,3 +380,126 @@ def test_verify_prioritizes_violation_over_incomplete(tmp_path, monkeypatch, can
     )
     assert result.exit_code == 1, result.output
     assert json.loads(result.output)["status"] == "violation"
+
+
+@pytest.mark.parametrize(
+    "failure",
+    ["preflight", "source staging", "test staging", "support staging", "container create",
+     "source copy", "test copy", "support copy", "timeout", "oom", "marker", "cleanup"],
+)
+def test_pytest_reports_bounded_stage_details_and_cleans_up(
+    monkeypatch, runtime, candidate, failure
+):
+    from pathlib import Path
+
+    secret = "/private/secret-token"
+    removed = []
+    if failure == "preflight":
+        monkeypatch.setattr(docker_runtime, "doctor", lambda _: {"ok": False})
+    original_stage = docker_runtime._stage_cli
+
+    def stage(*args):
+        if failure == "source staging":
+            raise OSError(secret)
+        return original_stage(*args)
+
+    monkeypatch.setattr(docker_runtime, "_stage_cli", stage)
+    original_write = Path.write_text
+
+    def write(path, *args, **kwargs):
+        if (failure == "test staging" and path.name == "test_candidate.py") or (
+            failure == "support staging" and path.name == "helper.py"
+        ):
+            raise OSError(secret)
+        return original_write(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", write)
+
+    def docker(_context, *args, **kwargs):
+        command = args[0]
+        if command == "rm":
+            removed.append(args[-1])
+            return (1 if failure == "cleanup" else 0), b""
+        if command == "create" and failure == "container create":
+            raise OSError(secret)
+        if command == "cp":
+            destination = args[-1]
+            target = ("test copy" if destination.endswith(":/opt/test_candidate.py") else
+                      "support copy" if destination.endswith(":/opt/helper.py") else "source copy")
+            if failure == target:
+                raise OSError(secret)
+        if command == "start":
+            if failure == "timeout":
+                raise RuntimeError("Docker command timed out")
+            return 0, b"bad marker" if failure == "marker" else b"MENTAT_PYTEST_RESULT=pass\n"
+        if command == "inspect":
+            return 0, state(args[2], 0, oom=failure == "oom")
+        return 0, b""
+
+    monkeypatch.setattr(docker_runtime, "_docker", docker)
+    result = docker_runtime.run_pytest(
+        candidate, "context", "def test_ok(): pass", "run", {"helper.py": "value = 1"}
+    )
+    assert result["status"] == "incomplete"
+    failures = [check for check in result["checks"] if check["status"] == "incomplete"]
+    assert failures
+    assert all(check.get("stage") and check.get("detail") for check in failures)
+    assert all(len(check["stage"]) <= 80 and len(check["detail"]) <= 200 for check in failures)
+    assert secret not in json.dumps(failures)
+    expected = {"timeout": "execution", "oom": "execution", "marker": "completion"}.get(
+        failure, failure
+    )
+    assert any(check["stage"] == expected for check in failures)
+    if failure in {"container create", "source copy", "test copy", "support copy", "timeout",
+                   "oom", "marker", "cleanup"}:
+        assert len(removed) == 1
+    else:
+        assert not removed
+
+
+def test_pytest_retains_primary_diagnostic_if_cleanup_also_fails(monkeypatch, runtime, candidate):
+    removed = []
+
+    def docker(_context, *args, **kwargs):
+        if args[0] == "cp":
+            raise OSError("secret source path")
+        if args[0] == "rm":
+            removed.append(args[-1])
+            raise OSError("secret cleanup path")
+        return 0, b""
+
+    monkeypatch.setattr(docker_runtime, "_docker", docker)
+    result = docker_runtime.run_pytest(candidate, "context", "def test_ok(): pass", "run")
+    assert result["status"] == "incomplete"
+    assert [check["stage"] for check in result["checks"]] == ["source copy", "cleanup"]
+    assert len(removed) == 1
+    assert "secret" not in json.dumps(result["checks"])
+
+
+def test_evaluation_does_not_expose_native_diagnostic_or_held_out_content(
+    tmp_path, monkeypatch, candidate
+):
+    from mentat.showcases.polaris import evaluation
+
+    spec = load_spec(PACK / "contract.json")
+    public = load_cases(PACK / "public.json", spec)[0]
+    secret = "private-held-out-value-and-error"
+    monkeypatch.setattr(evaluation, "snapshot", lambda *args: candidate)
+    monkeypatch.setattr(evaluation, "_upstream_test", lambda *args: "")
+    monkeypatch.setattr(docker_runtime, "doctor", lambda _: {"ok": True})
+    monkeypatch.setattr(
+        docker_runtime, "run_pytest", lambda *args: {
+            "status": "incomplete", "checks": [{"stage": "copy", "detail": secret}]
+        },
+    )
+    monkeypatch.setattr(
+        evaluation, "run_case", lambda *args: {
+            "status": "incomplete", "checks": [{"detail": secret}]
+        },
+    )
+    result = evaluation.evaluate(tmp_path, candidate.revision, "context", spec, [public], public, "run")
+    assert result["status"] == "incomplete"
+    assert result["native_regression"] == ["incomplete", "incomplete"]
+    assert secret not in json.dumps(result)
+    assert all("checks" not in method for row in result["rows"] + result["baseline_rows"]
+               for method in row["methods"].values())

@@ -243,3 +243,19 @@ def test_across_contracts_requires_same_recorded_repo_and_runner(compare, field,
     result = run("a" * 32, "b" * 32, "--across-contracts", "--json")
     assert result.exit_code == 2
     assert f"differs in {field}" in json.loads(result.output)["detail"]
+
+
+def test_same_contract_comparison_escapes_controls_in_terminal_but_not_json(compare):
+    state, _ = compare
+    original = "before\x1b[31mred\nnext\rreturn"
+    claims = [{"id": "claim", "statement": original}]
+    save(state, "a" * 32, claims=claims)
+    save(state, "b" * 32, claims=claims)
+    args = ["--state", str(state), "evidence", "compare", "a" * 32, "b" * 32]
+    human = CliRunner().invoke(app, args, color=True)
+    assert human.exit_code == 0, human.output
+    assert r"before\x1b[31mred\nnext\rreturn" in human.output
+    assert original not in human.output
+    machine = CliRunner().invoke(app, [*args, "--json"], color=True)
+    assert machine.exit_code == 0, machine.output
+    assert json.loads(machine.output)["claims"][0]["statement"] == original

@@ -260,22 +260,46 @@ def run_pytest(
         "runtime": doctor(context),
     }
     if not result["runtime"]["ok"]:
+        result["checks"].append(
+            {
+                "name": "pytest",
+                "status": "incomplete",
+                "stage": "preflight",
+                "detail": "Docker runtime preflight failed",
+            }
+        )
         return result
     name = None
     create_attempted = False
+    phase = "validation"
+    details = {
+        "validation": "Regression input validation failed",
+        "source staging": "Candidate source staging failed",
+        "test staging": "Regression test staging failed",
+        "support staging": "Support file staging failed",
+        "container create": "Container creation failed",
+        "source copy": "Candidate source copy failed",
+        "test copy": "Regression test copy failed",
+        "support copy": "Support file copy failed",
+        "execution": "Regression execution failed",
+        "completion": "Regression completion marker was invalid",
+    }
     try:
         if len(test_source.encode()) > _MAX_OUTPUT:
             raise ValueError("test exceeds limit")
         name = _name(run_id) + "-" + secrets.token_hex(6)
+        phase = "source staging"
         with tempfile.TemporaryDirectory(prefix="mentat-") as temp:
             root = Path(temp)
             cli = root / "cli"
             cli.mkdir(mode=0o755)
             _stage_cli(snapshot, cli)
             total = sum(len(content) for _, content in snapshot.files)
+            phase = "test staging"
             test = root / "test_candidate.py"
             test.write_text(test_source, encoding="utf-8")
             test.chmod(0o644)
+            phase = "support staging"
             support_paths = []
             for filename, source in (support_files or {}).items():
                 if (
@@ -291,6 +315,7 @@ def run_pytest(
                 path.write_text(source, encoding="utf-8")
                 path.chmod(0o644)
                 support_paths.append(path)
+            phase = "container create"
             create_attempted = True
             code, _ = _docker(
                 context,
@@ -327,28 +352,42 @@ def run_pytest(
                 _PYTEST_LAUNCHER,
             )
             if code:
-                return result
+                raise RuntimeError("container creation failed")
+            phase = "source copy"
             if _docker(context, "cp", str(cli) + "/.", f"{name}:/opt/polaris/apache_polaris/cli/")[
                 0
             ]:
-                return result
+                raise RuntimeError("source copy failed")
+            phase = "test copy"
             if _docker(context, "cp", str(test), f"{name}:/opt/test_candidate.py")[0]:
-                return result
+                raise RuntimeError("test copy failed")
+            phase = "support copy"
             for path in support_paths:
                 if _docker(context, "cp", str(path), f"{name}:/opt/{path.name}")[0]:
-                    return result
+                    raise RuntimeError("support copy failed")
+            phase = "execution"
             code, output = _start(context, name, timeout=120)
+            phase = "completion"
             marker = output.splitlines()[-1:]  # The launcher writes its result last.
             if code == 0 and marker == [b"MENTAT_PYTEST_RESULT=pass"]:
                 result["status"] = "pass"
             elif code == 1 and marker == [b"MENTAT_PYTEST_RESULT=violation"]:
                 result["status"] = "violation"
+            if result["status"] == "incomplete":
+                if marker == [b"MENTAT_PYTEST_RESULT=incomplete"]:
+                    phase = "execution"
+                raise RuntimeError("regression did not complete")
             result["checks"].append({"name": "pytest", "status": result["status"]})
     except (ValueError, RuntimeError, OSError) as exc:
+        result["status"] = "incomplete"
+        detail = details[phase]
         if isinstance(exc, _OOMKilled):
-            result["checks"].append(
-                {"name": "pytest", "status": "incomplete", "detail": "Container was OOM killed"}
-            )
+            detail = "Container was OOM killed"
+        elif str(exc) in {"Docker command timed out", "Docker command unavailable or timed out"}:
+            detail = "Docker command was unavailable or timed out"
+        result["checks"].append(
+            {"name": "pytest", "status": "incomplete", "stage": phase, "detail": detail}
+        )
     finally:
         if create_attempted and name:
             try:
@@ -361,6 +400,7 @@ def run_pytest(
                     {
                         "name": "cleanup",
                         "status": "incomplete",
+                        "stage": "cleanup",
                         "detail": "Container could not be removed",
                     }
                 )

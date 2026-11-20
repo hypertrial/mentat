@@ -465,7 +465,7 @@ def compare_evidence(
             finish(result, False)
             return
         for claim in result["claims"]:
-            typer.echo(f"Claim {claim['id']}  {claim['statement']}")
+            typer.echo(f"Claim {claim['id']}  {visible_text(claim['statement'])}")
             for check in claim["checks"]:
                 typer.echo(
                     f"  {check['kind']} {check['id']}  "

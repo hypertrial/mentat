@@ -1,0 +1,12 @@
+{
+  "files": {
+    ".agents/skills/pad-engineering/SKILL.md": "3cb5185116663c2f8ee58764a4180784ff2604b05e2e75b2b6f13cc1ccfd0071",
+    "AGENTS.md": "8e0e7df28f0df8d847f4981da0978c28c2c9615b0382c3bfc62c6af90a52f6b1",
+    "PROJECT_AGENT.md": "8b638bc44a47af7370ff90798201c2e1e4b38daf8adc0b2f5a5762bd9a68daf7",
+    "scripts/verify": "a8c102649477edfd954d7a12a00229cb2c2941bd489c6da04b7ff94dcb0a887a",
+    "scripts/verify-fast": "0abbb6681a7dfc559e4706e2fc264f9d808137bc936755499801c4fa3e343507"
+  },
+  "repository": "hypertrial-mentat",
+  "version": "1.1.0",
+  "workspace": "mentat-engineering"
+}

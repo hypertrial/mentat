@@ -330,3 +330,170 @@ def test_import_reports_unreadable_capability_trees(repo, entry):
     assert draft["status"] == "incomplete"
     assert [item["claim"]["title"] for item in draft["claims"]] == ["Local feature: Works"]
     assert draft["diagnostics"] == [{"path": path, "line": 1, "detail": "unsupported spec entry"}]
+
+
+@pytest.mark.parametrize("count,expected_calls", [(1, 2), (128, 8)])
+def test_import_batches_git_objects_and_preserves_identity_and_provenance(
+    repo, monkeypatch, count, expected_calls
+):
+    import hashlib
+
+    from mentat import project
+
+    source = "### Requirement: Feature\nBody.\n#### Scenario: Works\nWorks.\n"
+    for index in reversed(range(count)):
+        write(repo, f"openspec/specs/{index:03}/spec.md", source)
+    revision = commit(repo)
+    real_run = project.subprocess.run
+    calls = []
+
+    def counted(command, *args, **kwargs):
+        if "cat-file" in command:
+            calls.append(command)
+        return real_run(command, *args, **kwargs)
+
+    monkeypatch.setattr(project.subprocess, "run", counted)
+    draft = openspec.import_spec(repo, revision)
+    assert draft["status"] == "pass"
+    assert len(calls) == expected_calls
+    assert len(draft["claims"]) == count
+    blob = git(repo, "rev-parse", f"{revision}:openspec/specs/000/spec.md")
+    for index, entry in enumerate(draft["claims"]):
+        path = f"openspec/specs/{index:03}/spec.md"
+        identity = hashlib.sha256((path + "\0Feature\0Works").encode()).hexdigest()
+        claim = entry["claim"]
+        assert claim["id"] == "openspec." + identity
+        assert claim["provenance"]["citations"] == [
+            {"commit": revision, "blob": blob, "path": path, "start_line": 1, "end_line": 2},
+            {"commit": revision, "blob": blob, "path": path, "start_line": 3, "end_line": 4},
+        ]
+
+
+def test_import_isolates_bad_blobs_across_chunk_boundary(repo, monkeypatch):
+    from mentat import project
+
+    for index in range(35):
+        path = f"openspec/specs/{index:03}/spec.md"
+        content = f"### Requirement: R{index}\nBody.\n#### Scenario: S\nBody.\n"
+        file = write(repo, path, content)
+        if index == 1:
+            file.write_bytes(b"x" * 256)
+        elif index == 31:
+            file.write_bytes(b"version https://git-lfs.github.com/spec/v1\n")
+        elif index == 32:
+            file.write_bytes(b"\xff")
+    revision = commit(repo)
+    monkeypatch.setattr(project, "_MAX_FILE", 128)
+    original = openspec._read_blobs
+
+    def corrupt_one(root, entries):
+        if any("/033/" in path for path in entries):
+            raise ValueError("invalid Git object")
+        return original(root, entries)
+
+    monkeypatch.setattr(openspec, "_read_blobs", corrupt_one)
+    draft = openspec.import_spec(repo, revision)
+    assert draft["status"] == "incomplete"
+    bad = {1, 31, 32, 33}
+    assert [entry["claim"]["title"] for entry in draft["claims"]] == [
+        f"R{i}: S" for i in range(35) if i not in bad
+    ]
+    assert [item["path"] for item in draft["diagnostics"]] == [
+        f"openspec/specs/{i:03}/spec.md" for i in sorted(bad)
+    ]
+
+
+@pytest.mark.parametrize("failure", [OSError("unavailable"), subprocess.TimeoutExpired("git", 1)])
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_import_stops_on_infrastructure_failure_without_retrying(repo, monkeypatch, failure, wrapped):
+    for index in range(65):
+        write(repo, f"openspec/specs/{index:03}/spec.md",
+              f"### Requirement: R{index}\nBody.\n#### Scenario: S\nBody.\n")
+    revision = commit(repo)
+    original = openspec._read_blobs
+    calls = []
+
+    def fail_second(root, entries):
+        calls.append(list(entries))
+        if len(calls) == 2:
+            if wrapped:
+                raise ValueError("git failed") from failure
+            raise failure
+        return original(root, entries)
+
+    monkeypatch.setattr(openspec, "_read_blobs", fail_second)
+    draft = openspec.import_spec(repo, revision)
+    assert draft["status"] == "incomplete"
+    assert len(calls) == 2
+    assert len(draft["claims"]) == 32
+    assert draft["diagnostics"][0]["path"] == "openspec/specs/032/spec.md"
+
+
+def test_import_checks_deadline_before_retrying_bad_batch(repo, monkeypatch):
+    for index in range(2):
+        write(repo, f"openspec/specs/{index}/spec.md",
+              f"### Requirement: R{index}\nBody.\n#### Scenario: S\nBody.\n")
+    revision = commit(repo)
+    clock = [0]
+    monkeypatch.setattr(openspec.time, "monotonic", lambda: clock[0])
+    attempts = []
+
+    def fail(root, entries):
+        attempts.append(entries)
+        clock[0] = 61
+        raise ValueError("bad object")
+
+    monkeypatch.setattr(openspec, "_read_blobs", fail)
+    draft = openspec.import_spec(repo, revision)
+    assert len(attempts) == 1
+    assert draft["status"] == "incomplete"
+    assert "time limit" in draft["diagnostics"][0]["detail"]
+
+
+def test_import_checks_deadline_between_successfully_read_files(repo, monkeypatch):
+    for index in range(2):
+        write(repo, f"openspec/specs/{index}/spec.md",
+              f"### Requirement: R{index}\nBody.\n#### Scenario: S\nBody.\n")
+    revision = commit(repo)
+    clock = [0]
+    monkeypatch.setattr(openspec.time, "monotonic", lambda: clock[0])
+    original = openspec._read_blobs
+
+    def read(root, entries):
+        blobs = original(root, entries)
+        first = next(iter(blobs))
+        mode, data = blobs[first]
+
+        class AdvanceOnDecode(bytes):
+            def decode(self, *args, **kwargs):
+                clock[0] = 61
+                return super().decode(*args, **kwargs)
+
+        blobs[first] = (mode, AdvanceOnDecode(data))
+        return blobs
+
+    monkeypatch.setattr(openspec, "_read_blobs", read)
+    draft = openspec.import_spec(repo, revision)
+    assert [item["claim"]["title"] for item in draft["claims"]] == ["R0: S"]
+    assert draft["status"] == "incomplete"
+    assert "time limit" in draft["diagnostics"][0]["detail"]
+
+
+def test_import_honors_aggregate_size_and_diagnostic_limits(repo, monkeypatch):
+    source = "### Requirement: Good\nBody.\n#### Scenario: S\nBody.\n"
+    for index in range(4):
+        write(repo, f"openspec/specs/{index}/spec.md", source)
+    revision = commit(repo)
+    monkeypatch.setattr(openspec, "_MAX_TOTAL", len(source.encode()) * 2)
+    draft = openspec.import_spec(repo, revision)
+    assert len(draft["claims"]) == 2
+    assert draft["status"] == "incomplete"
+    assert "total size" in draft["diagnostics"][0]["detail"]
+
+    write(repo, "openspec/specs/0/spec.md", "#### Scenario: Orphan\nBody.\n" * 10)
+    revision = commit(repo)
+    monkeypatch.setattr(openspec, "_MAX_TOTAL", 10000)
+    monkeypatch.setattr(openspec, "_MAX_FILES", 4)
+    draft = openspec.import_spec(repo, revision)
+    assert draft["status"] == "incomplete"
+    assert len(draft["diagnostics"]) == 4

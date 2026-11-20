@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- Batch OpenSpec blob reads while preserving valid neighboring specs, ordered
+  diagnostics, provenance, and input limits.
+- Explain incomplete Polaris native regressions by stage in JSON, terminal
+  output, and exported reports, including failures during cleanup.
+- Escape control characters in terminal evidence comparisons while preserving
+  the original JSON claim text.
+- Add developer-only runtime profiling and a repeatable OpenSpec import
+  benchmark, with no timing fields added to verification evidence.
+
 ## v0.1.2
 
 - Inspect compiled Lean theorem metadata from a trusted runtime driver without

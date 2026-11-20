@@ -131,7 +131,17 @@ def report(record: dict) -> bytes:
                 claim = f"`{check['claim']}` · " if "claim" in check else ""
                 lines.append(f"  - {claim}{check.get('status', 'incomplete')} · {detail}")
     for regression in record.get("regressions", []):
-        lines.append(f"- Native pytest · `{regression['case_id']}` · {regression['status']}")
+        from .claims import _code_span, _inline_prose
+        from .command import visible_text
+
+        case_id = _code_span(visible_text(regression["case_id"]))
+        status = _inline_prose(visible_text(regression["status"]))
+        lines.append(f"- Native pytest · {case_id} · {status}")
+        for check in regression.get("checks", []):
+            if check.get("status") != "pass":
+                parts = [check.get("name", "check"), check.get("status", "incomplete")]
+                parts.extend(check[key] for key in ("stage", "detail") if check.get(key))
+                lines.append("  - " + " · ".join(_inline_prose(visible_text(part)) for part in parts))
     for method, counts in record.get("counts", {}).items():
         summary = ", ".join(f"{count} {name.replace('_', ' ')}" for name, count in counts.items())
         lines.append(f"- {method} · {summary}")

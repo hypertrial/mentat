@@ -40,6 +40,14 @@ The fixture gives `["finance.us"]` and `["finance", "us"]` distinct values. The 
 
 An out-of-memory kill, a signal exit, or a stopped server leaves the affected replay stage incomplete. Native pytest confirms a violation only for a test assertion failure without collection, setup, teardown, or other test errors. Interrupted test execution, missing or inconsistent results, and unconfirmed container removal leave the result incomplete.
 
+Native regression failures include the failed stage and a bounded explanation
+in JSON, terminal output, and exported reports. These distinguish preflight,
+staging, container creation, copying, execution, completion, and cleanup
+problems without copying raw Docker errors or local paths into the diagnostic.
+A cleanup failure retains the original failure and makes the regression
+incomplete. Older evidence without these details still displays its recorded
+status. Held-out evaluation continues to exclude private detailed failures.
+
 For agents, `--json` emits a versioned result. Exit `0` means complete success, `1` means a confirmed violation, and `2` means verification is incomplete or the input is invalid. Polaris verification gives a confirmed violation precedence when another check is incomplete. The manifest retains each result. Mentat reruns Z3 and Lean for every verification. Existing commands may still pass `--fresh`. The live oracle and native regression cover the reported fixtures and revisions. A contract or verifier change requires fresh approval.
 
 ## Run a held-out evaluation

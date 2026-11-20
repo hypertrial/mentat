@@ -39,6 +39,9 @@ For host checks, `host_requirements` can list executable names or absolute paths
 
 Compare two contracts that support the selected runner with `--base "$NEW_BASE" --against "$OLD_BASE"` on `spec check` and `spec approve`. The displayed Git diff command reads the original commit objects, matching the inputs Mentat reviewed. Review the comparison and the new contract before approving its digest. Both the local and Notion Claims Specs display declared behavior selectors. The grouped layout lists them in a verification appendix.
 
+Human-readable evidence comparisons display control characters in claim text
+as visible escapes. JSON output and saved evidence preserve the original text.
+
 ### Named cases and negative controls
 
 Set `case_report` on a behavior check to require evidence for exact native cases. Use
