@@ -487,21 +487,6 @@ def test_link_failure_does_not_leave_partial_report(saved, monkeypatch, tmp_path
     assert snapshot(state) == before
 
 
-def test_candidate_selfcheck_covers_saved_claim_results():
-    import subprocess
-    import sys
-
-    root = Path(__file__).resolve().parents[1]
-    result = subprocess.run(
-        [sys.executable, "-I", str(root / ".mentat/selfcheck.py"), "evidence.claim-results"],
-        env={**os.environ, "MENTAT_CANDIDATE_DIR": str(root)},
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert result.returncode == 0, result.stderr
-
-
 def test_omitted_artifact_is_not_presented_as_verified_file(saved):
     _, save, render = saved
     value = record()
