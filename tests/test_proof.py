@@ -30,7 +30,8 @@ def campaign(tmp_path, monkeypatch, request):
     log_data = {"checker.log": b"synthetic checker output"}
 
     def check_submission(approved, solution, *, theorem, allowed_imports, permitted_axioms, timeout_seconds):
-        calls.append({"approved": approved, "solution": solution, "theorem": theorem, "timeout": timeout_seconds})
+        calls.append({"approved": approved, "solution": solution, "theorem": theorem, "timeout": timeout_seconds,
+                      "allowed_imports": allowed_imports, "permitted_axioms": permitted_axioms})
         status = outcomes.pop(0) if outcomes else "accepted"
         if isinstance(status, BaseException):
             raise status
@@ -122,6 +123,8 @@ def test_prepare_check_recheck_bind_exact_inputs_with_synthetic_checker(campaign
     results, artifacts = proof.recheck(c.state, c.project, c.candidate, c.approval, [ident])
     assert [(item["id"], item["status"]) for item in results] == [("first", "pass")]
     assert len(c.calls) == 2 and all(call["timeout"] == 120 for call in c.calls)
+    assert all(call["theorem"] == "Proof.first" and call["allowed_imports"] == ["Init"]
+               and call["permitted_axioms"] == [] for call in c.calls)
     assert all(call["approved"] == c.project.files["proof.lean"] for call in c.calls)
     assert all(call["solution"] == (submitted / "first" / "Solution.lean").read_bytes() for call in c.calls)
     source_name = results[0]["artifacts"]["proof-source"]
@@ -210,6 +213,102 @@ def test_tampered_campaign_data_cannot_recheck(campaign, tmp_path, damage):
         target.write_bytes(b"tampered")
     with pytest.raises((ValueError, OSError)):
         proof.recheck(c.state, c.project, c.candidate, c.approval, [ident])
+
+
+WEAK_SOURCE = b"-- weakened theorem\n"
+
+
+def _forge(c, ident, damage):
+    """Rewrite campaign state as same-account code could, keeping manifest and receipt consistent."""
+    path = c.state / "proof-campaigns" / ident
+    manifest = evidence.read_json(path / "manifest.json")
+    target = manifest["all_targets"][0]
+    if damage == "theorem":
+        target["theorem"] = "Proof.trivial"
+    elif damage == "allowed_imports":
+        target["allowed_imports"] = ["Init", "Lean"]
+    elif damage == "permitted_axioms":
+        target["permitted_axioms"] = ["sorryAx"]
+    elif damage == "approved-source":
+        evidence.write_record(path / "approved" / "first.lean", WEAK_SOURCE)
+        target["approved_sha256"] = hashlib.sha256(WEAK_SOURCE).hexdigest()
+    elif damage == "dropped-target":
+        manifest["all_targets"] = [target]
+    elif damage == "unknown-target":
+        manifest["targets"] = ["first", "forged"]
+    else:
+        manifest["targets"] = ["first", "first"]
+    raw = evidence.json_bytes(manifest)
+    evidence.write_record(path / "manifest.json", raw)
+    evidence.write_record(c.state / "proof-campaign-receipts" / ident, hashlib.sha256(raw).hexdigest().encode())
+
+
+FORGERIES = ["theorem", "allowed_imports", "permitted_axioms", "approved-source", "dropped-target",
+             "unknown-target", "duplicate-target"]
+
+
+@pytest.mark.parametrize("damage", FORGERIES)
+def test_forged_campaign_targets_are_rejected_before_checking(campaign, damage):
+    c = campaign
+    ident, _ = c.prepare(targets=["first"])
+    _forge(c, ident, damage)
+    with pytest.raises(ValueError, match="approved contract"):
+        proof.check(c.state, ident, c.submission("weak", "first"))
+    assert c.calls == []
+
+
+@pytest.mark.parametrize("damage", FORGERIES)
+def test_forged_campaign_targets_fail_verify_after_acceptance(campaign, damage):
+    c = campaign
+    ident, _ = c.prepare(targets=["first", "second"])
+    assert proof.check(c.state, ident, c.submission("ok", "first", "second"))["status"] == "pass"
+    _forge(c, ident, damage)
+    with pytest.raises(ValueError, match="approved contract"):
+        proof.recheck(c.state, c.project, c.candidate, c.approval, [ident])
+    result = c.invoke("verify", "--rev", c.base, *c.scope, "--proof-campaign", ident, "--json")
+    assert result.exit_code != 0 and json.loads(result.output)["status"] != "pass", result.output
+    assert len(c.calls) == 2
+    assert all(call["approved"] == c.project.files["proof.lean"] for call in c.calls)
+
+
+def test_recheck_binds_the_manifest_read_under_the_ledger_lock(campaign, tmp_path, monkeypatch):
+    c = campaign
+    ident, _ = c.prepare(targets=["first"])
+    assert proof.check(c.state, ident, c.submission("ok", "first"))["status"] == "pass"
+    # A self-consistent, approved campaign for another repository with a weaker theorem.
+    forged = tmp_path / "forged"
+    shutil.copytree(c.repo, forged)
+    contract = json.loads((forged / ".mentat" / "contract.json").read_text())
+    contract["formal"][0]["theorem"] = "Proof.trivial"
+    (forged / ".mentat" / "contract.json").write_text(json.dumps(contract))
+    git(forged, "commit", "-qam", "weaken")
+    base = git(forged, "rev-parse", "HEAD")
+    scope = ["--repo", str(forged), "--base", base, "--runner", "host"]
+    digest = json.loads(c.invoke("spec", "check", *scope, "--json").output)["contract_digest"]
+    assert c.invoke("spec", "approve", digest, *scope).exit_code == 0
+    project = load_project(forged, base, "host")
+    approval = evidence.read_json(c.state / "approvals" / f"{digest}.json")
+    weak = proof.prepare(c.state, project, snapshot(forged, base), approval, tmp_path / "weak-task",
+                         targets=["first"])["campaign_id"]
+    assert proof.check(c.state, weak, c.submission("weak", "first"))["status"] == "pass"
+    original, reads = proof._campaign, []
+
+    def swapped(state, campaign_id):
+        reads.append(campaign_id)
+        # The first read passes; state is replaced while recheck waits for the ledger lock.
+        return original(state, weak if len(reads) > 1 else campaign_id)
+
+    monkeypatch.setattr(proof, "_campaign", swapped)
+    count = len(c.calls)
+    with pytest.raises(ValueError, match="does not match this verification"):
+        proof.recheck(c.state, c.project, c.candidate, c.approval, [ident])
+    assert len(c.calls) == count
+
+
+@pytest.mark.parametrize("targets", [[], ["unknown"], ["first", "first"], "first", [1]])
+def test_prepare_rejects_invalid_target_selection(campaign, targets):
+    with pytest.raises(ValueError, match="Select distinct"):
+        campaign.prepare(targets=targets)
 
 
 @pytest.mark.parametrize("damage", ["extra-root", "extra-file", "symlink-target", "symlink-source", "invalid-utf8"])
