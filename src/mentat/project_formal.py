@@ -73,7 +73,7 @@ _LAUNCHER_ENV = ("HOME", "ELAN_HOME", "ELAN_TOOLCHAIN")
 def _probe_lean(executable: str) -> tuple[dict, bool]:
     """Check one Lean binary under the clean environment used for every formal run.
 
-    The second value is False when the binary could not run at all.
+    The second value is False when `--version` exited with an error.
     """
     p = _run([executable, "--version"], timeout=5)
     match = re.search(r"\bversion (\d+\.\d+\.\d+)\b", p.stdout)
@@ -104,9 +104,7 @@ def _toolchain_lean(launcher: str) -> str | None:
     if p.returncode or not prefix or "\n" in prefix or not os.path.isabs(prefix):
         return None
     candidate = Path(prefix, "bin", "lean")
-    if not candidate.is_file() or candidate.samefile(launcher):
-        return None
-    return str(candidate)
+    return str(candidate) if candidate.is_file() else None
 
 
 def tool_info(project) -> dict:
