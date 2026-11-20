@@ -25,9 +25,6 @@ CASES = {
     for filtered in ("false", "true")
 }
 
-# Runs real Lean through `mentat verify`; keep it with the other Lean tests.
-pytestmark = pytest.mark.xdist_group("lean")
-
 
 def trace_formal_runs(monkeypatch):
     trace_path = os.environ.get("MENTAT_ICEBERG_FORMAL_TRACE")

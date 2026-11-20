@@ -1,9 +1,12 @@
 """Opt-in tests of the real pinned Linux checker; no checker functions are mocked."""
 
+import fcntl
 import hashlib
 import math
 import os
 import sys
+import tempfile
+from pathlib import Path
 
 import pytest
 
@@ -22,8 +25,16 @@ VALID = APPROVED.replace(
 )
 POLICY = {"theorem": "Proof.first", "allowed_imports": ["Init"], "permitted_axioms": []}
 
-# The real checker takes a host-wide non-blocking build lock, so keep these in one worker.
-pytestmark = pytest.mark.xdist_group("proof-checker")
+
+
+@pytest.fixture(autouse=True)
+def one_real_check_at_a_time():
+    # The real checker refuses to start beside another one on this host, and parallel
+    # test workers may run these tests at the same time. Wait for a turn instead.
+    path = Path(tempfile.gettempdir()) / f"mentat-test-proof-checker-{os.getuid()}.lock"
+    with open(path, "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
 
 
 @pytest.fixture(scope="module")

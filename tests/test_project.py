@@ -317,7 +317,6 @@ def test_z3_vacuity_and_expected_result(
     assert run_formal(project, tool_info(project))[0]["status"] == status
 
 
-@pytest.mark.xdist_group("lean")
 @pytest.mark.parametrize(
     ("source", "theorem", "status"),
     [
