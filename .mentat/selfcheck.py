@@ -604,6 +604,7 @@ def lean_audit(root):
         ("verified", "'verified' does not depend on any axioms", 0, "pass"),
         ("verified", "'verified' depends on axioms: [bad]", 0, "incomplete"),
         ("verified", "ambiguous", 0, "incomplete"),
+        ("verified", "'verified' does not depend on any axioms\nextra", 0, "incomplete"),
         ("missing", "missing theorem", 1, "incomplete"),
     ]:
 
@@ -615,9 +616,16 @@ def lean_audit(root):
             audit_source = Path(args[-1]).read_text()
             assert f"let decl := `{theorem}" in audit_source
             assert "let some idx := env.getModuleIdx? `Model" in audit_source
-            assert "unless env.getModuleIdxFor? decl == some idx do" in audit_source
-            assert "match env.checked.get.find? decl with" in audit_source
-            assert ".thmInfo" in audit_source
+            # Pin each guard together with the branch that rejects, not only its condition.
+            assert (
+                "  unless env.getModuleIdxFor? decl == some idx do\n"
+                '    throw <| IO.userError "Expected a theorem declared in Model"\n'
+            ) in audit_source
+            assert (
+                "  match env.checked.get.find? decl with\n"
+                "  | some (.thmInfo _) => pure ()\n"
+                '  | _ => throw <| IO.userError "Expected a checked theorem"\n'
+            ) in audit_source
             assert "collectAxioms decl" in audit_source and "loadExts := false" in audit_source
             return subprocess.CompletedProcess(args, code, audit, "")
 
