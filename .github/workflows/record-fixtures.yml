@@ -1,0 +1,62 @@
+name: Record fixtures
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/record-fixtures.yml
+      - scripts/generate_record_fixtures.py
+
+permissions:
+  contents: read
+
+jobs:
+  record:
+    name: Generate saved record fixtures
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+        with:
+          version: '0.11.13'
+          enable-cache: false
+      - name: Prepare work root
+        run: |
+          sudo mkdir -p /work && sudo chown "$USER" /work
+      - name: Generate records with Mentat v0.1.2
+        run: |
+          sha=9e1fb56221e51a5cb7f843bc49022a340f685adb
+          mkdir -p /work/src/v0.1.2
+          git archive "$sha" | tar -x -C /work/src/v0.1.2
+          (cd /work/src/v0.1.2 && uv sync --locked)
+          python3 scripts/generate_record_fixtures.py \
+            --mentat /work/src/v0.1.2/.venv/bin/mentat \
+            --examples /work/src/v0.1.2/examples \
+            --work /work/run/v0.1.2 \
+            --out "$RUNNER_TEMP/record-fixtures/v0.1.2" \
+            --label v0.1.2 \
+            --source-sha "$sha" \
+            --features basic
+      - name: Generate records with main-pre-split
+        run: |
+          sha=4be09f995b144254ad024b2d5501e88b3568f26f
+          mkdir -p /work/src/main-pre-split
+          git archive "$sha" | tar -x -C /work/src/main-pre-split
+          (cd /work/src/main-pre-split && uv sync --locked)
+          python3 scripts/generate_record_fixtures.py \
+            --mentat /work/src/main-pre-split/.venv/bin/mentat \
+            --examples /work/src/main-pre-split/examples \
+            --work /work/run/main-pre-split \
+            --out "$RUNNER_TEMP/record-fixtures/main-pre-split" \
+            --label main-pre-split \
+            --source-sha "$sha" \
+            --features full
+      - uses: actions/upload-artifact@v4
+        with:
+          name: record-fixtures
+          path: ${{ runner.temp }}/record-fixtures
+          if-no-files-found: error

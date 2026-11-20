@@ -63,4 +63,25 @@ worker triggers separate fresh Python and Z3-import calibration samples to
 estimate that overhead; they do not isolate solver time. Timings stay outside
 verification evidence bundles.
 
+## Regenerate the saved-record corpus
+
+`tests/fixtures/records/` holds records saved by Mentat v0.1.2 and by the
+pre-split main revision. Saved records embed absolute paths, the interpreter
+path, and `PATH`, so commit only output from the **Record fixtures** workflow,
+never records generated on a workstation.
+
+1. Run the **Record fixtures** workflow on the branch, from the Actions tab or
+   with `gh workflow run record-fixtures.yml --ref BRANCH`.
+2. Download the `record-fixtures` artifact and extract it.
+3. Replace `tests/fixtures/records/v0.1.2/` and
+   `tests/fixtures/records/main-pre-split/` with the matching directories from
+   the artifact.
+4. Write the goldens once, then run the corpus tests without the variable and
+   review the diff.
+
+```sh
+MENTAT_UPDATE_GOLDENS=1 uv run --locked --no-sync pytest -q tests/test_record_fixtures.py -n 0
+uv run --locked --no-sync pytest -q tests/test_record_fixtures.py -n 0
+```
+
 For vulnerabilities, use the private channel in [SECURITY.md](SECURITY.md).
