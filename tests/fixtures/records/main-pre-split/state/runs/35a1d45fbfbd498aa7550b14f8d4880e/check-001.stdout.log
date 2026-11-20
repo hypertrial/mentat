@@ -1,0 +1,23 @@
+============================= test session starts ==============================
+platform linux -- Python 3.12.3, pytest-9.2.0, pluggy-1.7.0
+rootdir: /tmp/mentat-run-lben2dwn/checks/base/tests
+configfile: ../../../../../dev/null
+collected 1 item
+
+../checks/base/tests/test_clamp.py F                                     [100%]
+
+=================================== FAILURES ===================================
+__________________________________ test_clamp __________________________________
+
+cases = [[-3, 0], [0, 0], [1, 1], [2, 2], [3, 2]]
+
+    def test_clamp(cases):
+        for value, expected in cases:
+>           assert clamp(value) == expected
+E           assert -3 == 0
+E            +  where -3 = clamp(-3)
+
+../checks/base/tests/test_clamp.py:6: AssertionError
+=========================== short test summary info ============================
+FAILED ../checks/base/tests/test_clamp.py::test_clamp - assert -3 == 0
+============================== 1 failed in 0.01s ===============================
