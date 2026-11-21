@@ -7,13 +7,13 @@ Behavior table, recorded on the code before the shared runner (`mentat.process`)
 | project_formal._run | CompletedProcess(args, rc, str, str) | subprocess.TimeoutExpired("Command ... timed out after N seconds"); OSError from Popen | process group, SIGKILL | temp files; child writes capped at 1,000,000 bytes (RLIMIT_FSIZE); returned text is the first 16,384 bytes, decoded utf-8 with replacement | DEVNULL, or input text (encoded) | `_env()`: PATH from os.environ, HOME = system temp dir, LANG = C.UTF-8; explicit env used verbatim | operator cwd unless given |
 | runner._process | (rc, stdout bytes, stderr bytes) | RuntimeError("execution output exceeded limit") per stream; TimeoutError("execution timed out") while reading; subprocess.TimeoutExpired if the process outlives its closed pipes past the deadline; OSError from Popen | process group, SIGKILL | pipes; each stream capped at output_limit (default 1 MiB) and raises when exceeded | DEVNULL, or input_file | env None inherits os.environ; explicit env used verbatim | inherited unless given |
 | runner._docker | `_process` result, unchanged | ValueError("Docker command failed: {exc}") for OSError, SubprocessError, TimeoutError, RuntimeError | via `_process` | via `_process` | via `_process` | inherited | inherited |
-| docker_runtime._docker | (rc, stdout bytes) | ValueError("an explicit dedicated Docker context is required"); RuntimeError("Docker output exceeded limit"); RuntimeError("Docker command timed out"); RuntimeError("Docker command unavailable or timed out") for OSError or a wait timeout | direct child only (no new session, pid SIGKILL) | stdout pipe, 1 MiB cap; stderr discarded, never captured or capped | DEVNULL | inherited | inherited |
+| docker_runtime._docker | (rc, stdout bytes) | ValueError("an explicit dedicated Docker context is required"); RuntimeError("Docker output exceeded limit"); RuntimeError("Docker command timed out"); RuntimeError("Docker command unavailable or timed out") for OSError or a wait timeout | direct child only (no new session, pid SIGKILL; WORK-54 CHANGE: process group) | stdout pipe, 1 MiB cap; stderr discarded, never captured or capped | DEVNULL | inherited | inherited |
 | colima.validate_colima | ValueError messages below; subprocess.run results | ValueError("Mentat requires a named, dedicated Colima profile"), ValueError("Mentat requires a dedicated local Unix-socket Docker context"), ValueError("Docker context does not match the selected Colima profile"), ValueError("The dedicated Colima VM must have host mounts disabled"); subprocess.CalledProcessError (check=True); subprocess.TimeoutExpired (10 s or 15 s); OSError | direct child only (subprocess.run kill) | uncapped capture_output | inherited from the operator (WORK-54 CHANGE: DEVNULL) | inherited | inherited |
 
 The table records the code before WORK-54. The intended WORK-54 changes are asserted in place
 and marked `WORK-54 CHANGE`: Colima stdin is DEVNULL, Colima timeouts kill the process group,
-Colima output is capped at 1 MiB (overflow is a ValueError), and formal runs use a private
-0700 directory as HOME and cwd. Everything else in the table is unchanged.
+Colima output is capped at 1 MiB per stream (overflow is a ValueError), Polaris Docker timeouts
+kill the process group, and formal runs use a private 0700 directory as HOME and cwd. Everything else in the table is unchanged.
 """
 
 import json
@@ -27,7 +27,7 @@ from pathlib import Path
 
 import pytest
 
-from mentat import colima, project_formal, runner
+from mentat import colima, process, project_formal, runner
 from mentat.showcases.polaris import docker_runtime
 
 # A grandchild that outlives its parent unless the whole process group is killed.
@@ -62,7 +62,11 @@ def alive(pid):
         os.kill(pid, 0)
     except ProcessLookupError:
         return False
-    return True
+    # A zombie still answers kill(0) until its parent reaps it, but it has already exited.
+    state = subprocess.run(
+        ["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True
+    ).stdout.strip()
+    return bool(state) and not state.startswith("Z")
 
 
 def gone_soon(pid, seconds=5):
@@ -193,6 +197,25 @@ def test_formal_run_explicit_env_is_used_verbatim(tmp_path, monkeypatch):
     assert result.stdout == "1 None None\n"
 
 
+def test_formal_run_file_size_limit_kills_the_child_with_sigxfsz(tmp_path):
+    # `exec` makes head the direct child, so its status is the signal that stopped it.
+    result = project_formal._run(
+        ["sh", "-c", "exec head -c 2000000 /dev/zero > big.bin"], cwd=tmp_path
+    )
+    assert result.returncode == -signal.SIGXFSZ
+    assert (tmp_path / "big.bin").stat().st_size == 1_000_000
+
+
+def test_formal_run_timeout_removes_the_private_directory(tmp_path):
+    home_file = tmp_path / "home.txt"
+    args = ["sh", "-c", f"printf %s \"$HOME\" > '{home_file}'; sleep 60"]
+    with pytest.raises(subprocess.TimeoutExpired):
+        project_formal._run(args, timeout=1)
+    home = Path(home_file.read_text())
+    assert home.name.startswith("mentat-formal-")
+    assert not home.exists()
+
+
 # runner._process -------------------------------------------------------------
 
 
@@ -235,6 +258,34 @@ def test_process_timeout_after_both_pipes_close_raises_subprocess_timeout():
     code = "import os, time; os.close(1); os.close(2); time.sleep(60)"
     with pytest.raises(subprocess.TimeoutExpired):
         runner._process([sys.executable, "-c", code], timeout=1)
+
+
+def test_process_timeout_with_stderr_still_open_raises_timeout_error():
+    code = "import os, time; os.close(1); time.sleep(60)"
+    with pytest.raises(TimeoutError) as caught:
+        runner._process([sys.executable, "-c", code], timeout=1)
+    assert str(caught.value) == "execution timed out"
+
+
+def test_process_cleanup_runs_when_killpg_fails(monkeypatch):
+    # Item 3: a failing killpg must not skip the child's wait or the pipe closing.
+    created = []
+    original = subprocess.Popen
+
+    def recording(*args, **kwargs):
+        created.append(original(*args, **kwargs))
+        return created[-1]
+
+    def fail(*args):
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(process.subprocess, "Popen", recording)
+    monkeypatch.setattr(process.os, "killpg", fail)
+    with pytest.raises(PermissionError):
+        process.run([sys.executable, "-c", "pass"], output_limit=100, timeout=10)
+    (child,) = created
+    assert child.returncode is not None
+    assert child.stdout.closed and child.stderr.closed
 
 
 def test_process_missing_executable_raises_oserror(tmp_path):
@@ -358,14 +409,12 @@ def test_polaris_docker_timeout_raises_runtime_error(bin_dir, grandchild):
     assert str(caught.value) == "Docker command timed out"
 
 
-def test_polaris_docker_timeout_kills_only_the_direct_child(bin_dir, grandchild):
-    # Kill scope differs from runner._process: the grandchild survives. Kept as observed.
+def test_polaris_docker_timeout_kills_the_process_group(bin_dir, grandchild):
+    # WORK-54 CHANGE: Polaris Docker calls kill the whole group on timeout, like the others.
     fake(bin_dir, "docker", GRANDCHILD_SH.format(pidfile=grandchild))
     with pytest.raises(RuntimeError):
         docker_runtime._docker("ctx", "info", timeout=1)
-    pid = read_pid(grandchild)
-    assert alive(pid)
-    os.kill(pid, signal.SIGKILL)
+    assert gone_soon(read_pid(grandchild))
 
 
 def test_polaris_docker_missing_binary_raises_unavailable(monkeypatch, tmp_path):
@@ -482,6 +531,14 @@ def test_colima_timeout_raises_timeout_expired_and_kills_group(bin_dir, grandchi
         colima.validate_colima("colima-test")
     assert time.monotonic() - started < 40
     assert gone_soon(read_pid(grandchild))
+
+
+def test_colima_stderr_flood_is_a_value_error(bin_dir):
+    # WORK-54 CHANGE: each stream is capped at 1 MiB, so stderr overflow is also a ValueError.
+    fake(bin_dir, "docker", "head -c 1100000 /dev/zero | tr '\\0' x >&2")
+    with pytest.raises(ValueError) as caught:
+        colima.validate_colima("colima-test")
+    assert str(caught.value) == "Colima validation output exceeded limit"
 
 
 def test_colima_output_flood_is_a_value_error(bin_dir):

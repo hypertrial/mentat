@@ -347,7 +347,8 @@ def test_lean_resolution_survives_formal_staging_cwd(trial, tmp_path, monkeypatc
     tools = tmp_path / "relative tools"
     tools.mkdir()
     lean = tools / "lean"
-    # Real Lean reports a libdir independent of its cwd; a formal probe's cwd is removed after it runs.
+    # Real Lean's libdir does not depend on its cwd. Formal probes run in a private directory
+    # removed after each run, so this fake reports a fixed directory instead of pwd.
     lean.write_text(
         "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'Lean (version 4.31.0)'; "
         f"else echo {tools}; fi\n"
@@ -356,6 +357,7 @@ def test_lean_resolution_survives_formal_staging_cwd(trial, tmp_path, monkeypatc
     monkeypatch.setenv("PATH", "relative tools:" + original_path)
     selected = project_formal.tool_info(project)["lean"]
     assert selected["executable"] == str(lean)
+    assert selected["libdir"] == str(tools)
     stage = tmp_path / "formal stage"
     stage.mkdir()
     assert (
