@@ -11,7 +11,9 @@ from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
-from . import evidence
+from pydantic import ValidationError
+
+from . import evidence, records
 from .evidence_report import claim_groups, decision_source, verdict_lines
 
 # The run report's only script. The page policy allows exactly this text by hash.
@@ -300,21 +302,21 @@ def acceptance_status(state, record, digest):
             if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
                 raise ValueError
             receipt = evidence.decode_json(stream.read(1_000_001))
-        if (
-            not isinstance(receipt, dict)
-            or any(
-                receipt.get(k) != v
-                for k, v in {
-                    "run_id": record["run_id"],
-                    "revision": record["revision"],
-                    "contract_digest": record["contract_digest"],
-                    "manifest_digest": digest,
-                }.items()
-            )
-            or not evidence.acceptable(record)
-        ):
+        try:
+            records.Acceptance.model_validate(receipt)
+        except ValidationError as exc:
+            raise ValueError("Invalid or mismatched receipt") from exc
+        if any(
+            receipt[k] != v
+            for k, v in {
+                "run_id": record["run_id"],
+                "revision": record["revision"],
+                "contract_digest": record["contract_digest"],
+                "manifest_digest": digest,
+            }.items()
+        ) or not evidence.acceptable(record):
             raise ValueError
-        accepted = datetime.fromisoformat(_string(receipt.get("accepted_at")))
+        accepted = datetime.fromisoformat(_string(receipt["accepted_at"]))
         if accepted.tzinfo is None:
             raise ValueError
         source = decision_source(receipt)

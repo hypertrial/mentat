@@ -14,7 +14,9 @@ from contextlib import contextmanager
 from pathlib import Path
 from uuid import uuid4
 
-from . import evidence
+from pydantic import ValidationError
+
+from . import evidence, records
 from .project import load_project, snapshot
 from .proof_checker import LEAN_VERSION
 
@@ -116,12 +118,11 @@ def _fresh(state, project, candidate, approval):
         "runner": current.runner,
         "contract_digest": current.fingerprint,
     }
-    if (
-        actual != approval
-        or not isinstance(actual, dict)
-        or any(actual.get(key) != value for key, value in expected.items())
-        or not isinstance(actual.get("approved_at"), str)
-    ):
+    try:
+        records.Approval.model_validate(actual)
+    except ValidationError as exc:
+        raise ValueError("Contract approval changed; approve and prepare a new campaign") from exc
+    if actual != approval or any(actual[key] != value for key, value in expected.items()):
         raise ValueError("Contract approval changed; approve and prepare a new campaign")
     return current, revision
 

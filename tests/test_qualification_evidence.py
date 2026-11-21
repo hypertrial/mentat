@@ -125,8 +125,27 @@ def test_cli_saves_real_mutants_bindings_and_acceptance_rejects_incomplete(quali
     assert not (state / "acceptances" / f"{record['run_id']}.json").exists()
 
 
-@pytest.mark.parametrize("damage", ["candidate", "snapshot", "base", "contract", "verifier", "manifest", "runtime", "claim", "check", "case", "outcome", "outcome-forged-error", "applied", "attribution", "baseline", "baseline-command", "artifact", "wrong-type"])
-def test_saved_qualification_rejects_corrupted_bindings_and_outcomes(qualified_run, damage):
+@pytest.mark.parametrize(("damage", "message"), [
+    ("candidate", "Source qualification bindings or outcome are invalid"),
+    ("snapshot", "Source qualification bindings or outcome are invalid"),
+    ("base", "Source qualification bindings or outcome are invalid"),
+    ("contract", "Source qualification bindings or outcome are invalid"),
+    ("verifier", "Source qualification bindings or outcome are invalid"),
+    ("manifest", "Source qualification bindings or outcome are invalid"),
+    ("runtime", "Source qualification bindings or outcome are invalid"),
+    ("claim", "Source qualification bindings or outcome are invalid"),
+    ("check", "Source qualification bindings or outcome are invalid"),
+    ("case", "Source qualification bindings or outcome are invalid"),
+    ("outcome", "Source qualification bindings or outcome are invalid"),
+    ("outcome-forged-error", "Source qualification error contradicts conclusive evidence"),
+    ("applied", "Source qualification lacks complete baseline or mutation evidence"),
+    ("attribution", "Invalid mutated check attribution"),
+    ("baseline", "Source qualification lacks complete baseline or mutation evidence"),
+    ("baseline-command", "Source qualification lacks complete baseline or mutation evidence"),
+    ("artifact", "Saved check references files outside its evidence manifest"),
+    ("wrong-type", "Source qualification bindings or outcome are invalid"),
+])
+def test_saved_qualification_rejects_corrupted_bindings_and_outcomes(qualified_run, damage, message):
     _, original = qualified_run
     value = copy.deepcopy(original)
     result = value["source_qualifications"][0]
@@ -156,7 +175,7 @@ def test_saved_qualification_rejects_corrupted_bindings_and_outcomes(qualified_r
         result["check_result"]["artifacts"]["cases.json"] = "outside.json"
     else:
         result["bindings"] = []
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=message):
         evidence.source_qualifications(value)
 
 
@@ -258,8 +277,18 @@ def test_real_formal_gate_records_qualification_inventory_without_running(campai
     assert "skipped" in output.read_text().lower()
 
 
-@pytest.mark.parametrize("corruption", ["cases-none", "case-none", "checks-none", "check-none", "inventory-none", "result-none", "case-value-list", "check-id-list", "formal-gate-string"])
-def test_malformed_qualification_context_raises_value_error(qualified_run, corruption):
+@pytest.mark.parametrize(("corruption", "message"), [
+    ("cases-none", "Invalid source qualification context"),
+    ("case-none", "Invalid source qualification context"),
+    ("checks-none", "Invalid source qualification context"),
+    ("check-none", "Invalid source qualification context"),
+    ("inventory-none", "Invalid source qualification declaration"),
+    ("result-none", "Invalid source qualification result"),
+    ("case-value-list", "Invalid source qualification cases"),
+    ("check-id-list", "Invalid source qualification context"),
+    ("formal-gate-string", "Invalid source qualification context"),
+])
+def test_malformed_qualification_context_raises_value_error(qualified_run, corruption, message):
     _, original = qualified_run
     value = copy.deepcopy(original)
     if corruption == "cases-none":
@@ -281,7 +310,7 @@ def test_malformed_qualification_context_raises_value_error(qualified_run, corru
         value["source_qualifications"] = []
     else:
         value["source_qualifications"][0]["case_results"] = {"target <case>": []}
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=message):
         evidence.source_qualifications(value)
 
 

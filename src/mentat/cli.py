@@ -12,8 +12,9 @@ from typing import Annotated, Literal
 from uuid import uuid4
 
 import typer
+from pydantic import ValidationError
 
-from . import evidence, spec_review
+from . import evidence, records, spec_review
 from .claims import checked_claims, provenance_lines, write_claims
 from .claims_notion import notion_claims
 from .command import emit, finish, operator_confirm, visible_text
@@ -96,11 +97,13 @@ def _approval(state: Path, project: Project) -> dict:
         raise ValueError(
             "Approve this repository, base commit, and runner with mentat spec approve"
         ) from exc
-    if (
-        not isinstance(record, dict)
-        or any(record.get(key) != value for key, value in _scope(project).items())
-        or not isinstance(record.get("approved_at"), str)
-    ):
+    try:
+        records.Approval.model_validate(record)
+    except ValidationError as exc:
+        raise ValueError(
+            "Approval record is invalid. Check and approve the current contract"
+        ) from exc
+    if any(record[key] != value for key, value in _scope(project).items()):
         raise ValueError("Approval record is invalid. Check and approve the current contract")
     return record
 

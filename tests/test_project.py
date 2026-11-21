@@ -699,6 +699,31 @@ def test_comparison_inputs_track_check_definition_and_mark_shared_changes(projec
     assert script["supporting_files"] != control["supporting_files"]
 
 
+@pytest.mark.parametrize("change", [{"approved_at": 1}, {"approved_at": None}, {"repo": ["x"]}])
+def test_malformed_approval_record_blocks_verify(project_repo, tmp_path, monkeypatch, change):
+    from typer.testing import CliRunner
+
+    from mentat import cli
+
+    monkeypatch.setattr(cli, "operator_confirm", lambda _: None)
+    repo, base, _ = project_repo
+    state = tmp_path / "state"
+    state.mkdir(mode=0o700)
+    runner = CliRunner()
+    scope = ["--repo", str(repo), "--base", base, "--runner", "host"]
+    prefix = ["--state", str(state)]
+    digest = json.loads(runner.invoke(cli.app, prefix + ["spec", "check", *scope, "--json"]).output)[
+        "contract_digest"
+    ]
+    assert runner.invoke(cli.app, prefix + ["spec", "approve", digest, *scope]).exit_code == 0
+    path = state / "approvals" / f"{digest}.json"
+    path.write_text(json.dumps({**json.loads(path.read_text()), **change}))
+    verified = runner.invoke(cli.app, prefix + ["verify", "--rev", base, *scope, "--json"])
+    assert json.loads(verified.output)["detail"] == (
+        "Approval record is invalid. Check and approve the current contract"
+    )
+
+
 def test_trusted_chat_relay_requires_valid_scope_and_records_source(project_repo, tmp_path):
     from typer.testing import CliRunner
 
