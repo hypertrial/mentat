@@ -81,15 +81,14 @@ partial def commandAllowed (s : Syntax) : Bool :=
     else submissionKinds.contains kind
   | _ => false
 
--- Screens every node below an allowed command. A doc comment body is one atom, so a one-word
--- comment such as `/-- unsafe -/` would otherwise match a screened atom; comments are skipped.
+-- Screens every node below an allowed command, doc comments included, so nothing is exempt.
+-- A doc comment whose whole body is one screened word, such as `/-- unsafe -/`, is rejected.
 partial def submissionSafe (s : Syntax) : Bool :=
   match s with
   | .atom _ a => !screenedAtoms.contains a
   | .ident .. | .missing => true
   | .node _ k args => Id.run do
     let kind := k.toString false
-    if kind == "Lean.Parser.Command.docComment" then return true
     if kind == "Lean.Parser.Term.attrInstance" && (args.size != 2 || !submissionAttributes.contains (headText args[1]!)) then return false
     if args.size >= 2 && isAtomText args[0]! "set_option" && !(args[1]!.isIdent && submissionOptions.contains args[1]!.getId.toString) then return false
     for arg in args do
