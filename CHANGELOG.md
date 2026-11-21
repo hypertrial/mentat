@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Isolate the Lean proof checker's submission sources and exporter: submissions
+  pass a command allowlist and screen for code-running forms (`unsafe`, `run_tac`,
+  `by_elab`, non-allowlisted attributes and `set_option`), and the exporter reads only
+  the compiled module from a fresh folder. The checker policy digest and verifier
+  fingerprint change, so approvals and proof campaigns must be renewed; submissions
+  using macros, custom syntax, evaluation commands or other attributes are now rejected.
 - Let host behavior checks declare approved `host_environment` variable names.
   Each check receives only its own operator-supplied values; doctor, evidence,
   and local and Notion Claims Specs show names and availability, never values.
