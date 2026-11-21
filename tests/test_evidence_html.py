@@ -245,6 +245,7 @@ def test_log_omissions_are_explicitly_identified(saved, control, stream):
 
 @pytest.mark.parametrize("control", [False, True], ids=["primary", "negative-control"])
 @pytest.mark.parametrize("bad", ["mystery", "../private.log", '<img onerror="alert(1)">'])
+@pytest.mark.saves_invalid_run
 def test_invalid_log_omissions_are_rejected(saved, control, bad):
     state, save, render = saved
     value = record()

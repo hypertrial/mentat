@@ -289,7 +289,7 @@ def test_saved_manifest_with_duplicate_keys_is_refused(tmp_path):
     raw = (state / "runs" / run_id / "manifest.json").read_bytes()
     duplicated = b'{"run_id":"%s",' % run_id.encode() + raw[1:]
     _rewrite_manifest(state, run_id, duplicated)
-    with pytest.raises(ValueError, match="^duplicate JSON key$"):
+    with pytest.raises(ValueError, match="^duplicate JSON key: run_id$"):
         evidence.read_run_snapshot(state, run_id)
 
 

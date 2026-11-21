@@ -554,9 +554,18 @@ def _reference_values(check: dict, artifacts: dict) -> None:
             raise ValueError("Invalid saved log reference")
 
 
-def _omissions(check: dict) -> None:
+# The helpers below run in the order the old hand checks did, so the first defect reported is
+# the same. Each model checks one field; defaults stand in for absent keys.
+
+
+def _artifact_omissions(check: dict) -> None:
+    _model(records.ArtifactOmissions, check, _RECORD_INVALID)
     for name in check.get("artifact_omissions", []):
         _filename(name)
+
+
+def _log_omissions(check: dict) -> None:
+    _model(records.LogOmissions, check, _RECORD_INVALID)
     streams = check.get("log_omissions", [])
     if len(set(streams)) != len(streams) or any(
         name not in {"stdout", "stderr"} for name in streams
@@ -564,21 +573,23 @@ def _omissions(check: dict) -> None:
         raise ValueError("Invalid saved log omissions")
 
 
-def _cases(check: dict) -> None:
-    """Check a result's case inventory and case results; types are checked by records.Cases."""
-    if "required_cases" in check:
-        names = check["required_cases"]
-        if len(set(names)) != len(names) or any(not name for name in names):
-            raise ValueError("Invalid saved required cases")
-    if "case_results" in check:
-        results = check["case_results"]
-        if any(
-            not isinstance(name, str) or not name or result not in _CASE_STATUSES
-            for name, result in results.items()
-        ):
-            raise ValueError("Invalid saved case results")
-        if "required_cases" in check and set(results) - set(check["required_cases"]):
-            raise ValueError("Unexpected saved case result")
+def _required_cases(check: dict) -> None:
+    _model(records.RequiredCases, check, _RECORD_INVALID)
+    names = check.get("required_cases", [])
+    if len(set(names)) != len(names) or any(not name for name in names):
+        raise ValueError("Invalid saved required cases")
+
+
+def _case_results(check: dict) -> None:
+    _model(records.CaseResults, check, "Invalid saved case results")
+    results = check.get("case_results", {})
+    if any(
+        not isinstance(name, str) or not name or result not in _CASE_STATUSES
+        for name, result in results.items()
+    ):
+        raise ValueError("Invalid saved case results")
+    if "required_cases" in check and set(results) - set(check["required_cases"]):
+        raise ValueError("Unexpected saved case result")
 
 
 def _formal_check(check, claims: set, artifacts: dict) -> None:
@@ -595,8 +606,8 @@ def _formal_check(check, claims: set, artifacts: dict) -> None:
         {"detail": "Invalid saved check detail", "artifacts": "Invalid saved artifact reference"},
     )
     _reference_values(check, artifacts)
-    _model(records.Omissions, check, _RECORD_INVALID)
-    _omissions(check)
+    _artifact_omissions(check)
+    _log_omissions(check)
     _model(records.FormalEvidence, check, "Invalid saved formal evidence")
 
 
@@ -612,14 +623,10 @@ def _behavior_check(check, claims: set, artifacts: dict) -> None:
         {"detail": "Invalid saved check detail", "artifacts": "Invalid saved artifact reference"},
     )
     _reference_values(check, artifacts)
-    _model(records.Omissions, check, _RECORD_INVALID)
-    _omissions(check)
-    _model(
-        records.Cases,
-        check,
-        {"required_cases": _RECORD_INVALID, "case_results": "Invalid saved case results"},
-    )
-    _cases(check)
+    _artifact_omissions(check)
+    _log_omissions(check)
+    _required_cases(check)
+    _case_results(check)
     _model(records.ExitCode, check, "Invalid saved exit code")
     if "command_status" in check and check["command_status"] not in STATUSES:
         raise ValueError("Invalid saved command status")
@@ -642,14 +649,10 @@ def _negative_control(control, artifacts: dict) -> None:
         },
     )
     _reference_values(control, artifacts)
-    _model(records.Omissions, control, _RECORD_INVALID)
-    _omissions(control)
-    _model(
-        records.Cases,
-        control,
-        {"required_cases": _RECORD_INVALID, "case_results": "Invalid saved case results"},
-    )
-    _cases(control)
+    _artifact_omissions(control)
+    _log_omissions(control)
+    _required_cases(control)
+    _case_results(control)
     _model(records.ExitCode, control, "Invalid saved control exit code")
 
 
@@ -768,14 +771,10 @@ def validate_run_record(record) -> None:
     for check in source_qualifications(record):
         _model(records.References, check, "Invalid saved artifact reference")
         _reference_values(check, artifacts)
-        _model(records.Omissions, check, _RECORD_INVALID)
-        _omissions(check)
-        _model(
-            records.Cases,
-            check,
-            {"required_cases": _RECORD_INVALID, "case_results": "Invalid saved case results"},
-        )
-        _cases(check)
+        _artifact_omissions(check)
+        _log_omissions(check)
+        _required_cases(check)
+        _case_results(check)
 
 
 def _checks_by_id(record: dict) -> dict[tuple[str, str], dict]:

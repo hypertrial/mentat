@@ -712,12 +712,13 @@ def summarize_pr(
 ) -> None:
     """Print a Markdown PR summary; preserve existing artifact access controls."""
     from .evidence_html import acceptance_status
-    from .evidence_report import pr_summary
+    from .evidence_report import claim_groups, pr_summary
 
     try:
         state = evidence.state_directory(ctx.obj["state"], create=False)
         _, record, digest = evidence.read_run_snapshot(state, run_id)
         evidence.validate_run_record(record)
+        claim_groups(record)
         typer.echo(
             pr_summary(
                 record, head, report_url, acceptance_status(state, record, digest), ci_status
