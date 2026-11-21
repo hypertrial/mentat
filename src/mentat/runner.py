@@ -8,17 +8,15 @@ import os
 import platform
 import re
 import secrets
-import selectors
 import shutil
-import signal
 import socket
 import stat
 import subprocess
 import tarfile
 import tempfile
-import time
 from pathlib import Path, PurePosixPath
 
+from . import process
 from .colima import validate_colima
 from .evidence import decode_json
 from .project import CHECKS_PREFIX, _validate_staged
@@ -44,44 +42,14 @@ def _arguments(argv: list[str], checks: str) -> list[str]:
 
 
 def _process(argv, *, cwd=None, env=None, timeout=30, input_file=None, output_limit=_MAX_OUTPUT):
-    process = subprocess.Popen(
+    return process.run(
         argv,
         cwd=cwd,
         env=env,
-        stdin=input_file or subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        start_new_session=True,
+        timeout=timeout,
+        stdin=input_file,
+        output_limit=output_limit,
     )
-    streams = {process.stdout: bytearray(), process.stderr: bytearray()}
-    deadline = time.monotonic() + timeout
-    try:
-        with selectors.DefaultSelector() as selector:
-            for stream in streams:
-                selector.register(stream, selectors.EVENT_READ)
-            while selector.get_map():
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise TimeoutError("execution timed out")
-                for key, _ in selector.select(remaining):
-                    chunk = os.read(key.fileobj.fileno(), 65536)
-                    if not chunk:
-                        selector.unregister(key.fileobj)
-                    else:
-                        data = streams[key.fileobj]
-                        data.extend(chunk)
-                        if len(data) > output_limit:
-                            raise RuntimeError("execution output exceeded limit")
-            code = process.wait(timeout=max(0.01, deadline - time.monotonic()))
-            return code, bytes(streams[process.stdout]), bytes(streams[process.stderr])
-    finally:
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        process.wait()
-        for stream in streams:
-            stream.close()
 
 
 def _docker(context, *args, timeout=30, input_file=None, output_limit=_MAX_OUTPUT):

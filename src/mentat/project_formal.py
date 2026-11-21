@@ -4,13 +4,13 @@ import hashlib
 import json
 import os
 import re
-import resource
 import shutil
-import signal
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
+
+from . import process
 
 _TIMEOUT = 15
 _OUTPUT_LIMIT = 16_384
@@ -26,45 +26,35 @@ _NAME = re.compile(rf"{_LEAN_PART}(?:\.{_LEAN_PART})*")
 _COMMAND = re.compile(r'\(\s*(?:;[^\n]*\n\s*)*([a-zA-Z][a-zA-Z0-9_-]*)(?=[ \t\r\n();"|])')
 
 
-def _env() -> dict[str, str]:
+def _env(home: str) -> dict[str, str]:
     return {
         "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
-        "HOME": tempfile.gettempdir(),
+        "HOME": home,
         "LANG": "C.UTF-8",
     }
 
 
 def _run(args, *, input=None, cwd=None, timeout=_TIMEOUT, env=None):
-    def limit_output():
-        resource.setrlimit(resource.RLIMIT_FSIZE, (1_000_000, 1_000_000))
-
-    with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
-        with subprocess.Popen(
-            args,
-            stdin=subprocess.PIPE if input is not None else subprocess.DEVNULL,
-            cwd=cwd,
-            env=env or _env(),
-            stdout=out,
-            stderr=err,
-            text=True,
-            preexec_fn=limit_output,
-            start_new_session=True,
-        ) as p:
-            try:
-                p.communicate(input, timeout=timeout)
-            finally:
-                try:
-                    os.killpg(p.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-        out.seek(0)
-        err.seek(0)
-        return subprocess.CompletedProcess(
-            args,
-            p.returncode,
-            out.read(_OUTPUT_LIMIT).decode("utf-8", "replace"),
-            err.read(_OUTPUT_LIMIT).decode("utf-8", "replace"),
-        )
+    # A fresh 0700 directory is HOME and cwd unless the caller supplies its own.
+    with tempfile.TemporaryDirectory(prefix="mentat-formal-") as private:
+        with tempfile.TemporaryFile() as stdin:
+            if input is not None:
+                stdin.write(input.encode())
+                stdin.seek(0)
+            code, out, err = process.run_to_files(
+                args,
+                cwd=cwd or private,
+                env=env or _env(private),
+                timeout=timeout,
+                stdin=stdin if input is not None else None,
+                file_size_limit=1_000_000,
+            )
+    return subprocess.CompletedProcess(
+        args,
+        code,
+        out[:_OUTPUT_LIMIT].decode("utf-8", "replace"),
+        err[:_OUTPUT_LIMIT].decode("utf-8", "replace"),
+    )
 
 
 _LAUNCHER_ENV = ("HOME", "ELAN_HOME", "ELAN_TOOLCHAIN")
@@ -94,11 +84,14 @@ def _probe_lean(executable: str) -> tuple[dict, bool]:
 
 def _toolchain_lean(launcher: str) -> str | None:
     """Ask a toolchain launcher such as elan where the selected Lean is installed."""
-    # The launcher finds its toolchains through the operator's HOME, so pass only the
-    # variables it needs. A fresh directory keeps the project's toolchain file out of
-    # the lookup.
-    env = {**_env(), **{name: os.environ[name] for name in _LAUNCHER_ENV if name in os.environ}}
     with tempfile.TemporaryDirectory(prefix="mentat-lean-") as empty:
+        # The launcher finds its toolchains through the operator's HOME, so pass only the
+        # variables it needs. A fresh directory keeps the project's toolchain file out of
+        # the lookup.
+        env = {
+            **_env(empty),
+            **{name: os.environ[name] for name in _LAUNCHER_ENV if name in os.environ},
+        }
         p = _run([launcher, "--print-prefix"], cwd=empty, timeout=5, env=env)
     prefix = p.stdout.strip()
     if p.returncode or not prefix or "\n" in prefix or not os.path.isabs(prefix):
@@ -323,7 +316,9 @@ def _run_lean(check, files, tools):
         with tempfile.TemporaryDirectory(prefix="mentat-project-lean-") as tmp:
             root = Path(tmp)
             (root / "Model.lean").write_bytes(source)
-            env = _env()
+            home = root / "home"
+            home.mkdir(mode=0o700)
+            env = _env(str(home))
             env["LEAN_PATH"] = str(root)
             deps = _run([tool["executable"], "--deps", str(root / "Model.lean")], cwd=root, env=env)
             libdir = Path(tool.get("libdir", "")).resolve()

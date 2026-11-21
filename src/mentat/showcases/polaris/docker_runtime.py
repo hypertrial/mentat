@@ -6,13 +6,11 @@ import hashlib
 import json
 import re
 import secrets
-import selectors
 import subprocess
 import tempfile
-import time
 from pathlib import Path
 
-from mentat import evidence
+from mentat import evidence, process
 from mentat.colima import validate_colima as _local_context
 
 _IMAGE = "mentat-trusted-polaris-cli:1.8.0"
@@ -67,34 +65,21 @@ def _docker(context: str, *args: str, timeout: int = _TIMEOUT) -> tuple[int, byt
     if not context or context == "default" or not re.fullmatch(r"[A-Za-z0-9_.-]+", context):
         raise ValueError("an explicit dedicated Docker context is required")
     try:
-        process = subprocess.Popen(
+        # Stderr is discarded, and only the docker client itself is killed (no new session).
+        code, output, _ = process.run(
             ["docker", "--context", context, *args],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
+            timeout=timeout,
+            output_limit=_MAX_OUTPUT,
+            stderr=False,
+            session=False,
         )
-        assert process.stdout is not None
-        output = bytearray()
-        deadline = time.monotonic() + timeout
-        with selectors.DefaultSelector() as selector:
-            selector.register(process.stdout, selectors.EVENT_READ)
-            while True:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0 or not selector.select(remaining):
-                    raise RuntimeError("Docker command timed out")
-                chunk = process.stdout.read1(65536)
-                if not chunk:
-                    break
-                output.extend(chunk)
-                if len(output) > _MAX_OUTPUT:
-                    raise RuntimeError("Docker output exceeded limit")
-        return process.wait(timeout=max(0.01, deadline - time.monotonic())), bytes(output)
+    except TimeoutError:
+        raise RuntimeError("Docker command timed out") from None
+    except RuntimeError:
+        raise RuntimeError("Docker output exceeded limit") from None
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise RuntimeError("Docker command unavailable or timed out") from exc
-    finally:
-        if "process" in locals() and process.poll() is None:
-            process.kill()
-            process.wait()
+    return code, output
 
 
 class _OOMKilled(RuntimeError):
