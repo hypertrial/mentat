@@ -192,6 +192,25 @@ def test_changed_candidate_approval_verifier_and_checker_are_not_reusable(campai
         proof.recheck(c.state, c.project, c.candidate, c.approval, [ident])
 
 
+@pytest.mark.parametrize(
+    "damage",
+    [
+        lambda approval: {key: value for key, value in approval.items() if key != "approved_at"},
+        lambda approval: {**approval, "approved_at": 1},
+    ],
+)
+def test_malformed_approval_on_disk_refuses_recheck(campaign, damage):
+    c = campaign
+    ident, _ = c.prepare(targets=["first"])
+    path = c.state / "approvals" / f"{c.project.fingerprint}.json"
+    evidence.write_record(path, evidence.json_bytes(damage(c.approval)))
+    with pytest.raises(
+        ValueError,
+        match=r"^Contract approval changed; approve and prepare a new campaign$",
+    ):
+        proof.recheck(c.state, c.project, c.candidate, c.approval, [ident])
+
+
 @pytest.mark.parametrize("damage", ["manifest", "task", "approved", "submission", "entry", "log", "approved-symlink"])
 def test_tampered_campaign_data_cannot_recheck(campaign, tmp_path, damage):
     c = campaign

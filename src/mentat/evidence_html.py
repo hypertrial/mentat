@@ -706,7 +706,7 @@ def render_comparison(
         comparison = evidence.compare_runs(
             state, before_id, after_id, across_contracts=across_contracts
         )
-        records, claims, contexts, overviews = [], [], [], []
+        runs, claims, contexts, overviews = [], [], [], []
         for label, run_id in (("Before", before_id), ("After", after_id)):
             _, record, manifest = evidence.read_run_snapshot(state, run_id)
             groups = validate_record(record)
@@ -717,7 +717,7 @@ def render_comparison(
                 for kind in ("formal", "behavior")
                 for check in claim[kind]
             }
-            records.append(record)
+            runs.append(record)
             claims.append(items)
             contexts.append(checks)
             source = decision_source(record.get("approval"))
@@ -770,7 +770,7 @@ def render_comparison(
             left, right = claims[0].get(ident), claims[1].get(ident)
             fingerprints = [
                 record.get("comparison_inputs", {}).get("claims", {}).get(ident)
-                for record in records
+                for record in runs
             ]
             definition = (
                 "added"
@@ -816,7 +816,7 @@ def render_comparison(
             title = next(
                 (
                     record.get("claim_review", {}).get("titles", {}).get(ident)
-                    for record in reversed(records)
+                    for record in reversed(runs)
                     if record.get("claim_review", {}).get("titles", {}).get(ident)
                 ),
                 ident,

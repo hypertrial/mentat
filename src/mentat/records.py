@@ -22,7 +22,8 @@ class Approval(_Record):
     runner: StrictStr
     contract_digest: StrictStr
     approved_at: StrictStr
-    # Any JSON value is accepted today and shown escaped; a string type would reject some.
+    # Any JSON value is accepted today. A non-string value is not shown at all, and only a
+    # non-empty string is labelled; a string type would reject values that are accepted now.
     decision_source: Any = None
 
 
@@ -41,7 +42,7 @@ class Acceptance(_Record):
 class SourceMutationCheck(_Record):
     """One declared source mutation in a run's source_mutation_checks."""
 
-    id: Annotated[StrictStr, Field(min_length=1)]
+    id: StrictStr
     claim: StrictStr
     check: StrictStr
     expected_case: StrictStr

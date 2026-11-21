@@ -6,7 +6,8 @@
   verifier module, `mentat.records`, holds pydantic models that check these records at each
   boundary; the raw saved dicts stay what is stored, hashed and compared, and the existing
   error messages are unchanged. There is no stored-format change. Because `records` is a new
-  verifier module, approvals, proof campaigns and pending acceptances must be renewed.
+  verifier module, the verifier digest changes, and the Polaris pack digest changes too (it
+  now covers `records.py`). Approvals, proof campaigns and pending acceptances must be renewed.
 - Make the names that Mentat modules share public, with no runtime behavior change. `gitio`
   exports `MAX_FILE`, `MAX_TOTAL`, `MAX_FILES`, `MAX_PATH`, `ls_tree`, `read_blobs`,
   `verify_revision` and `repo_root`; `project` exports `NAME_PATTERN`,
