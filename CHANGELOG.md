@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Allow the HTML run report's script only by its SHA-256 hash in the page policy,
+  instead of allowing any inline script.
 - Retry a failed `mentat spec import-openspec` blob batch one file at a time. A file
   that still fails gets a diagnostic naming that file, its neighbors still import,
   and later batches keep running. A batch in which no file can be read still stops
