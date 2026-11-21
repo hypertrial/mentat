@@ -281,11 +281,19 @@ def test_process_cleanup_runs_when_killpg_fails(monkeypatch):
 
     monkeypatch.setattr(process.subprocess, "Popen", recording)
     monkeypatch.setattr(process.os, "killpg", fail)
-    with pytest.raises(PermissionError):
-        process.run([sys.executable, "-c", "pass"], output_limit=100, timeout=10)
+    # The child has already exited, so the failed group kill is not an error.
+    assert process.run([sys.executable, "-c", "pass"], output_limit=100, timeout=10)[0] == 0
     (child,) = created
     assert child.returncode is not None
     assert child.stdout.closed and child.stderr.closed
+
+
+def test_process_overflow_from_an_exited_child_reports_the_overflow(tmp_path):
+    # The child has exited before the cap is noticed; on macOS killpg then reports EPERM.
+    script = "import sys; sys.stdout.write('x' * 200000); sys.stdout.flush()"
+    for _ in range(5):
+        with pytest.raises(RuntimeError, match="^execution output exceeded limit$"):
+            process.run([sys.executable, "-c", script], output_limit=100000, timeout=10)
 
 
 def test_process_does_not_wait_forever_when_a_live_child_cannot_be_killed(monkeypatch):
