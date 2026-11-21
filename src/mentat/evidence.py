@@ -240,9 +240,8 @@ def proof_evidence(record: dict) -> None:
     for check in record.get("model_checks", []):
         if not isinstance(check, dict) or check.get("kind") != "lean-comparator":
             continue
+        _model(records.ProofCheck, check, "Invalid saved proof evidence")
         info = check.get("evidence", {})
-        if not isinstance(info, dict):
-            raise ValueError("Invalid saved proof evidence")
         if "campaign_id" not in info:
             if check.get("status") == "pass":
                 raise ValueError("Passing proof has no campaign evidence")

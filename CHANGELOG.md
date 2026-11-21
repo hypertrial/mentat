@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Add typed validation for proof campaign manifests and ledger entries. `mentat.records` now
+  models the manifest fields and target entries, the ledger entries and the checker results
+  that `proof` reads, and the saved lean-comparator checks that `evidence.proof_evidence`
+  reads. The hash chain, receipts, budgets and every comparison still run on the raw dicts,
+  and the existing error messages are kept. There is no stored-format change: campaign and
+  ledger files written before this change still parse. The verifier digest changes (the
+  verifier modules `evidence`, `proof` and `records` changed), and the Polaris pack digest
+  changes too (it covers `evidence.py` and `records.py`). So approvals, pending acceptances
+  and proof campaigns must be renewed: a campaign prepared before this change is refused by
+  `check` and `recheck` ("Proof campaign inputs changed") and must be prepared again.
 - Add typed validation for check results and the run record. `mentat.records` now models
   formal and behavior check results, negative controls, case inventories and the saved
   `project-verification` run, and `evidence.validate_run_record` replaces the hand validator

@@ -168,7 +168,7 @@ def test_changed_candidate_approval_verifier_and_checker_are_not_reusable(campai
     git(c.repo, "add", "source.txt")
     git(c.repo, "commit", "-qm", "new candidate")
     changed = snapshot(c.repo, git(c.repo, "rev-parse", "HEAD"))
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="Proof campaign does not match this verification"):
         proof.recheck(c.state, c.project, changed, c.approval, [ident])
     import mentat.project as project_module
 
@@ -180,15 +180,15 @@ def test_changed_candidate_approval_verifier_and_checker_are_not_reusable(campai
     altered.write_bytes(altered.read_bytes() + b"\n# changed verifier\n")
     with monkeypatch.context() as scoped:
         scoped.setattr(project_module, "__file__", str(copied / "project.py"))
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="Project or candidate snapshot changed"):
             proof.recheck(c.state, c.project, c.candidate, c.approval, [ident])
     c.identity["checker"] = "synthetic-v2"
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="Proof checker identity changed"):
         proof.recheck(c.state, c.project, c.candidate, c.approval, [ident])
     c.identity["checker"] = "synthetic-v1"
     approval_path = c.state / "approvals" / f"{c.project.fingerprint}.json"
     evidence.write_record(approval_path, evidence.json_bytes({**c.approval, "approved_at": "changed"}))
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="Contract approval changed; approve and prepare a new campaign"):
         proof.recheck(c.state, c.project, c.candidate, c.approval, [ident])
 
 
@@ -211,7 +211,18 @@ def test_malformed_approval_on_disk_refuses_recheck(campaign, damage):
         proof.recheck(c.state, c.project, c.candidate, c.approval, [ident])
 
 
-@pytest.mark.parametrize("damage", ["manifest", "task", "approved", "submission", "entry", "log", "approved-symlink"])
+TAMPERED = {
+    "manifest": "Proof campaign manifest failed integrity validation",
+    "task": "Proof task instructions failed integrity validation",
+    "approved": "Frozen approved source failed integrity validation",
+    "submission": "Proof submission failed integrity validation",
+    "entry": "Proof ledger entry failed integrity validation",
+    "log": "Proof checker log failed integrity validation",
+    "approved-symlink": "Too many levels of symbolic links",
+}
+
+
+@pytest.mark.parametrize("damage", list(TAMPERED))
 def test_tampered_campaign_data_cannot_recheck(campaign, tmp_path, damage):
     c = campaign
     ident, _ = c.prepare(targets=["first"])
@@ -230,7 +241,7 @@ def test_tampered_campaign_data_cannot_recheck(campaign, tmp_path, damage):
         target.symlink_to(duplicate)
     else:
         target.write_bytes(b"tampered")
-    with pytest.raises((ValueError, OSError)):
+    with pytest.raises((ValueError, OSError), match=TAMPERED[damage]):
         proof.recheck(c.state, c.project, c.candidate, c.approval, [ident])
 
 
@@ -330,7 +341,16 @@ def test_prepare_rejects_invalid_target_selection(campaign, targets):
         campaign.prepare(targets=targets)
 
 
-@pytest.mark.parametrize("damage", ["extra-root", "extra-file", "symlink-target", "symlink-source", "invalid-utf8"])
+SUBMISSION_REFUSALS = {
+    "extra-root": "Unexpected proof submission path: extra",
+    "extra-file": "Target first must contain only Solution.lean",
+    "symlink-target": "Expected a real directory",
+    "symlink-source": "Too many levels of symbolic links",
+    "invalid-utf8": "Proof source must be UTF-8",
+}
+
+
+@pytest.mark.parametrize("damage", list(SUBMISSION_REFUSALS))
 def test_submission_requires_real_target_directories_with_one_utf8_solution(campaign, tmp_path, damage):
     c = campaign
     ident, _ = c.prepare(targets=["first"])
@@ -352,7 +372,7 @@ def test_submission_requires_real_target_directories_with_one_utf8_solution(camp
         solution.symlink_to(other)
     else:
         solution.write_bytes(b"\xff")
-    with pytest.raises((ValueError, OSError)):
+    with pytest.raises((ValueError, OSError), match=SUBMISSION_REFUSALS[damage]):
         proof.check(c.state, ident, submission)
     assert not c.calls
 
@@ -574,9 +594,9 @@ def test_malformed_manifest_shapes_are_user_errors(campaign, damage):
     evidence.write_record(path / "manifest.json", raw)
     evidence.write_record(c.state / "proof-campaign-receipts" / ident, hashlib.sha256(raw).hexdigest().encode())
     submission = c.submission("malformed", "first")
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="Proof campaign manifest is malformed"):
         proof.check(c.state, ident, submission)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="Proof campaign manifest is malformed"):
         proof.recheck(c.state, c.project, c.candidate, c.approval, [ident])
     checked = c.invoke("proof", "check", ident, "--submission", str(submission), "--json")
     assert checked.exit_code == 2, (checked.output, checked.exception)
@@ -688,14 +708,21 @@ def test_interrupted_completion_publication_recovers_accepted_hash_chain(campaig
     assert [data for name, data in artifacts.items() if name != source_name] == [b"synthetic checker output"]
 
 
-@pytest.mark.parametrize("overrides", [
-    {"status": "rejected"}, {"status": "unknown"}, {"identity": {"checker": "other"}},
-    {"detail": None}, {"logs": "not a mapping"}, {"logs": {"audit.log": "not bytes"}},
+INVALID_AUDIT = "Approved proof source audit returned invalid evidence"
+
+
+@pytest.mark.parametrize("overrides, message", [
+    ({"status": "rejected"}, "Approved proof source audit failed: synthetic audit"),
+    ({"status": "unknown"}, INVALID_AUDIT),
+    ({"identity": {"checker": "other"}}, INVALID_AUDIT),
+    ({"detail": None}, INVALID_AUDIT),
+    ({"logs": "not a mapping"}, INVALID_AUDIT),
+    ({"logs": {"audit.log": "not bytes"}}, INVALID_AUDIT),
 ])
-def test_prepare_rejects_malformed_or_unaccepted_approved_audit(campaign, tmp_path, overrides):
+def test_prepare_rejects_malformed_or_unaccepted_approved_audit(campaign, tmp_path, overrides, message):
     c = campaign
     c.audits.append(overrides)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=message):
         c.prepare("failed-audit", targets=["first"])
     assert not (tmp_path / "failed-audit").exists()
     assert not (c.state / "proof-campaigns").exists()
@@ -765,7 +792,25 @@ def recorded_proof(recorded_source, tmp_path):
     return copy, submission, bundle, record
 
 
-@pytest.mark.parametrize("damage", ["missing-source", "wrong-source", "source-hash", "approved-hash", "revision", "base", "contract", "verifier", "environment", "environment-hash", "environment-conflict", "theorem", "source-bytes", "source-symlink"])
+SAVED_PROOF_REFUSALS = {
+    "missing-source": "Passing proof source is missing or mismatched",
+    "wrong-source": "Passing proof source is missing or mismatched",
+    "source-hash": "Passing proof source is missing or mismatched",
+    "approved-hash": "Invalid saved proof source identity",
+    "revision": "Saved proof does not match its verification run",
+    "base": "Saved proof does not match its verification run",
+    "contract": "Saved proof does not match its verification run",
+    "verifier": "Saved proof does not match its verification run",
+    "environment": "Invalid saved proof environment",
+    "environment-hash": "Invalid saved proof environment hash",
+    "environment-conflict": "Saved proof environment does not match the recorded checker",
+    "theorem": "Invalid saved proof theorem identity",
+    "source-bytes": "Evidence artifact failed its integrity check",
+    "source-symlink": "Evidence artifact failed its integrity check",
+}
+
+
+@pytest.mark.parametrize("damage", list(SAVED_PROOF_REFUSALS))
 def test_saved_passing_proof_rejects_corrupted_source_or_bindings(recorded_proof, tmp_path, damage):
     c, _, bundle, record = recorded_proof
     check = record["model_checks"][0]
@@ -801,7 +846,7 @@ def test_saved_passing_proof_rejects_corrupted_source_or_bindings(recorded_proof
         raw = evidence.json_bytes(record)
         (bundle / "manifest.json").write_bytes(raw)
         (c.state / "receipts" / record["run_id"]).write_text(evidence.digest(raw))
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=SAVED_PROOF_REFUSALS[damage]):
         evidence.read_run_snapshot(c.state, record["run_id"])
 
 
