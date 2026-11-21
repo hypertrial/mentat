@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Make Polaris native pytest results advisory. Native pytest runs candidate code
+  inside its container, which prints the result marker, so its result may be
+  influenced by the candidate. It no longer decides a Polaris verification or
+  evaluation status, and no longer decides whether the regression file is kept.
+  Every supported oracle violation produces a pytest file, labeled advisory.
+  Verdicts come from the live oracle's comparison. Evaluation status still turns
+  incomplete when a baseline is incomplete; baseline counts are comparison data
+  labeled as candidate-influenced and never decide pass or violation. Records
+  written by this version name advisory results in `advisory_results`. Older
+  records render unchanged. Replay servers accept writes from candidate code
+  through the replay credential, so the oracle's result still depends on operator
+  review of the candidate. Mentat's own contract changed. `command.py` and
+  `evidence.py` are verifier modules, and the Polaris pack digest changes, so all
+  approvals, proof campaigns, and pending acceptances must be renewed.
+  `evidence compare` across this change needs `--across-contracts`.
 - Separate the product verdict from source-mutation qualification. The run
   `status` and the `verify` exit code (`0` pass, `1` violation, `2` incomplete)
   now come only from formal and behavior checks, so a surviving mutant exits `0`

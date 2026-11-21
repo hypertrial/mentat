@@ -326,7 +326,9 @@ def test_verify_reproduces_operational_replay_violation_before_emitting_artifact
     assert result.exit_code == 1, result.output
     assert len(called) == 1
     assert saved[0][0]["regressions"][0]["status"] == native_status
-    assert bool(saved[0][1]) == (native_status == "violation")
+    assert saved[0][0]["advisory_results"] == ["regressions"]
+    # The oracle decides; the regression file is kept whatever the advisory native result.
+    assert list(saved[0][1]) == ["test_mentat_regression.py"]
     assert json.loads(result.output)["regressions"] == saved[0][0]["regressions"]
     if native_status != "pass":
         from mentat import evidence

@@ -33,8 +33,12 @@ def emit(result: dict, output_json: bool) -> None:
     ):
         if result.get(key):
             typer.echo(f"{key.replace('_', ' ')}  {result[key]}")
+    advisory = result.get("advisory_results", [])
     for regression in result.get("regressions", []):
-        typer.echo(visible_text(f"Native pytest  {regression['case_id']}  {regression['status']}"))
+        label = " (advisory; candidate code may influence it)" if "regressions" in advisory else ""
+        typer.echo(
+            visible_text(f"Native pytest{label}  {regression['case_id']}  {regression['status']}")
+        )
         for check in regression.get("checks", []):
             if check.get("status") != "pass":
                 parts = [check.get("name", "check"), check.get("status", "incomplete")]
@@ -62,7 +66,9 @@ def emit(result: dict, output_json: bool) -> None:
             if check.get("status") != "pass":
                 typer.echo(f"  {check.get('detail', check.get('id', 'check'))}")
     for method, counts in result.get("counts", {}).items():
-        typer.echo(f"{method}  {json.dumps(counts, sort_keys=True)}")
+        baseline = "advisory_results" in result and method in ("upstream-pytest", "hypothesis")
+        label = " (baseline; candidate code may influence it)" if baseline else ""
+        typer.echo(f"{method}{label}  {json.dumps(counts, sort_keys=True)}")
 
 
 def finish(result: dict, output_json: bool) -> None:

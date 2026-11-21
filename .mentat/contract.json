@@ -25,7 +25,7 @@
       },
       {
         "label": "Apache Polaris",
-        "summary": "Replay a namespace round-trip bug and export a native pytest regression when the failure reproduces. This showcase gives a confirmed violation precedence over an incomplete check.",
+        "summary": "Replay a namespace round-trip bug and export a native pytest regression file for every supported violation. The native result is advisory; verdicts come from the live oracle's comparison. This showcase gives a confirmed violation precedence over an incomplete check.",
         "url": "https://github.com/hypertrial/mentat/blob/main/docs/polaris.md"
       }
     ],

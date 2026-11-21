@@ -36,19 +36,19 @@ PASSING_RUN='paste the passing run ID here'
 uv run --locked --extra polaris mentat showcase polaris accept "$PASSING_RUN"
 ```
 
-The fixture gives `["finance.us"]` and `["finance", "us"]` distinct values. The oracle reads Polaris independently over REST, and the destination receives the source CLI's exact export bytes. The evidence records per-claim differences and command failures. Mentat attempts native reproduction for supported claim violations, including failures during export, apply, and re-export. A reproduced failure with confirmed container cleanup produces a pytest file. Copy it into `client/python/tests/` in the repair workspace and run its header command against the failing and repaired revisions.
+The fixture gives `["finance.us"]` and `["finance", "us"]` distinct values. The oracle reads Polaris over REST, and the destination receives the source CLI's exact export bytes. The evidence records per-claim differences and command failures. Mentat attempts native reproduction for supported claim violations, including failures during export, apply, and re-export. Every supported violation produces a pytest file, whether or not the native run reproduces it. Verdicts come from the live oracle's comparison, not from native pytest. Native pytest is a convenience reproduction only: candidate code runs inside the pytest container that prints the result marker, so it may influence that result. The result is labeled advisory and never changes the verification or evaluation status. During replay the candidate CLI runs against the replay servers with the replay root credential, so candidate code can write state that the oracle later reads. The verdict therefore still depends on operator review of the candidate. Copy the file into `client/python/tests/` in the repair workspace and run its header command against the failing and repaired revisions.
 
-An out-of-memory kill, a signal exit, or a stopped server leaves the affected replay stage incomplete. Native pytest confirms a violation only for a test assertion failure without collection, setup, teardown, or other test errors. Interrupted test execution, missing or inconsistent results, and unconfirmed container removal leave the result incomplete.
+An out-of-memory kill, a signal exit, or a stopped server leaves the affected replay stage incomplete. Interrupted native test execution, missing or inconsistent native results, and unconfirmed native container removal are reported in the advisory native result only. Replay cleanup failures still make the affected replay incomplete.
 
 Native regression failures include the failed stage and a bounded explanation
 in JSON, terminal output, and exported reports. These distinguish preflight,
 staging, container creation, copying, execution, completion, and cleanup
 problems without copying raw Docker errors or local paths into the diagnostic.
-A cleanup failure retains the original failure and makes the regression
+A cleanup failure retains the original failure and marks the native result
 incomplete. Older evidence without these details still displays its recorded
 status. Held-out evaluation continues to exclude private detailed failures.
 
-For agents, `--json` emits a versioned result. Exit `0` means complete success, `1` means a confirmed violation, and `2` means verification is incomplete or the input is invalid. Polaris verification gives a confirmed violation precedence when another check is incomplete. The manifest retains each result. Mentat reruns Z3 and Lean for every verification. Existing commands may still pass `--fresh`. The live oracle and native regression cover the reported fixtures and revisions. A contract or verifier change requires fresh approval.
+For agents, `--json` emits a versioned result. Exit `0` means complete success, `1` means a confirmed violation, and `2` means verification is incomplete or the input is invalid. Polaris verification gives a confirmed violation precedence when another check is incomplete. The manifest retains each result. Its `advisory_results` field names the results that are candidate-influenced and advisory; for verification this is `regressions`. Mentat reruns Z3 and Lean for every verification. Existing commands may still pass `--fresh`. The live oracle covers the reported fixtures and revisions. A contract or verifier change requires fresh approval.
 
 ## Run a held-out evaluation
 
@@ -64,7 +64,9 @@ uv run --locked --extra polaris mentat showcase polaris evaluate \
 
 The report compares frozen upstream pytest, a Hypothesis-generated test corpus, and live verification on the historical failure, repair, and three controls. Evaluation reports use `schema_version` 2. Their `baseline_rows` record one result per candidate variant for each test baseline. The live `rows` record one result per candidate variant and private fixture, so the totals use different denominators. Private inputs and detailed failures stay out of the evaluation bundle. Candidate code can observe inputs delivered during replay, so keep the final trial operator-run and rotate cases before further repair attempts. A baseline that also fails on the unmutated repair receives an ambiguous alert when it rejects a violation case.
 
-An incomplete attempt takes precedence in the evaluation exit status. If Docker preflight fails, the report records the common failure on the planned rows, with zero execution time.
+Native pytest runs candidate code inside its container, so its result is advisory and may be influenced by the candidate. `advisory_results` names it as `native_regression`. The two test baselines, `upstream-pytest` and `hypothesis`, run on the same candidate snapshots, so their counts may be influenced by the candidate too. Baseline counts are comparison data. They never decide pass or violation, but an incomplete baseline still makes the evaluation incomplete. Native results are not in the scored counts. Pass and violation come from the live oracle's comparison (`counts.mentat`).
+
+An incomplete oracle attempt takes precedence in the evaluation exit status. If Docker preflight fails, the report records the common failure on the planned rows, with zero execution time.
 
 ## Run the runtime smoke check
 
@@ -75,7 +77,7 @@ uv run --locked --extra polaris python scripts/smoke_runtime.py \
   --repo "$POLARIS" --docker-context colima-mentat
 ```
 
-The smoke command exits nonzero if prerequisites, expected results, or resource cleanup checks fail. It uses temporary runtime resources and leaves operator approvals and evidence alone.
+The smoke command exits nonzero if prerequisites, expected results, or resource cleanup checks fail. Its native pytest expectation is sound because it runs the pinned upstream revisions, not a candidate. It uses temporary runtime resources and leaves operator approvals and evidence alone.
 
 ## Cleanup and upgrade
 

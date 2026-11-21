@@ -15,7 +15,7 @@ Mentat is a local CLI for reviewers who need evidence about a committed software
 - [Quickstart](https://github.com/hypertrial/mentat#try-it-on-a-git-repo) — Create a small Git repository, catch a broken clamp command, and verify the fix.
 - [Apache Iceberg-Go](https://github.com/hypertrial/mentat/blob/main/docs/iceberg-go.md) — Replay a compaction commit that left one of twelve rows visible in the active snapshot, then verify the fix with native Go observations and separate Lean and Z3 specification checks.
 - [Nemo](https://github.com/hypertrial/mentat/blob/main/docs/nemo.md) — Build two historical revisions and replay a mixed-type sum that returned the wrong value and numeric type.
-- [Apache Polaris](https://github.com/hypertrial/mentat/blob/main/docs/polaris.md) — Replay a namespace round-trip bug and export a native pytest regression when the failure reproduces. This showcase gives a confirmed violation precedence over an incomplete check.
+- [Apache Polaris](https://github.com/hypertrial/mentat/blob/main/docs/polaris.md) — Replay a namespace round-trip bug and export a native pytest regression file for every supported violation. The native result is advisory; verdicts come from the live oracle's comparison. This showcase gives a confirmed violation precedence over an incomplete check.
 
 ## Reviewing and approving a change
 

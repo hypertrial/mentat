@@ -197,15 +197,14 @@ def verify(
                         candidate, ctx.obj["docker"], source, f"{run_id}-pytest-{len(cases)}"
                     )
                     regressions.append({**regression, "case_id": fixture.id})
-                    if regression["status"] == "violation":
-                        filename = (
-                            "test_mentat_regression.py"
-                            if len(fixtures) == 1
-                            else f"test_mentat_{len(cases)}.py"
-                        )
-                        artifacts[filename] = source.replace(
-                            "tests/test_mentat_regression.py", f"tests/{filename}", 1
-                        ).encode()
+                    filename = (
+                        "test_mentat_regression.py"
+                        if len(fixtures) == 1
+                        else f"test_mentat_{len(cases)}.py"
+                    )
+                    artifacts[filename] = source.replace(
+                        "tests/test_mentat_regression.py", f"tests/{filename}", 1
+                    ).encode()
         if not cases:
             cases = [
                 {
@@ -236,6 +235,7 @@ def verify(
             "model_checks": models,
             "cases": cases,
             "regressions": regressions,
+            "advisory_results": ["regressions"],
             "reproduce": shlex.join(
                 [
                     "mentat",
