@@ -392,9 +392,25 @@ def test_import_isolates_bad_blobs_across_chunk_boundary(repo, monkeypatch):
     ]
 
 
+def fail_paths(monkeypatch, bad):
+    original = openspec._read_blobs
+    calls = []
+
+    def read(root, entries):
+        calls.append(len(entries))
+        if any(path in bad for path in entries):
+            raise ValueError("git command failed: cat-file") from OSError("unavailable")
+        return original(root, entries)
+
+    monkeypatch.setattr(openspec, "_read_blobs", read)
+    return calls
+
+
 @pytest.mark.parametrize("failure", [OSError("unavailable"), subprocess.TimeoutExpired("git", 1)])
 @pytest.mark.parametrize("wrapped", [False, True])
-def test_import_stops_on_infrastructure_failure_without_retrying(repo, monkeypatch, failure, wrapped):
+def test_import_retries_failed_batch_per_file_and_reports_only_the_failing_file(
+    repo, monkeypatch, failure, wrapped
+):
     for index in range(65):
         write(repo, f"openspec/specs/{index:03}/spec.md",
               f"### Requirement: R{index}\nBody.\n#### Scenario: S\nBody.\n")
@@ -402,20 +418,98 @@ def test_import_stops_on_infrastructure_failure_without_retrying(repo, monkeypat
     original = openspec._read_blobs
     calls = []
 
-    def fail_second(root, entries):
+    def fail_040(root, entries):
         calls.append(list(entries))
-        if len(calls) == 2:
+        if any("/040/" in path for path in entries):
             if wrapped:
                 raise ValueError("git failed") from failure
             raise failure
         return original(root, entries)
 
-    monkeypatch.setattr(openspec, "_read_blobs", fail_second)
+    monkeypatch.setattr(openspec, "_read_blobs", fail_040)
     draft = openspec.import_spec(repo, revision)
     assert draft["status"] == "incomplete"
-    assert len(calls) == 2
-    assert len(draft["claims"]) == 32
-    assert draft["diagnostics"][0]["path"] == "openspec/specs/032/spec.md"
+    assert len(calls) == 1 + (1 + 32) + 1
+    assert [item["claim"]["title"] for item in draft["claims"]] == [
+        f"R{i}: S" for i in range(65) if i != 40
+    ]
+    detail = "git failed" if wrapped else "git blob read failed"
+    assert draft["diagnostics"] == [
+        {"path": "openspec/specs/040/spec.md", "line": 1, "detail": detail}
+    ]
+
+
+def test_import_stops_when_no_file_in_a_batch_reads(repo, monkeypatch):
+    for index in range(64):
+        write(repo, f"openspec/specs/{index:03}/spec.md",
+              f"### Requirement: R{index}\nBody.\n#### Scenario: S\nBody.\n")
+    revision = commit(repo)
+    calls = fail_paths(monkeypatch, {f"openspec/specs/{i:03}/spec.md" for i in range(32)})
+    draft = openspec.import_spec(repo, revision)
+    assert draft["status"] == "incomplete"
+    assert draft["claims"] == []
+    assert draft["diagnostics"] == [
+        {
+            "path": "openspec/specs/000/spec.md",
+            "line": 1,
+            "detail": "git command failed: cat-file",
+        }
+    ]
+    # One batch read and one retry per file; the second batch is never read.
+    assert calls == [32] + [1] * 32
+
+
+def test_import_reads_failed_single_file_batch_once(repo, monkeypatch):
+    for index in range(65):
+        write(repo, f"openspec/specs/{index:03}/spec.md",
+              f"### Requirement: R{index}\nBody.\n#### Scenario: S\nBody.\n")
+    revision = commit(repo)
+    calls = fail_paths(monkeypatch, {"openspec/specs/064/spec.md"})
+    draft = openspec.import_spec(repo, revision)
+    assert [item["path"] for item in draft["diagnostics"]] == ["openspec/specs/064/spec.md"]
+    assert len(draft["claims"]) == 64
+    assert calls == [32, 32, 1]
+
+
+def test_import_reports_first_and_last_file_of_each_batch(repo, monkeypatch):
+    for index in range(64):
+        write(repo, f"openspec/specs/{index:03}/spec.md",
+              f"### Requirement: R{index}\nBody.\n#### Scenario: S\nBody.\n")
+    revision = commit(repo)
+    bad = {0, 31, 32, 63}
+    fail_paths(monkeypatch, {f"openspec/specs/{i:03}/spec.md" for i in bad})
+    draft = openspec.import_spec(repo, revision)
+    assert draft["status"] == "incomplete"
+    assert [item["path"] for item in draft["diagnostics"]] == [
+        f"openspec/specs/{i:03}/spec.md" for i in sorted(bad)
+    ]
+    assert [item["claim"]["title"] for item in draft["claims"]] == [
+        f"R{i}: S" for i in range(64) if i not in bad
+    ]
+
+
+def test_import_keeps_every_file_when_each_retry_reads(repo, monkeypatch):
+    for index in range(40):
+        write(repo, f"openspec/specs/{index:03}/spec.md",
+              f"### Requirement: R{index}\nBody.\n#### Scenario: S\nBody.\n")
+    revision = commit(repo)
+    original = openspec._read_blobs
+    calls = []
+
+    def fail_batches(root, entries):
+        calls.append(len(entries))
+        if len(entries) > 1:
+            raise ValueError("git command failed: cat-file") from OSError("unavailable")
+        return original(root, entries)
+
+    monkeypatch.setattr(openspec, "_read_blobs", fail_batches)
+    draft = openspec.import_spec(repo, revision)
+    assert draft["status"] == "pass"
+    assert draft["diagnostics"] == []
+    assert calls == [32] + [1] * 32 + [8] + [1] * 8
+    assert [item["claim"]["title"] for item in draft["claims"]] == [
+        f"R{i}: S" for i in range(40)
+    ]
 
 
 def test_import_checks_deadline_before_retrying_bad_batch(repo, monkeypatch):
