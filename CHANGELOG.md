@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Stop the Polaris native regression from reporting a cleanup failure when
+  container creation failed and no container exists to remove.
 - Isolate the Lean proof checker's submission sources and exporter: submissions
   pass a command allowlist and screen for code-running forms (`unsafe`, `run_tac`,
   `by_elab`, `include_str`, `bv_check`, `bv_decide`, `bv_decide?`, `native_decide`, non-allowlisted

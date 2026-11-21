@@ -49,6 +49,8 @@ def test_pytest_cleanup_failure_cannot_report_success_or_violation(
             if cleanup == "raises":
                 raise RuntimeError("remove failed")
             return (1 if cleanup == "nonzero" else 0), b""
+        if args[0] == "ps":
+            return 0, b"still-present\n"
         return 0, b""
 
     monkeypatch.setattr(docker_runtime, "_docker", docker)
@@ -420,6 +422,8 @@ def test_pytest_reports_bounded_stage_details_and_cleans_up(
         if command == "rm":
             removed.append(args[-1])
             return (1 if failure == "cleanup" else 0), b""
+        if command == "ps":
+            return 0, b"still-present\n"
         if command == "create" and failure == "container create":
             raise OSError(secret)
         if command == "cp":
@@ -455,6 +459,29 @@ def test_pytest_reports_bounded_stage_details_and_cleans_up(
         assert len(removed) == 1
     else:
         assert not removed
+
+
+@pytest.mark.parametrize("listing", ["absent", "present", "fails", "raises"])
+def test_pytest_failed_create_with_no_container_reports_only_the_create(
+    monkeypatch, runtime, candidate, listing
+):
+    def docker(_context, *args, **kwargs):
+        if args[0] == "create":
+            return 1, b""
+        if args[0] == "rm":
+            return 1, b""
+        if args[0] == "ps":
+            assert args[-1].startswith("name=")
+            if listing == "raises":
+                raise RuntimeError("Docker command timed out")
+            return (1 if listing == "fails" else 0), (b"abc123\n" if listing == "present" else b"")
+        return 0, b""
+
+    monkeypatch.setattr(docker_runtime, "_docker", docker)
+    result = docker_runtime.run_pytest(candidate, "context", "def test_ok(): pass", "run")
+    assert result["status"] == "incomplete"
+    stages = [check["stage"] for check in result["checks"]]
+    assert stages == (["container create"] if listing == "absent" else ["container create", "cleanup"])
 
 
 def test_pytest_retains_primary_diagnostic_if_cleanup_also_fails(monkeypatch, runtime, candidate):
