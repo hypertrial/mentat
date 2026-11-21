@@ -9,7 +9,7 @@ scripts/verify
 
 `scripts/verify` runs ruff, the claims check, then the test suite. Tests run in parallel by default (`addopts` in `pyproject.toml`); add `-n 0` to a `pytest` command for a serial run.
 
-The gate also lints with ruff's bugbear (`B`) and pyupgrade (`UP`) groups and type-checks `src/mentat` with pyright in basic mode (`showcases/` is excluded for now). `tests/test_static_checks.py` runs pyright once; pyright and its Node engine come from the `dev` group (`pyright[nodejs]`), so the check runs offline after `uv sync`. Keep `# noqa` and `# type: ignore` comments narrow, with a short reason.
+The gate also lints with ruff's bugbear (`B`) and pyupgrade (`UP`) groups and type-checks `src/mentat` with pyright in basic mode (`showcases/` is excluded for now). `tests/test_static_checks.py` runs pyright once; pyright and its Node engine come from the `dev` group (`pyright[nodejs]`), so the check runs offline after `uv sync`. Keep `# noqa` and `# pyright: ignore[rule]` comments narrow, naming the rule, with a short reason. Pyright reports stale ignores as errors.
 
 Expect the Lean tests and the opt-in Nano ID and Iceberg Go upstream replays to skip when their prerequisites are absent. The required check runs on pull requests and pushes to `main`.
 

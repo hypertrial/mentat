@@ -108,11 +108,11 @@ def import_spec(repo: Path, base: str) -> dict:
             diagnostic(path, 1, "spec import exceeded time limit")
             break
         try:
-            total += len(data)  # type: ignore[reportArgumentType]  # read_specs sets data when error is None
+            total += len(data)  # pyright: ignore[reportArgumentType]  # read_specs sets data when error is None
             if total > MAX_TOTAL:
                 diagnostic(path, 1, "spec files exceed total size limit")
                 break
-            source = data.decode("utf-8")  # type: ignore[reportOptionalMemberAccess]  # read_specs sets data when error is None
+            source = data.decode("utf-8")  # pyright: ignore[reportOptionalMemberAccess]  # read_specs sets data when error is None
         except (ValueError, UnicodeError) as exc:
             diagnostic(path, 1, str(exc))
             continue
@@ -130,9 +130,9 @@ def import_spec(repo: Path, base: str) -> dict:
                     or heading.startswith("Scenario:")
                     and level != 4
                 ):
-                    diagnostic(path, token.map[0] + 1, "unsupported OpenSpec heading level")  # type: ignore[reportOptionalSubscript]  # markdown-it heading tokens always carry a map
+                    diagnostic(path, token.map[0] + 1, "unsupported OpenSpec heading level")  # pyright: ignore[reportOptionalSubscript]  # markdown-it heading tokens always carry a map
                 if level <= 4:
-                    headings.append((level, heading, token.map[0]))  # type: ignore[reportOptionalSubscript]  # markdown-it heading tokens always carry a map
+                    headings.append((level, heading, token.map[0]))  # pyright: ignore[reportOptionalSubscript]  # markdown-it heading tokens always carry a map
 
         def nonempty(start, end):
             return any(
@@ -220,7 +220,7 @@ def import_spec(repo: Path, base: str) -> dict:
                     def citation(begin, finish):
                         return {
                             "commit": revision,
-                            "blob": entry[1].decode("ascii"),  # noqa: B023 # type: ignore[reportOptionalSubscript]  # read_specs sets entry when error is None
+                            "blob": entry[1].decode("ascii"),  # noqa: B023 # pyright: ignore[reportOptionalSubscript]  # read_specs sets entry when error is None
                             "path": path,  # noqa: B023 - called within this iteration, before the loop variable changes
                             "start_line": begin + 1,
                             "end_line": finish,

@@ -214,7 +214,7 @@ def verify(
                 "claim": mutation["claim"],
                 "check": mutation["check"],
                 "expected_case": mutation["expected_case"],
-                "required_cases": checks[mutation["check"]].case_report.required_cases,  # type: ignore[reportOptionalMemberAccess]  # approved_mutations rejects checks without case_report
+                "required_cases": checks[mutation["check"]].case_report.required_cases,  # pyright: ignore[reportOptionalMemberAccess]  # approved_mutations rejects checks without case_report
                 "violation_exit_codes": checks[mutation["check"]].violation_exit_codes,
             }
             for mutation in approved_mutations(project.contract, project.files)
