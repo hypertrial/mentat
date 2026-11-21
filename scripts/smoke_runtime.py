@@ -9,6 +9,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from mentat.evidence import status
+from mentat.project_formal import LEAN_VERSION
 from mentat.showcases.polaris import docker_runtime
 from mentat.showcases.polaris.evaluation import BEFORE, FIXED
 from mentat.showcases.polaris.formal import run_formal
@@ -73,7 +74,7 @@ def main() -> int:
                 path = Path(executable).resolve()
                 if path.name == "elan" or (elan and path.samefile(elan)):
                     raise RuntimeError(
-                        f"{tool} must point directly to the installed 4.31.0 toolchain"
+                        f"{tool} must point directly to the installed {LEAN_VERSION} toolchain"
                     )
                 toolchain[tool] = path.parent
         if toolchain["lean"] != toolchain["lake"]:

@@ -21,6 +21,8 @@ commit the Claims Spec with the contract.
 uv run --locked mentat claims render --repo .
 ```
 
+Classify each new `src/mentat` module as a verifier or presentation module in `src/mentat/project.py`; the verifier digest tests fail until you do.
+
 ## Measure import and runtime costs
 
 Run the OpenSpec benchmark with the installed development environment:

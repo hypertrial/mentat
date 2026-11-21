@@ -11,6 +11,8 @@ from pathlib import Path
 
 RUN_ID = re.compile(r"[a-f0-9]{32}\Z")
 STATUSES = {"pass", "violation", "incomplete"}
+# Historical checker versions whose saved proofs still load; the live checker may move on.
+_SAVED_CHECKER_VERSIONS = frozenset({"4.35.0"})
 
 
 def read_json(path: Path):
@@ -267,7 +269,8 @@ def proof_evidence(record: dict) -> None:
         if any(info.get(key) != value for key, value in expected.items()):
             raise ValueError("Saved proof does not match its verification run")
         environment = info.get("environment")
-        if not isinstance(environment, dict) or environment.get("version") != "4.35.0":
+        version = environment.get("version") if isinstance(environment, dict) else None
+        if not isinstance(version, str) or version not in _SAVED_CHECKER_VERSIONS:
             raise ValueError("Invalid saved proof environment")
         for key in ("toolchain_sha256", "bwrap_sha256", "policy_sha256"):
             value = environment.get(key)

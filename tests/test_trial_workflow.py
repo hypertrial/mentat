@@ -12,6 +12,7 @@ from typer.testing import CliRunner
 
 from mentat import cli
 from mentat.project import load_project, snapshot
+from mentat.project_formal import LEAN_VERSION
 from mentat.runner import run_behavior
 
 
@@ -375,7 +376,7 @@ def _lean_project(trial):
     return load_project(repo, save(repo, manifest), "host")
 
 
-def _toolchain(prefix, version="4.31.0"):
+def _toolchain(prefix, version=LEAN_VERSION):
     (prefix / "lib/lean").mkdir(parents=True)
     _script(
         prefix / "bin/lean",
@@ -408,12 +409,12 @@ def test_lean_launcher_resolves_to_installed_toolchain_binary(trial, tmp_path, m
     prefix = tmp_path / "toolchain"
     lean = _toolchain(prefix)
     home = _launcher(tmp_path, monkeypatch, f"{prefix}\n")
-    monkeypatch.setenv("ELAN_TOOLCHAIN", "leanprover/lean4:v4.31.0")
+    monkeypatch.setenv("ELAN_TOOLCHAIN", f"leanprover/lean4:v{LEAN_VERSION}")
     monkeypatch.setenv("UNDECLARED_SECRET", "sentinel")
     monkeypatch.chdir(project.root)
     tools = project_formal.tool_info(project)
     assert tools["lean"] == {
-        "version": "4.31.0",
+        "version": LEAN_VERSION,
         "executable": str(lean),
         "libdir": str(prefix / "lib/lean"),
     }
@@ -421,7 +422,7 @@ def test_lean_launcher_resolves_to_installed_toolchain_binary(trial, tmp_path, m
     assert (home / "listing").read_text() == ""
     # It received the toolchain selection but not the rest of the operator's environment.
     launcher_env = (home / "env").read_text().splitlines()
-    assert "ELAN_TOOLCHAIN=leanprover/lean4:v4.31.0" in launcher_env
+    assert f"ELAN_TOOLCHAIN=leanprover/lean4:v{LEAN_VERSION}" in launcher_env
     assert not any(line.startswith("UNDECLARED_SECRET=") for line in launcher_env)
     # Formal checks then run the resolved binary, not the launcher.
     calls = []
@@ -446,7 +447,7 @@ def test_lean_launcher_that_cannot_select_the_pinned_toolchain_is_rejected(
     project = _lean_project(trial)
     prefix = tmp_path / "toolchain"
     if case != "no-binary":
-        _toolchain(prefix, "4.36.0" if case == "wrong-version" else "4.31.0")
+        _toolchain(prefix, "4.36.0" if case == "wrong-version" else LEAN_VERSION)
     else:
         prefix.mkdir()
     output = {"empty": "", "relative": "toolchain\n", "two-lines": f"{prefix}\n{prefix}\n"}.get(
@@ -463,7 +464,7 @@ def test_lean_launcher_that_cannot_select_the_pinned_toolchain_is_rejected(
         project_formal.tool_info(project)
 
 
-@pytest.mark.parametrize("version", ["4.31.0", "4.36.0"])
+@pytest.mark.parametrize("version", [LEAN_VERSION, "4.36.0"])
 def test_direct_lean_install_is_not_resolved_through_its_prefix(
     trial, tmp_path, monkeypatch, version
 ):
@@ -480,12 +481,12 @@ def test_direct_lean_install_is_not_resolved_through_its_prefix(
         f'--print-libdir) echo "{prefix}/lib/lean";; --print-prefix) echo "{prefix}";; esac\n',
     )
     monkeypatch.setenv("PATH", f"{prefix / 'bin'}{os.pathsep}{os.environ['PATH']}")
-    if version == "4.31.0":
+    if version == LEAN_VERSION:
         selected = project_formal.tool_info(project)["lean"]
         assert selected["executable"] == str(prefix / "bin/lean")
         assert "--print-prefix" not in log.read_text()
     else:
-        with pytest.raises(ValueError, match="Lean 4.31.0 is required"):
+        with pytest.raises(ValueError, match=f"Lean {LEAN_VERSION} is required"):
             project_formal.tool_info(project)
         # It ran, so it is not a launcher and is never asked for a prefix.
         assert log.read_text().split() == ["--version"]
@@ -499,7 +500,7 @@ def test_lean_launcher_on_a_relative_path_entry_is_not_resolved(trial, tmp_path,
     home = _launcher(tmp_path, monkeypatch, f"{tmp_path / 'toolchain'}\n")
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("PATH", "launcher" + os.pathsep + os.environ["PATH"].split(os.pathsep, 1)[1])
-    with pytest.raises(ValueError, match="Lean 4.31.0 is required"):
+    with pytest.raises(ValueError, match=f"Lean {LEAN_VERSION} is required"):
         project_formal.tool_info(project)
     assert not (home / "listing").exists()
 

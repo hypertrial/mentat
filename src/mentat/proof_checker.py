@@ -14,7 +14,8 @@ import time
 from pathlib import Path
 from uuid import uuid4
 
-_ROOT = Path("/opt/lean-4.35.0")
+LEAN_VERSION = "4.35.0"
+_ROOT = Path(f"/opt/lean-{LEAN_VERSION}")
 _SOURCE_LIMIT = 1_000_000
 _OUTPUT_LIMIT = 1_000_000
 _LIBRARY_CACHE = {}
@@ -42,7 +43,7 @@ def _toolchain_digest():
         info = path.lstat()
         if info.st_uid != 0 or (not stat.S_ISLNK(info.st_mode) and info.st_mode & 0o022):
             raise ValueError(
-                "Lean 4.35.0 toolchain must be root-owned and immutable to proof authors"
+                f"Lean {LEAN_VERSION} toolchain must be root-owned and immutable to proof authors"
             )
         relative = str(path.relative_to(_ROOT))
         if stat.S_ISLNK(info.st_mode):
@@ -63,7 +64,7 @@ def _toolchain_digest():
         elif not stat.S_ISDIR(info.st_mode):
             raise ValueError("Unsupported pinned toolchain file")
     if not entries:
-        raise ValueError("Install the official Lean 4.35.0 distribution at /opt/lean-4.35.0")
+        raise ValueError(f"Install the official Lean {LEAN_VERSION} distribution at {_ROOT}")
     return _hash(json.dumps(entries, separators=(",", ":")).encode())
 
 
@@ -79,7 +80,7 @@ def checker_identity():
     ):
         if not path.exists():
             raise ValueError(
-                "Install pinned Lean 4.35.0, bubblewrap and systemd in the Linux checker"
+                f"Install pinned Lean {LEAN_VERSION}, bubblewrap and systemd in the Linux checker"
             )
         info = path.stat()
         if info.st_uid != 0 or info.st_mode & 0o022:
@@ -91,8 +92,10 @@ def checker_identity():
     version = subprocess.run(
         [str(_ROOT / "bin/lean"), "--version"], capture_output=True, timeout=5, check=False
     )
-    if version.returncode or not version.stdout.startswith(b"Lean (version 4.35.0,"):
-        raise ValueError("The pinned comparator requires Lean 4.35.0 exactly")
+    if version.returncode or not version.stdout.startswith(
+        f"Lean (version {LEAN_VERSION},".encode()
+    ):
+        raise ValueError(f"The pinned comparator requires Lean {LEAN_VERSION} exactly")
     probe = _privileged(["/usr/bin/systemctl", "show", "--property=Version", "--value"])
     if probe.returncode:
         raise ValueError(
@@ -104,7 +107,7 @@ def checker_identity():
 
     return {
         "engine": "lean-comparator",
-        "version": "4.35.0",
+        "version": LEAN_VERSION,
         "toolchain_sha256": _toolchain_digest(),
         "bwrap_sha256": _hash(Path("/usr/bin/bwrap").read_bytes()),
         "python_sha256": _hash(Path("/usr/bin/python3").read_bytes()),
@@ -220,7 +223,7 @@ def _service(files, timeout_seconds):
         args += [
             "/usr/bin/env",
             "-i",
-            "PATH=/opt/lean-4.35.0/bin:/usr/bin:/bin",
+            f"PATH={_ROOT}/bin:/usr/bin:/bin",
             "HOME=/tmp",
             "LANG=C.UTF-8",
             "/usr/bin/python3",

@@ -49,7 +49,7 @@ def checker_identity():
         if required:
             pytest.fail(f"Required real proof checker prerequisites unavailable: {exc}")
         pytest.skip(f"Optional real proof checker prerequisites unavailable: {exc}")
-    assert identity["version"] == "4.35.0"
+    assert identity["version"] == proof_checker.LEAN_VERSION
     return identity
 
 

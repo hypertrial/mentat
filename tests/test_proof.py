@@ -583,6 +583,15 @@ def test_saved_passing_proof_rejects_corrupted_source_or_bindings(recorded_proof
         evidence.read_run_snapshot(c.state, record["run_id"])
 
 
+@pytest.mark.parametrize("version", ["4.36.0", "4.31.0", ["4.35.0"]])
+def test_saved_proof_environment_accepts_only_historical_checker_versions(recorded_proof, version):
+    _, _, _, record = recorded_proof
+    evidence.proof_evidence(record)
+    record["model_checks"][0]["evidence"]["environment"]["version"] = version
+    with pytest.raises(ValueError, match="Invalid saved proof environment"):
+        evidence.proof_evidence(record)
+
+
 def test_proof_html_shows_source_filename_without_source_or_runtime(recorded_proof, tmp_path):
     c, submission, _, record = recorded_proof
     output = tmp_path / "proof-report.html"
