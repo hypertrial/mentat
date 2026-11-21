@@ -311,8 +311,10 @@ def test_process_does_not_wait_forever_when_a_live_child_cannot_be_killed(monkey
     monkeypatch.setattr(process.os, "killpg", fail)
     started = time.monotonic()
     try:
-        with pytest.raises(PermissionError):
+        # The group kill fails, so the child itself is killed and the timeout is what is reported.
+        with pytest.raises(TimeoutError):
             process.run([sys.executable, "-c", "import time; time.sleep(30)"], output_limit=100, timeout=0.5)
+        assert created[0].returncode is not None
         assert time.monotonic() - started < 10
     finally:
         for child in created:
