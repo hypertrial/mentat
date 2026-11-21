@@ -17,7 +17,7 @@ import time
 from contextlib import contextmanager
 from uuid import uuid4
 
-from mentat import project_formal
+from mentat import project_formal, runner
 from mentat.cli import app
 from mentat.showcases.polaris import docker_runtime
 
@@ -115,15 +115,15 @@ def docker_phase(args):
     operation = args[1] if len(args) > 1 else ""
     if operation == "network" and len(args) > 2:
         operation = "network_" + args[2]
-    allowed = {"version", "info", "inspect", "image", "create", "cp", "start", "wait", "logs", "rm",
-               "network_create", "network_rm"}
+    allowed = {"version", "info", "inspect", "image", "context", "create", "cp", "start", "wait",
+               "logs", "rm", "network_create", "network_rm"}
     return "docker." + (operation if operation in allowed else "other")
 
 
 @contextmanager
 def profiling(trace):
     originals = (project_formal._run, docker_runtime.doctor, docker_runtime._stage_cli,
-                 docker_runtime._docker)
+                 docker_runtime._docker, runner._process, runner._docker, runner._stage)
 
     def wrap(original, phase_for):
         def traced(*args, **kwargs):
@@ -162,15 +162,19 @@ def profiling(trace):
                     pass
         return traced
 
-    project_formal._run = wrap(originals[0], lambda args: formal_phase(args[0]))
-    docker_runtime.doctor = wrap(originals[1], lambda args: "polaris.preflight")
-    docker_runtime._stage_cli = wrap(originals[2], lambda args: "polaris.staging")
-    docker_runtime._docker = wrap(originals[3], docker_phase)
     try:
+        project_formal._run = wrap(originals[0], lambda args: formal_phase(args[0]))
+        docker_runtime.doctor = wrap(originals[1], lambda args: "polaris.preflight")
+        docker_runtime._stage_cli = wrap(originals[2], lambda args: "polaris.staging")
+        docker_runtime._docker = wrap(originals[3], docker_phase)
+        # Runner calls use a separate prefix, so they do not merge with Polaris docker.* events.
+        runner._process = wrap(originals[4], lambda args: "runner.process")
+        runner._docker = wrap(originals[5], lambda args: "runner." + docker_phase(args))
+        runner._stage = wrap(originals[6], lambda args: "runner.stage")
         yield
     finally:
         (project_formal._run, docker_runtime.doctor, docker_runtime._stage_cli,
-         docker_runtime._docker) = originals
+         docker_runtime._docker, runner._process, runner._docker, runner._stage) = originals
 
 
 def main():

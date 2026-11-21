@@ -65,6 +65,17 @@ worker triggers separate fresh Python and Z3-import calibration samples to
 estimate that overhead; they do not isolate solver time. Timings stay outside
 verification evidence bundles.
 
+The profiler also times the runner's `_process`, `_stage`, and `_docker` helpers
+as `runner.process`, `runner.stage` (host runner only; the Docker runner stages
+with an archive), and `runner.docker.<operation>` (such as `create`, `cp`,
+`start`, and `rm`). Polaris Docker calls keep the `docker.*` names. To profile the
+Docker runner, run the **Profile Docker runner** workflow (on demand; it also runs on
+pull requests that change it or the profiler). It verifies the quickstart example,
+prints per-phase counts and timings to the job log, and uploads the trace as an
+artifact. Each Docker call appears twice, as `runner.docker.<operation>` and as the
+`runner.process` call that runs it, and the Docker runner's archive staging and
+artifact extraction are not timed.
+
 ## Regenerate the saved-record corpus
 
 The saved-record corpus lives in `tests/fixtures/records/`, with one directory per
