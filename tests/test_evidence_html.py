@@ -534,3 +534,31 @@ def test_unreadable_acceptance_is_invalid_without_blocking_report(saved, monkeyp
     before = snapshot(state)
     assert "invalid" in acceptance(read(*render()))
     assert snapshot(state) == before
+
+
+def test_report_script_is_allowed_only_by_its_hash(saved):
+    import base64
+    import hashlib
+
+    _, save, render = saved
+    save(record("pass"))
+    doc = read(*render())
+    policy = next(
+        attrs["content"] for tag, attrs in doc.tags
+        if tag == "meta" and attrs.get("http-equiv") == "Content-Security-Policy"
+    )
+    script_policy = next(part.strip() for part in policy.split(";") if "script-src" in part)
+    hashes = {
+        "'sha256-" + base64.b64encode(hashlib.sha256(script.encode()).digest()).decode() + "'"
+        for script in doc.scripts
+    }
+    assert len(doc.scripts) == 1 and hashes
+    assert script_policy.split()[1:] == sorted(hashes)
+    assert "unsafe-inline" not in script_policy
+    # Pinned so a script edit is a deliberate, reviewed change.
+    assert script_policy.split()[1] == "'sha256-1DyyYF+3TH4H2pO0GotiBWUtZXB6ZpY+k8mkUslz+Wg='"
+    assert not any(
+        key.startswith("on") or "javascript:" in (value or "")
+        for _, attrs in doc.tags
+        for key, value in attrs.items()
+    )

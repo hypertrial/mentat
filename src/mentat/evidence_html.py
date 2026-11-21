@@ -1,5 +1,7 @@
 """Offline, allowlisted HTML projection of an intact saved verification run."""
 
+import base64
+import hashlib
 import html
 import os
 import re
@@ -12,6 +14,9 @@ from pathlib import Path
 from . import evidence
 from .evidence_report import claim_groups, decision_source, verdict_lines
 
+# The run report's only script. The page policy allows exactly this text by hash.
+_SCRIPT = r"""const controls=document.getElementById('controls'),search=document.getElementById('search'),filter=document.getElementById('filter'),count=document.getElementById('count'),empty=document.getElementById('empty'),claims=[...document.querySelectorAll('.claim')];controls.hidden=false;count.hidden=false;function update(){let n=0;for(const item of claims){const show=item.dataset.search.includes(search.value.toLowerCase())&&(!filter.value||item.dataset.status===filter.value);item.hidden=!show;if(show)n++;}count.textContent=n+' of '+claims.length+' claims';empty.hidden=n!==0;}search.addEventListener('input',update);filter.addEventListener('change',update);function reveal(hash){if(!/^#claim-[1-9][0-9]*$/.test(hash))return;const target=document.getElementById(hash.slice(1));if(!claims.includes(target))return;search.value='';filter.value='';update();target.open=true;target.scrollIntoView();}document.getElementById('findings').addEventListener('click',event=>{const link=event.target.closest('a');if(link)reveal(link.getAttribute('href')||'');});window.addEventListener('hashchange',()=>reveal(location.hash));update();reveal(location.hash);"""
+_SCRIPT_SHA256 = base64.b64encode(hashlib.sha256(_SCRIPT.encode()).digest()).decode()
 _STATUSES = {"pass", "violation", "incomplete", "skipped"}
 _CASE_STATUSES = {"pass", "fail", "skip", "error"}
 _SAFE_DETAILS = {
@@ -635,7 +640,7 @@ def _render(record, groups, manifest_digest, acceptance):
     )
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'sha256-{_SCRIPT_SHA256}'; base-uri 'none'; form-action 'none'">
 <title>Mentat verification report</title><style>
 :root {{ color-scheme: light; font-family: Aptos, "Segoe UI", "Helvetica Neue", sans-serif; color: #25324b; background: #f5f7fb; }}
 * {{ box-sizing: border-box; }} body {{ margin: 0; line-height: 1.5; }} main {{ max-width: 1120px; margin: auto; padding: 2rem 1rem 4rem; }}
@@ -651,7 +656,7 @@ dl {{ display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: .9rem
 <section class="panel" id="findings"><h2>Primary findings</h2>{findings_html}</section>
 <section class="panel" id="limits"><h2>Verification limits</h2>{limit_html}</section>
 <section id="claims"><h2>Claims</h2>{metadata_html}<div class="controls" id="controls" hidden><label>Search title or ID<input id="search" type="search"></label><label>Status<select id="filter"><option value="">All</option><option value="pass">Pass</option><option value="violation">Violation</option><option value="incomplete">Incomplete</option><option value="skipped">Skipped</option></select></label></div><p id="count" hidden></p><p id="empty" hidden>No matching claims.</p>{"".join(areas)}</section>
-<script>const controls=document.getElementById('controls'),search=document.getElementById('search'),filter=document.getElementById('filter'),count=document.getElementById('count'),empty=document.getElementById('empty'),claims=[...document.querySelectorAll('.claim')];controls.hidden=false;count.hidden=false;function update(){{let n=0;for(const item of claims){{const show=item.dataset.search.includes(search.value.toLowerCase())&&(!filter.value||item.dataset.status===filter.value);item.hidden=!show;if(show)n++;}}count.textContent=n+' of '+claims.length+' claims';empty.hidden=n!==0;}}search.addEventListener('input',update);filter.addEventListener('change',update);function reveal(hash){{if(!/^#claim-[1-9][0-9]*$/.test(hash))return;const target=document.getElementById(hash.slice(1));if(!claims.includes(target))return;search.value='';filter.value='';update();target.open=true;target.scrollIntoView();}}document.getElementById('findings').addEventListener('click',event=>{{const link=event.target.closest('a');if(link)reveal(link.getAttribute('href')||'');}});window.addEventListener('hashchange',()=>reveal(location.hash));update();reveal(location.hash);</script></main></body></html>"""
+<script>{_SCRIPT}</script></main></body></html>"""
 
 
 def _write_html(state, output, content):
