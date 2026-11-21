@@ -1,4 +1,9 @@
-"""Bounded child processes: stdin is never inherited and output is capped by the caller."""
+"""Bounded child processes for the formal runner, behavior runner, Polaris Docker and Colima helpers.
+
+Each child runs in its own session with stdin closed unless given input. A timeout kills
+the whole process group, and so does the return from a call, so no group member survives it.
+Git reads in project.py, the proof checker and Polaris formal.py still call subprocess directly.
+"""
 
 import os
 import resource
@@ -9,13 +14,13 @@ import tempfile
 import time
 
 
-def run(argv, *, output_limit, timeout, cwd=None, env=None, stdin=None, stderr=True, session=True):
+def run(argv, *, output_limit, timeout, cwd=None, env=None, stdin=None, stderr=True):
     """Return (returncode, stdout, stderr) as bytes, with stdout and stderr read from pipes.
 
     `stdin` is a rewound binary file, and DEVNULL when None. A stream longer than
     `output_limit` raises RuntimeError. Past the deadline, TimeoutError is raised, or
     subprocess.TimeoutExpired if the child outlives its closed pipes. `stderr=False`
-    discards stderr without capturing it. `session=False` kills only the child.
+    discards stderr without capturing it.
     """
     process = subprocess.Popen(
         argv,
@@ -24,7 +29,7 @@ def run(argv, *, output_limit, timeout, cwd=None, env=None, stdin=None, stderr=T
         stdin=subprocess.DEVNULL if stdin is None else stdin,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE if stderr else subprocess.DEVNULL,
-        start_new_session=session,
+        start_new_session=True,
     )
     streams = {process.stdout: bytearray()}
     if stderr:
@@ -50,9 +55,11 @@ def run(argv, *, output_limit, timeout, cwd=None, env=None, stdin=None, stderr=T
             code = process.wait(timeout=max(0.01, deadline - time.monotonic()))
             return code, bytes(streams[process.stdout]), bytes(streams.get(process.stderr, b""))
     finally:
-        _kill(process, session)
-        for stream in streams:
-            stream.close()
+        try:
+            _kill(process)
+        finally:
+            for stream in streams:
+                stream.close()
 
 
 def run_to_files(argv, *, file_size_limit, timeout, cwd=None, env=None, stdin=None):
@@ -79,19 +86,17 @@ def run_to_files(argv, *, file_size_limit, timeout, cwd=None, env=None, stdin=No
         try:
             process.communicate(timeout=timeout)
         finally:
-            _kill(process, True)
+            _kill(process)
         out.seek(0)
         err.seek(0)
         return process.returncode, out.read(), err.read()
 
 
-def _kill(process, session):
-    # Kill the whole session so a descendant cannot outlive a timeout or a finished read.
-    if session:
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-    else:
-        process.kill()
-    process.wait()
+def _kill(process):
+    # Kill the whole group, which also stops descendants a finished child left running.
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    finally:
+        process.wait()

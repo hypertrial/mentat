@@ -2,20 +2,19 @@
 
 ## Unreleased
 
-- Run formal, runner, Polaris Docker and Colima child processes through one bounded
-  runner, `mentat.process`. Colima validation no longer inherits the operator's stdin,
-  its timeouts kill the whole process group, and its output is capped at 1 MiB. Clean
-  formal runs and Lean probes use a fresh private 0700 directory as `HOME` and working
-  directory, not the shared temporary folder or the operator's working directory; a Lean
-  toolchain launcher still gets the operator's `HOME` to find its toolchain. The
-  verifier modules changed (`process` is new; `colima`, `project_formal` and `runner`
-  changed), and the Polaris pack digest changes, so approvals, proof campaigns, and
-  pending acceptances must be renewed.
-- Extend the developer runtime profiler to time the runner's process, staging,
-  and Docker CLI helpers (`runner.process`, `runner.stage`, and
-  `runner.docker.<operation>`), and add a **Profile Docker runner**
-  workflow. Developer tooling only: verifier code is unchanged, so approvals and
-  pending acceptances need no renewal.
+- Run the formal runner, behavior runner, Polaris Docker and Colima helpers' child
+  processes through one module, `mentat.process`. Each child runs in its own session
+  with no controlling terminal, and any process left in its group is killed when the
+  call returns. A timeout kills the whole group, and Polaris Docker calls now do too.
+  Colima validation no longer inherits the operator's stdin. Its output is capped at
+  1 MiB per stream, and overflow reports "Colima validation output exceeded limit".
+  Every clean formal run uses a fresh private 0700 directory as `HOME`, and as its
+  working directory where the run does not set its own; the Lean dependency, compile
+  and audit steps keep their staged directory as working directory, with a private
+  `home` inside it. A Lean toolchain launcher still gets the operator's `HOME` to find
+  its toolchain. The verifier modules changed (`process` is new; `colima`,
+  `project_formal` and `runner` changed), and the Polaris pack digest changes, so
+  approvals, proof campaigns, and pending acceptances must be renewed.
 - Allow the HTML run report's script only by its SHA-256 hash in the page policy,
   instead of allowing any inline script.
 - Retry a failed `mentat spec import-openspec` blob batch one file at a time. A file

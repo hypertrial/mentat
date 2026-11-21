@@ -65,13 +65,12 @@ def _docker(context: str, *args: str, timeout: int = _TIMEOUT) -> tuple[int, byt
     if not context or context == "default" or not re.fullmatch(r"[A-Za-z0-9_.-]+", context):
         raise ValueError("an explicit dedicated Docker context is required")
     try:
-        # Stderr is discarded, and only the docker client itself is killed (no new session).
+        # Stderr is discarded; the docker client's process group is killed on timeout.
         code, output, _ = process.run(
             ["docker", "--context", context, *args],
             timeout=timeout,
             output_limit=_MAX_OUTPUT,
             stderr=False,
-            session=False,
         )
     except TimeoutError:
         raise RuntimeError("Docker command timed out") from None

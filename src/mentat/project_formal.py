@@ -36,7 +36,9 @@ def _env(home: str) -> dict[str, str]:
 
 def _run(args, *, input=None, cwd=None, timeout=_TIMEOUT, env=None):
     # A fresh 0700 directory is HOME and cwd unless the caller supplies its own.
-    with tempfile.TemporaryDirectory(prefix="mentat-formal-") as private:
+    with tempfile.TemporaryDirectory(
+        prefix="mentat-formal-", ignore_cleanup_errors=True
+    ) as private:
         with tempfile.TemporaryFile() as stdin:
             if input is not None:
                 stdin.write(input.encode())
@@ -84,7 +86,7 @@ def _probe_lean(executable: str) -> tuple[dict, bool]:
 
 def _toolchain_lean(launcher: str) -> str | None:
     """Ask a toolchain launcher such as elan where the selected Lean is installed."""
-    with tempfile.TemporaryDirectory(prefix="mentat-lean-") as empty:
+    with tempfile.TemporaryDirectory(prefix="mentat-lean-", ignore_cleanup_errors=True) as empty:
         # The launcher finds its toolchains through the operator's HOME, so pass only the
         # variables it needs. A fresh directory keeps the project's toolchain file out of
         # the lookup.
