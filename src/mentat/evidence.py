@@ -9,6 +9,10 @@ import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 
+from pydantic import ValidationError
+
+from . import records
+
 # canonical's helpers are re-exported here: callers use evidence.json_bytes and friends.
 from .canonical import STATUSES, decode_json, digest, json_bytes, status
 from .claims import code_span, inline_prose
@@ -360,25 +364,15 @@ def source_qualifications(record: dict) -> list[dict]:
     claims = {claim["id"] for claim in record["claims"]}
     declared = {}
     for item in inventory:
+        try:
+            records.SourceMutationCheck.model_validate(item)
+        except ValidationError as exc:
+            raise ValueError("Invalid source qualification declaration") from exc
         if (
-            not isinstance(item, dict)
-            or not isinstance(item.get("id"), str)
-            or not item["id"]
-            or item["id"] in declared
-            or not isinstance(item.get("claim"), str)
+            item["id"] in declared
             or item["claim"] not in claims
-            or not isinstance(item.get("check"), str)
-            or not isinstance(item.get("required_cases"), list)
-            or not item["required_cases"]
-            or any(not isinstance(case, str) for case in item["required_cases"])
             or len(set(item["required_cases"])) != len(item["required_cases"])
-            or item.get("expected_case") not in item["required_cases"]
-            or not isinstance(item.get("violation_exit_codes"), list)
-            or not item["violation_exit_codes"]
-            or any(
-                type(code) is not int or not 1 <= code <= 124
-                for code in item["violation_exit_codes"]
-            )
+            or item["expected_case"] not in item["required_cases"]
         ):
             raise ValueError("Invalid source qualification declaration")
         declared[item["id"]] = item
@@ -423,7 +417,11 @@ def source_qualifications(record: dict) -> list[dict]:
             raise ValueError("Invalid source qualification result")
         observed_ids.add(result["id"])
         item = declared[result["id"]]
-        binding = result.get("bindings")
+        try:
+            records.SourceQualification.model_validate(result)
+        except ValidationError as exc:
+            raise ValueError("Source qualification bindings or outcome are invalid") from exc
+        binding = result["bindings"]
         expected_binding = {
             key: record[key]
             for key in ("run_id", "revision", "snapshot_digest", "base", "contract_digest")
@@ -433,24 +431,15 @@ def source_qualifications(record: dict) -> list[dict]:
             approved_manifest_sha256=record["source_mutation_manifest_sha256"],
         )
         if (
-            type(result.get("schema_version")) is not int
-            or result["schema_version"] != 1
-            or any(result.get(key) != item[key] for key in ("claim", "check", "expected_case"))
-            or not isinstance(binding, dict)
+            any(result[key] != item[key] for key in ("claim", "check", "expected_case"))
             or any(binding.get(key) != value for key, value in expected_binding.items())
             or binding.get("runtime")
             != {"runner": record["runner"], "sha256": digest(json_bytes(record["runtime"]))}
-            or not isinstance(result.get("outcome"), str)
             or result["outcome"] not in {"killed", "survived", "error"}
-            or result.get("status")
+            or result["status"]
             != {"killed": "pass", "survived": "violation", "error": "incomplete"}.get(
-                result.get("outcome")
+                result["outcome"]
             )
-            or type(result.get("applied_count")) is not int
-            or result["applied_count"] not in (0, 1)
-            or not isinstance(result.get("detail"), str)
-            or result.get("assertion_failed") is not None
-            and type(result["assertion_failed"]) is not bool
         ):
             raise ValueError("Source qualification bindings or outcome are invalid")
         check = result.get("check_result")

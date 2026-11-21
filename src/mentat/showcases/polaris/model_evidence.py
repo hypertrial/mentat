@@ -30,6 +30,7 @@ def pack_digest(spec: Spec) -> str:
         "process.py",
         "project.py",
         "project_formal.py",
+        "records.py",
     ):
         files[f"mentat/{name}"] = file_digest(root.parents[1] / name)
     return digest(json_bytes(inputs))

@@ -324,6 +324,14 @@ def test_invalid_acceptance_binding_is_visible_but_does_not_block_render(saved, 
     assert snapshot(state) == before
 
 
+@pytest.mark.parametrize("field", ["run_id", "revision", "contract_digest", "manifest_digest", "accepted_at"])
+def test_non_string_acceptance_binding_is_invalid(saved, field):
+    state, save, render = saved
+    save()
+    receipt(state, **{field: 1})
+    assert "invalid" in acceptance(read(*render()))
+
+
 @pytest.mark.parametrize("case", ["missing", "malformed", "directory", "symlink", "nonpassing"])
 def test_acceptance_problems_do_not_make_report_accepted(saved, case, tmp_path):
     state, save, render = saved

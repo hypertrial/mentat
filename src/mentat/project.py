@@ -39,6 +39,7 @@ VERIFIER_MODULES = (
     "proof_checker",
     "proof_lean",
     "qualification",
+    "records",
     "runner",
     "spec_review",
 )
