@@ -419,11 +419,11 @@ def verify(
             }:
                 raise ValueError("Proof recheck returned unexpected formal obligations")
             models = [by_id.get(item["id"], item) for item in models]
-            from .runner import _MAX_RUN_OUTPUT
+            from .runner import MAX_RUN_OUTPUT
 
             # Source evidence is required; proof diagnostics are optional.
             retained = {}
-            remaining = _MAX_RUN_OUTPUT
+            remaining = MAX_RUN_OUTPUT
             for model in checked:
                 filename = model.get("artifacts", {}).get("proof-source")
                 if filename:
@@ -458,7 +458,7 @@ def verify(
         if evidence.status(models, incomplete_first=True) == "pass":
             runtime = runner_info(project, context)
             if artifacts:
-                from .runner import _MAX_RUN_OUTPUT
+                from .runner import MAX_RUN_OUTPUT
 
                 behavior, behavior_artifacts = run_behavior(
                     project,
@@ -466,7 +466,7 @@ def verify(
                     context,
                     runtime,
                     run_id,
-                    output_budget=_MAX_RUN_OUTPUT - sum(map(len, artifacts.values())),
+                    output_budget=MAX_RUN_OUTPUT - sum(map(len, artifacts.values())),
                 )
             else:
                 behavior, behavior_artifacts = run_behavior(
@@ -496,7 +496,7 @@ def verify(
                 run_id,
                 behavior,
                 output_budget=max(
-                    0, behavior_runner._MAX_RUN_OUTPUT - sum(map(len, artifacts.values()))
+                    0, behavior_runner.MAX_RUN_OUTPUT - sum(map(len, artifacts.values()))
                 ),
             )
             artifacts.update(mutation_artifacts)
@@ -708,15 +708,17 @@ def summarize_pr(
     ] = "unavailable",
 ) -> None:
     """Print a Markdown PR summary; preserve existing artifact access controls."""
-    from .evidence_html import _accepted, _validate
+    from .evidence_html import acceptance_status, validate_record
     from .evidence_report import pr_summary
 
     try:
         state = evidence.state_directory(ctx.obj["state"], create=False)
         _, record, digest = evidence.read_run_snapshot(state, run_id)
-        _validate(record)
+        validate_record(record)
         typer.echo(
-            pr_summary(record, head, report_url, _accepted(state, record, digest), ci_status)
+            pr_summary(
+                record, head, report_url, acceptance_status(state, record, digest), ci_status
+            )
         )
     except _USER_ERRORS as exc:
         _error(exc, False)

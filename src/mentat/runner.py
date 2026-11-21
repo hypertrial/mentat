@@ -19,11 +19,11 @@ from pathlib import Path, PurePosixPath
 from . import process
 from .colima import validate_colima
 from .evidence import decode_json
-from .project import CHECKS_PREFIX, _validate_staged
+from .project import CHECKS_PREFIX, validate_staged
 
 _MAX_OUTPUT = 1024 * 1024
 _MAX_ARTIFACT = 1024 * 1024
-_MAX_RUN_OUTPUT = 16 * 1024 * 1024
+MAX_RUN_OUTPUT = 16 * 1024 * 1024
 _DOCKER_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 
@@ -264,7 +264,7 @@ def _relative(name):
 
 
 def _stage(root, files, *, trusted=False):
-    entries, links = _validate_staged(files, trusted=trusted)
+    entries, links = validate_staged(files, trusted=trusted)
     root.mkdir(mode=0o755)
     for name, (mode, data) in entries.items():
         if mode == 0o120000:
@@ -286,8 +286,8 @@ def _stage(root, files, *, trusted=False):
 
 
 def _stage_archive(archive, candidate_files, trusted_files):
-    candidate_entries, links = _validate_staged(candidate_files)
-    trusted_entries, _ = _validate_staged(trusted_files, trusted=True)
+    candidate_entries, links = validate_staged(candidate_files)
+    trusted_entries, _ = validate_staged(trusted_files, trusted=True)
     with tarfile.open(fileobj=archive, mode="w") as tar:
         directories = set()
 
@@ -377,7 +377,7 @@ def run_behavior(
     project, snapshot, context, info, run_id, *, output_budget=None
 ) -> tuple[list[dict], dict[str, bytes]]:
     if output_budget is not None and (
-        type(output_budget) is not int or not 0 <= output_budget <= _MAX_RUN_OUTPUT
+        type(output_budget) is not int or not 0 <= output_budget <= MAX_RUN_OUTPUT
     ):
         raise ValueError("Invalid remaining run output budget")
     names = (
@@ -389,7 +389,7 @@ def run_behavior(
     )
     inherited = {name: os.environ.get(name) for name in names}
     results, files = [], {}
-    remaining = _MAX_RUN_OUTPUT if output_budget is None else output_budget
+    remaining = MAX_RUN_OUTPUT if output_budget is None else output_budget
     if project.runner == "docker":
         context = info["context"]
     elif "path" not in info:

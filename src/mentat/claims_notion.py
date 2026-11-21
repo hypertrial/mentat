@@ -10,7 +10,7 @@ from urllib.parse import parse_qsl, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 from uuid import UUID
 
-from .claims import _code_span, _prose
+from .claims import code_span, escape_prose
 
 _START = "Source: working-tree draft"
 _END = "---"
@@ -215,9 +215,9 @@ def _control_summary(line: str) -> str | None:
     if int(code) > 124:
         return None
     if case is None:
-        return prefix + _code_span(code)
+        return prefix + code_span(code)
     if value := _selector_value(case):
-        return prefix + _code_span(code) + " and failure of " + _code_span(value)
+        return prefix + code_span(code) + " and failure of " + code_span(value)
     return None
 
 
@@ -235,17 +235,17 @@ def _normalized(markdown: str) -> list[str]:
             None,
         ):
             if (value := _selector_value(line.removeprefix(prefix))) is not None:
-                line = prefix + _code_span(value)
+                line = prefix + code_span(value)
         elif control := _control_summary(line):
             line = control
         elif match := _CITATION.fullmatch(line):
             if value := _selector_value(match[2]):
-                line = match[1] + _code_span(value) + _CODE.sub(r"`\1`", match[3])
+                line = match[1] + code_span(value) + _CODE.sub(r"`\1`", match[3])
         elif match := _LEGACY_SELECTOR.fullmatch(line):
             prefix, selector = match.groups()
             value = _selector_value(selector)
             if value is not None:
-                selector = _prose(value)
+                selector = escape_prose(value)
             else:
                 selector = _escape_closing_angles(selector)
             line = _CODE.sub(r"`\1`", prefix) + selector
@@ -475,7 +475,7 @@ def _publish_body(body: str) -> str:
         prefix, selector = match.groups()
         # Historical files store single-line selectors escaped as Markdown prose.
         value = re.sub(r"\\(.)", r"\1", selector)
-        return prefix + _code_span(value) if value and _prose(value) == selector else match[0]
+        return prefix + code_span(value) if value and escape_prose(value) == selector else match[0]
 
     return "\n".join(_LEGACY_SELECTOR.sub(selector_as_code, line) for line in body.split("\n"))
 

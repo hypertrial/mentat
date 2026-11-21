@@ -15,8 +15,8 @@ from urllib.parse import urlsplit
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .canonical import decode_json
-from .gitio import _MAX_FILES, _MAX_PATH, _MAX_TOTAL, _ls_tree, _read_blobs, _revision, _root
-from .project_formal import _NAME as lean_name
+from .gitio import MAX_FILES, MAX_PATH, MAX_TOTAL, ls_tree, read_blobs, repo_root, verify_revision
+from .project_formal import LEAN_NAME_PATTERN
 
 CHECKS_PREFIX = "{checks}/"
 # Presentation modules stay out of the verifier digest, and only cli may import them.
@@ -42,14 +42,14 @@ VERIFIER_MODULES = (
     "runner",
     "spec_review",
 )
-_NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}\Z")
+NAME_PATTERN = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}\Z")
 _IMAGE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/:-]*@sha256:[0-9a-f]{64}\Z")
 
 
-def _path(value: str) -> str:
+def safe_relative_path(value: str) -> str:
     if (
         not value
-        or len(value) > _MAX_PATH
+        or len(value) > MAX_PATH
         or "\\" in value
         or any(ord(c) < 32 for c in value)
         or any(p.casefold() in ("", ".", "..", ".git") for p in value.split("/"))
@@ -72,7 +72,7 @@ class ClaimCitation(_Model):
 
     @model_validator(mode="after")
     def valid_reference(self):
-        _path(self.path)
+        safe_relative_path(self.path)
         if len(self.commit) != len(self.blob) or self.end_line < self.start_line:
             raise ValueError("invalid citation object IDs or line range")
         return self
@@ -90,7 +90,7 @@ class EvidenceRef(_Model):
     @model_validator(mode="after")
     def valid_reference(self):
         if (
-            not _NAME.fullmatch(self.check_id)
+            not NAME_PATTERN.fullmatch(self.check_id)
             or len(set(self.case_ids)) != len(self.case_ids)
             or any(
                 not case or len(case) > 256 or any(unicodedata.category(c) == "Cc" for c in case)
@@ -110,7 +110,7 @@ class Bound(_Model):
 
     @model_validator(mode="after")
     def valid_bound(self):
-        if not _NAME.fullmatch(self.id):
+        if not NAME_PATTERN.fullmatch(self.id):
             raise ValueError("invalid bound ID")
         if self.kind == "enforced":
             if not self.checks or "assumption" in self.model_fields_set:
@@ -284,7 +284,7 @@ class Formal(_Model):
                 raise ValueError(
                     "lean-comparator requires theorem and explicit policy and forbids z3 fields"
                 )
-            if not lean_name.fullmatch(self.theorem):
+            if not LEAN_NAME_PATTERN.fullmatch(self.theorem):
                 raise ValueError("lean-comparator requires a plain qualified Lean theorem name")
             if len(set(self.allowed_imports)) != len(self.allowed_imports) or any(
                 not re.fullmatch(r"(?:Init|Std|Lean)(?:\.[A-Za-z_][A-Za-z0-9_']*)*", name)
@@ -402,7 +402,7 @@ class Behavior(_Model):
     @field_validator("artifacts")
     @classmethod
     def artifact_names(cls, value):
-        if len(set(value)) != len(value) or any(not _NAME.fullmatch(name) for name in value):
+        if len(set(value)) != len(value) or any(not NAME_PATTERN.fullmatch(name) for name in value):
             raise ValueError("artifact names must be distinct flat filenames")
         return value
 
@@ -417,7 +417,7 @@ class HostRequirements(_Model):
     def executable_names(cls, value):
         if len(set(value)) != len(value) or any(
             name in ("", ".", "..", "/")
-            or len(name) > _MAX_PATH
+            or len(name) > MAX_PATH
             or any(unicodedata.category(c) == "Cc" for c in name)
             or (
                 "/" in name
@@ -452,7 +452,7 @@ class Contract(_Model):
     docker_image: str | None = None
     allow_host: bool = False
     review: Review | None = None
-    base_files: list[str] = Field(default_factory=list, max_length=_MAX_FILES)
+    base_files: list[str] = Field(default_factory=list, max_length=MAX_FILES)
     host_requirements: HostRequirements | None = None
     source_mutations: str | None = Field(default=None, exclude_if=lambda value: value is None)
 
@@ -462,7 +462,7 @@ class Contract(_Model):
         if len(set(value)) != len(value):
             raise ValueError("duplicate base file")
         for path in value:
-            _path(path)
+            safe_relative_path(path)
             if any(unicodedata.category(c) == "Cc" for c in path):
                 raise ValueError("invalid base file path")
             if path.split("/", 1)[0].casefold() == ".mentat":
@@ -490,7 +490,7 @@ class Contract(_Model):
         elif not _IMAGE.fullmatch(self.docker_image):
             raise ValueError("docker image must be pinned by sha256 digest")
         ids = [item.id for group in (self.claims, self.formal, self.behavior) for item in group]
-        if any(not _NAME.fullmatch(i) for i in ids) or len(set(ids)) != len(ids):
+        if any(not NAME_PATTERN.fullmatch(i) for i in ids) or len(set(ids)) != len(ids):
             raise ValueError("IDs must be safe and unique")
         claims = {item.id for item in self.claims}
         if self.review is not None and self.review.groups is not None:
@@ -545,7 +545,7 @@ class Contract(_Model):
             ):
                 raise ValueError("deviation must reference an existing claim citation")
         if self.source_mutations is not None:
-            _path(self.source_mutations)
+            safe_relative_path(self.source_mutations)
         return self
 
 
@@ -570,11 +570,11 @@ class Project:
 def _tree_records(root: Path, revision: str, *, approved: bool) -> Iterator[bytes]:
     deadline = time.monotonic() + 60
     if approved:
-        yield from _ls_tree(root, revision, "-rtz", [b".mentat"], deadline)
+        yield from ls_tree(root, revision, "-rtz", [b".mentat"], deadline)
         return
 
     # ls-tree accepts literal paths but cannot exclude a subtree by pathspec.
-    with closing(_ls_tree(root, revision, "-z", [], deadline)) as roots:
+    with closing(ls_tree(root, revision, "-z", [], deadline)) as roots:
         scope = []
         size = 0
         for record in roots:
@@ -583,22 +583,22 @@ def _tree_records(root: Path, revision: str, *, approved: bool) -> Iterator[byte
                 continue
             if b"/" in raw_path:
                 raise ValueError("invalid Git root entry")
-            _git_path(raw_path)
+            safe_git_path(raw_path)
             pathspec = b":(literal)" + raw_path
             weight = len(pathspec) + 9
             if size + weight > 32_768:
-                yield from _ls_tree(root, revision, "-rtz", scope, deadline)
+                yield from ls_tree(root, revision, "-rtz", scope, deadline)
                 scope = []
                 size = 0
             scope.append(pathspec)
             size += weight
         if scope:
-            yield from _ls_tree(root, revision, "-rtz", scope, deadline)
+            yield from ls_tree(root, revision, "-rtz", scope, deadline)
 
 
-def _git_path(raw_path: bytes) -> str:
+def safe_git_path(raw_path: bytes) -> str:
     try:
-        return _path(raw_path.decode("utf-8"))
+        return safe_relative_path(raw_path.decode("utf-8"))
     except UnicodeError as exc:
         raise ValueError("non-UTF-8 tree path") from exc
 
@@ -612,7 +612,7 @@ def _tree_entries(
     for record in records:
         meta, raw_path = record.split(b"\t", 1)
         mode, kind, oid = meta.split(b" ")
-        path = _git_path(raw_path)
+        path = safe_git_path(raw_path)
         parent, _, name = raw_path.rpartition(b"/")
         while len(parents) > 1 and parents[-1][0] != parent:
             parents.pop()
@@ -631,7 +631,7 @@ def _tree_entries(
         ):
             raise ValueError(f"unsupported Git entry: {path}")
         entries[path] = (0o120000 if mode == b"120000" else int(mode, 8) & 0o777, oid)
-        if len(entries) > _MAX_FILES:
+        if len(entries) > MAX_FILES:
             raise ValueError("too many files")
     return entries
 
@@ -639,10 +639,10 @@ def _tree_entries(
 def _tree(root: Path, revision: str, *, approved: bool) -> dict[str, tuple[int, bytes]]:
     with closing(_tree_records(root, revision, approved=approved)) as listing:
         entries = _tree_entries(listing, allow_links=not approved)
-    return _read_blobs(root, entries)
+    return read_blobs(root, entries)
 
 
-def _digest(files: dict[str, tuple[int, bytes]]) -> str:
+def tree_digest(files: dict[str, tuple[int, bytes]]) -> str:
     digest = hashlib.sha256()
     for path, (mode, content) in sorted(files.items()):
         for item in (path.encode(), str(mode).encode(), content):
@@ -677,12 +677,12 @@ def _verifier_files() -> dict[str, tuple[int, bytes]]:
     return files
 
 
-def _validate_staged(files, *, trusted=False):
+def validate_staged(files, *, trusted=False):
     entries = {}
     directories = {""}
     seen = {}
     for name, entry in files.items():
-        _path(name)
+        safe_relative_path(name)
         parts = name.split("/")
         mode, data = (0o644, entry) if trusted else entry
         if mode not in ((0o644, 0o755) if trusted else (0o644, 0o755, 0o120000)) or not isinstance(
@@ -742,30 +742,30 @@ def _validate_staged(files, *, trusted=False):
 
 
 def snapshot(root: Path, rev: str) -> Snapshot:
-    root = _root(root)
-    revision = _revision(root, rev)
+    root = repo_root(root)
+    revision = verify_revision(root, rev)
     files = _tree(root, revision, approved=False)
     if any(mode == 0o120000 for mode, _ in files.values()):
-        _validate_staged(files)
-    return Snapshot(revision, _digest(files), files)
+        validate_staged(files)
+    return Snapshot(revision, tree_digest(files), files)
 
 
 def _selected_entries(
     root: Path, revision: str, scope: list[bytes], deadline: float, entries: dict
 ):
-    with closing(_ls_tree(root, revision, "-z", scope, deadline)) as records:
+    with closing(ls_tree(root, revision, "-z", scope, deadline)) as records:
         for record in records:
             meta, raw_path = record.split(b"\t", 1)
             mode, kind, oid = meta.split(b" ")
-            path = _git_path(raw_path)
+            path = safe_git_path(raw_path)
             if mode not in (b"100644", b"100755") or kind != b"blob" or path in entries:
                 raise ValueError(f"unsupported base file: {path}")
             entries[path] = (int(mode, 8) & 0o777, oid)
 
 
 def contract_inputs(repo: Path, base: str) -> tuple[Path, str, Contract, dict[str, bytes]]:
-    root = _root(repo)
-    revision = _revision(root, base)
+    root = repo_root(repo)
+    revision = verify_revision(root, base)
     tree = _tree(root, revision, approved=True)
     files = {
         p[len(".mentat/") :]: data for p, (_, data) in tree.items() if p.startswith(".mentat/")
@@ -790,11 +790,11 @@ def contract_inputs(repo: Path, base: str) -> tuple[Path, str, Contract, dict[st
         _selected_entries(root, revision, scope, deadline, entries)
         if set(entries) != set(contract.base_files):
             raise ValueError("base file is absent or not a regular tracked file")
-        selected = _read_blobs(root, entries)
+        selected = read_blobs(root, entries)
         if (
-            len(files) + len(selected) > _MAX_FILES
+            len(files) + len(selected) > MAX_FILES
             or sum(map(len, files.values())) + sum(len(data) for _, data in selected.values())
-            > _MAX_TOTAL
+            > MAX_TOTAL
         ):
             raise ValueError("combined Git inputs exceed size limit")
         files.update({f"base/{path}": data for path, (_, data) in selected.items()})
@@ -815,7 +815,7 @@ def load_project(repo: Path, base: str, runner: str) -> Project:
         raise ValueError("runner is not allowed by contract")
     for check in contract.formal:
         for name in (check.source, check.counterexample):
-            if name is not None and _path(name) not in files:
+            if name is not None and safe_relative_path(name) not in files:
                 raise ValueError(f"missing approved file: {name}")
     for check in contract.behavior:
         argv = check.effective_argv()
@@ -826,7 +826,7 @@ def load_project(repo: Path, base: str, runner: str) -> Project:
                 raise ValueError("invalid behavior argument")
             if (
                 arg.startswith(CHECKS_PREFIX)
-                and _path(arg.removeprefix(CHECKS_PREFIX)) not in files
+                and safe_relative_path(arg.removeprefix(CHECKS_PREFIX)) not in files
             ):
                 raise ValueError("invalid approved checks path")
     if contract.source_mutations is not None:
@@ -837,13 +837,13 @@ def load_project(repo: Path, base: str, runner: str) -> Project:
         from .qualification import approved_mutations
 
         approved_mutations(contract, files)
-    verifier_digest = _digest(_verifier_files())
+    verifier_digest = tree_digest(_verifier_files())
     binding = hashlib.sha256()
     for value in (
         str(root),
         revision,
         runner,
-        _digest({p: (0o644, v) for p, v in files.items()}),
+        tree_digest({p: (0o644, v) for p, v in files.items()}),
         verifier_digest,
     ):
         data = value.encode()

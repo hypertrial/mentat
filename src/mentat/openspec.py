@@ -9,8 +9,8 @@ from pathlib import Path
 
 from markdown_it import MarkdownIt
 
-from .gitio import _MAX_FILES, _MAX_TOTAL, _ls_tree, _read_blobs, _revision, _root
-from .project import _git_path
+from .gitio import MAX_FILES, MAX_TOTAL, ls_tree, read_blobs, repo_root, verify_revision
+from .project import safe_git_path
 
 
 def _read_failure(exc: Exception) -> str:
@@ -19,19 +19,19 @@ def _read_failure(exc: Exception) -> str:
 
 
 def import_spec(repo: Path, base: str) -> dict:
-    root = _root(repo)
-    revision = _revision(root, base)
+    root = repo_root(repo)
+    revision = verify_revision(root, base)
     diagnostics = []
     claims = []
     entries = {}
     deadline = time.monotonic() + 60
 
     def diagnostic(path, line, detail):
-        if len(diagnostics) < _MAX_FILES:
+        if len(diagnostics) < MAX_FILES:
             diagnostics.append({"path": path, "line": line, "detail": detail})
 
     with closing(
-        _ls_tree(root, revision, "-rtz", [b":(literal)openspec/specs"], deadline)
+        ls_tree(root, revision, "-rtz", [b":(literal)openspec/specs"], deadline)
     ) as records:
         for record in records:
             meta, raw_path = record.split(b"\t", 1)
@@ -41,7 +41,7 @@ def import_spec(repo: Path, base: str) -> dict:
             if not (linked or is_spec or (raw_path == b"openspec/specs" and kind != b"tree")):
                 continue
             try:
-                path = _git_path(raw_path)
+                path = safe_git_path(raw_path)
             except ValueError:
                 diagnostic(raw_path.decode("utf-8", "backslashreplace"), 1, "unsafe spec path")
                 continue
@@ -52,7 +52,7 @@ def import_spec(repo: Path, base: str) -> dict:
             ):
                 diagnostic(path, 1, "unsupported spec entry")
                 continue
-            if len(entries) >= _MAX_FILES:
+            if len(entries) >= MAX_FILES:
                 diagnostic(path, 1, "too many spec files")
                 break
             entries[path] = (int(mode, 8) & 0o777, oid)
@@ -68,7 +68,7 @@ def import_spec(repo: Path, base: str) -> dict:
                 yield batch[0][0], None, None, "spec import exceeded time limit", True
                 return
             try:
-                blobs = _read_blobs(root, dict(batch))
+                blobs = read_blobs(root, dict(batch))
             except (ValueError, OSError, subprocess.SubprocessError) as exc:
                 if len(batch) == 1:
                     yield batch[0][0], None, None, _read_failure(exc), False
@@ -80,7 +80,7 @@ def import_spec(repo: Path, base: str) -> dict:
                         outcomes.append((path, None, None, "spec import exceeded time limit", True))
                         break
                     try:
-                        data = _read_blobs(root, {path: entry})[path][1]
+                        data = read_blobs(root, {path: entry})[path][1]
                     except (ValueError, OSError, subprocess.SubprocessError) as file_exc:
                         outcomes.append((path, None, None, _read_failure(file_exc), False))
                     else:
@@ -109,7 +109,7 @@ def import_spec(repo: Path, base: str) -> dict:
             break
         try:
             total += len(data)
-            if total > _MAX_TOTAL:
+            if total > MAX_TOTAL:
                 diagnostic(path, 1, "spec files exceed total size limit")
                 break
             source = data.decode("utf-8")

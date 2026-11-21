@@ -4,7 +4,7 @@ import json
 from collections import Counter
 from urllib.parse import quote, urlsplit
 
-from .claims import _code_span, _inline_prose, provenance_lines
+from .claims import code_span, inline_prose, provenance_lines
 from .command import visible_text
 from .evidence import acceptable, qualification_status, source_qualifications, status
 
@@ -49,7 +49,7 @@ def pr_summary(record, head, report_url, acceptance, ci_status="unavailable"):
         f"- Lightweight CI (host reported): **{ci_status}**.\n"
         f"- Full saved verification: **{record['status']}**, run `{record['run_id']}`.\n"
         f"{qualification}"
-        f"- Acceptance for this saved revision: **{_inline_prose(visible_text(acceptance))}**.\n"
+        f"- Acceptance for this saved revision: **{inline_prose(visible_text(acceptance))}**.\n"
         f"- [Review the evidence report]({link}).\n\n"
         "Model proofs, tested correspondence and qualification remain separate evidence.\n"
     )
@@ -169,16 +169,16 @@ def _artifact_links(check: dict) -> list[str]:
     refs = [(stream, check[stream]) for stream in ("stdout", "stderr") if stream in check]
     refs.extend(check.get("artifacts", {}).items())
     return [
-        f"[{_inline_prose(label)}](./{quote(filename, safe='')})"
+        f"[{inline_prose(label)}](./{quote(filename, safe='')})"
         for label, filename in refs
         if filename not in {".", ".."} and "/" not in filename and "\\" not in filename
     ]
 
 
 def _check_lines(check: dict, label: str) -> list[str]:
-    text = f"{label} {_code_span(check['id'])} · **{check['status']}**"
+    text = f"{label} {code_span(check['id'])} · **{check['status']}**"
     if check.get("detail"):
-        text += f" · {_inline_prose(check['detail'])}"
+        text += f" · {inline_prose(check['detail'])}"
     lines = [f"- {text}"]
     observations = {}
     formal = check.get("evidence", {})
@@ -192,7 +192,7 @@ def _check_lines(check: dict, label: str) -> list[str]:
         ):
             value = formal.get(key)
             lines.append(
-                f"  - {label} {_code_span(value if isinstance(value, str) else 'unavailable')}"
+                f"  - {label} {code_span(value if isinstance(value, str) else 'unavailable')}"
             )
         if check["status"] != "pass":
             lines.append(
@@ -211,12 +211,12 @@ def _check_lines(check: dict, label: str) -> list[str]:
         value = json.dumps(observation, ensure_ascii=True, sort_keys=True)
         if len(value) > 512:
             value = value[:512] + "…"
-        lines.append(f"  - {key.capitalize()} {_code_span(value)}")
+        lines.append(f"  - {key.capitalize()} {code_span(value)}")
     if "command_status" in check:
         lines.append(f"  - Command · {check['command_status']} · exit {check['exit_code']}")
     cases = check.get("case_results", {})
     for case in check.get("required_cases", sorted(cases)):
-        lines.append(f"  - Case {_code_span(case)} · {cases.get(case, 'missing')}")
+        lines.append(f"  - Case {code_span(case)} · {cases.get(case, 'missing')}")
     if links := _artifact_links(check):
         lines.append("  - " + " · ".join(links))
     return lines
@@ -230,7 +230,7 @@ def project_report(record: dict) -> list[str]:
     lines = [
         f"- Contract base `{record['base']}`",
         f"- Runner `{record['runner']}`",
-        *([f"- Approval source · {_inline_prose(visible_text(source))}"] if source else []),
+        *([f"- Approval source · {inline_prose(visible_text(source))}"] if source else []),
         f"- Claim outcomes · {claim_summary(groups)}",
         *(f"- {line}" for line in verdict_lines(record)),
     ]
@@ -264,30 +264,30 @@ def project_report(record: dict) -> list[str]:
                     heading = (
                         "Qualification failure" if outcome == "violation" else "Qualification gap"
                     )
-                lines.extend(("", f"## {heading}", "", f"Claim {_code_span(claim['id'])}"))
+                lines.extend(("", f"## {heading}", "", f"Claim {code_span(claim['id'])}"))
                 lines.extend(_check_lines(check, "Check"))
     if record.get("behavior_skipped"):
         lines.extend(("", "Behavior checks were skipped because formal checks did not pass."))
     if limits := review.get("verification_limits"):
         lines.extend(("", "## Verification limits", ""))
-        lines.extend(f"- {_inline_prose(limit)}" for limit in limits)
+        lines.extend(f"- {inline_prose(limit)}" for limit in limits)
     for title, claims in groups:
-        lines.extend(("", f"## {_inline_prose(title)}"))
+        lines.extend(("", f"## {inline_prose(title)}"))
         for claim in claims:
             claim_id = claim["id"]
             heading = (
-                _inline_prose(titles[claim_id]) if claim_id in titles else _code_span(claim_id)
+                inline_prose(titles[claim_id]) if claim_id in titles else code_span(claim_id)
             )
             lines.extend(("", f"### {heading} · {claim['status']}", ""))
             if claim_id in titles:
-                lines.extend((f"Claim {_code_span(claim_id)}", ""))
-            lines.append(_inline_prose(claim["statement"]))
+                lines.extend((f"Claim {code_span(claim_id)}", ""))
+            lines.append(inline_prose(claim["statement"]))
             if "qualification_status" in claim:
                 lines.append(f"- Source qualification · {claim['qualification_status']}")
             if provenance := claim.get("provenance"):
                 lines.extend(("", *provenance_lines(provenance)))
             lines.extend(
-                f"- Assumption · {_inline_prose(item)}" for item in claim.get("assumptions", [])
+                f"- Assumption · {inline_prose(item)}" for item in claim.get("assumptions", [])
             )
             assurance = claim.get("assurance")
             if assurance is not None:
@@ -299,37 +299,37 @@ def project_report(record: dict) -> list[str]:
                     ("Reachability witness", "witness_checks"),
                 ):
                     for ref in assurance.get(key, []):
-                        cases = ", ".join(_code_span(case) for case in ref.get("case_ids", []))
+                        cases = ", ".join(code_span(case) for case in ref.get("case_ids", []))
                         lines.append(
-                            f"- {label} · {_code_span(ref['check_id'])}"
+                            f"- {label} · {code_span(ref['check_id'])}"
                             + (f" · Cases {cases}" if cases else "")
                         )
                 for bound in assurance.get("bounds", []):
                     lines.append(
-                        f"- Bound {_code_span(bound['id'])} · {bound['kind']} · {_inline_prose(bound['statement'])}"
+                        f"- Bound {code_span(bound['id'])} · {bound['kind']} · {inline_prose(bound['statement'])}"
                     )
                     if bound.get("assumption"):
-                        lines.append(f"  Assumption · {_inline_prose(bound['assumption'])}")
+                        lines.append(f"  Assumption · {inline_prose(bound['assumption'])}")
                     else:
                         lines.append(
                             "  Checks · "
-                            + ", ".join(_code_span(ref["check_id"]) for ref in bound["checks"])
+                            + ", ".join(code_span(ref["check_id"]) for ref in bound["checks"])
                         )
                 for exclusion in assurance.get("exclusions", []):
                     lines.append(
-                        f"- Exclusion · {_inline_prose(exclusion['scenario'])}: {_inline_prose(exclusion['reason'])}"
+                        f"- Exclusion · {inline_prose(exclusion['scenario'])}: {inline_prose(exclusion['reason'])}"
                     )
                     lines.append(
-                        f"  Impact · {_inline_prose(exclusion['effect'])} · Claims "
-                        + ", ".join(_code_span(ident) for ident in exclusion["affected_claims"])
+                        f"  Impact · {inline_prose(exclusion['effect'])} · Claims "
+                        + ", ".join(code_span(ident) for ident in exclusion["affected_claims"])
                     )
                 for deviation in assurance.get("deviations", []):
                     citation = deviation["citation"]
                     lines.append(
-                        f"- Deviation · {_inline_prose(deviation['rationale'])} · {_inline_prose(deviation['effect'])}"
+                        f"- Deviation · {inline_prose(deviation['rationale'])} · {inline_prose(deviation['effect'])}"
                     )
                     lines.append(
-                        f"  Cited source · {_code_span(citation['path'])} · {_code_span(citation['commit'])} · line {citation['start_line']}"
+                        f"  Cited source · {code_span(citation['path'])} · {code_span(citation['commit'])} · line {citation['start_line']}"
                     )
             lines.append("")
             for check in claim["formal"]:
@@ -347,5 +347,5 @@ def project_report(record: dict) -> list[str]:
                 lines.extend(
                     _check_lines(check, f"Source mutation ({check.get('outcome', 'skipped')})")
                 )
-                lines.append(f"- Expected failing case: {_code_span(check['expected_case'])}")
+                lines.append(f"- Expected failing case: {code_span(check['expected_case'])}")
     return lines

@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Make the names that Mentat modules share public, with no runtime behavior change. `gitio`
+  exports `MAX_FILE`, `MAX_TOTAL`, `MAX_FILES`, `MAX_PATH`, `ls_tree`, `read_blobs`,
+  `verify_revision` and `repo_root`; `project` exports `NAME_PATTERN`,
+  `safe_relative_path`, `safe_git_path`, `tree_digest` and `validate_staged`;
+  `project_formal` exports `LEAN_NAME_PATTERN`; `claims` exports `code_span`,
+  `inline_prose` and `escape_prose`; `runner` exports `MAX_RUN_OUTPUT`; `evidence_html`
+  exports `validate_record` and `acceptance_status`; and the Polaris `replay` module
+  exports `MAX_CANDIDATE_FILE`. The old underscore names are removed without aliases. A boundary
+  test now fails when code under `src/mentat` imports another module's private name or
+  reads one through an import alias.
+  `.mentat/selfcheck.py` now patches `project.tree_digest`, which changes Mentat's own
+  contract inputs. The verifier modules changed (`claims`, `cli`, `evidence`,
+  `evidence_report`, `gitio`, `project`, `project_formal`, `qualification` and `runner`),
+  and the Polaris pack digest changes, so approvals, proof campaigns, and pending
+  acceptances must be renewed.
 - Move canonical JSON, digests and verdict status into a stdlib-only `mentat.canonical`
   module, and move the verifier's Git reads into `mentat.gitio`. Core Git reads (snapshots,
   OpenSpec import, claim checks) now run through the bounded process runner, with no

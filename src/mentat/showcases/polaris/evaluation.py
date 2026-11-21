@@ -9,7 +9,7 @@ from mentat import evidence, gitio
 
 from . import docker_runtime
 from .regression import render_regression
-from .replay import _MAX_FILE, Snapshot, run_case, snapshot
+from .replay import MAX_CANDIDATE_FILE, Snapshot, run_case, snapshot
 
 BEFORE = "7bb319e281225b2b63c78f1cbc87726a1c9a7ece"
 FIXED = "ba152c04f7f985bbaeb487a55ef442df52321afe"
@@ -90,7 +90,7 @@ def _upstream_test(repo: Path, name: str) -> str:
         "show",
         "--no-textconv",
         f"{BEFORE}:client/python/tests/{name}",
-        limit=_MAX_FILE,
+        limit=MAX_CANDIDATE_FILE,
         timeout=10,
     ).decode()
 

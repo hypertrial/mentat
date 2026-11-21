@@ -828,7 +828,7 @@ def test_proof_and_behavior_share_one_output_budget(campaign, monkeypatch):
     ident, _ = c.prepare(targets=["first", "second"])
     submission = c.submission("budget-submission", "first", "second")
     assert proof.check(c.state, ident, submission)["status"] == "pass"
-    monkeypatch.setattr(runner, "_MAX_RUN_OUTPUT", 512)
+    monkeypatch.setattr(runner, "MAX_RUN_OUTPUT", 512)
     verified = c.invoke("verify", "--rev", c.base, *c.scope, "--proof-campaign", ident, "--json")
     assert verified.exit_code == 0, (verified.output, verified.exception)
     payload = json.loads(verified.output)
@@ -869,7 +869,7 @@ def test_source_exceeding_run_budget_makes_formal_incomplete_and_skips_behavior(
     submission = c.submission("large-source", "first", "second")
     (submission / "first" / "Solution.lean").write_bytes(b"x" * 129)
     assert proof.check(c.state, ident, submission)["status"] == "pass"
-    monkeypatch.setattr(runner, "_MAX_RUN_OUTPUT", 128)
+    monkeypatch.setattr(runner, "MAX_RUN_OUTPUT", 128)
     verified = c.invoke("verify", "--rev", c.base, *c.scope, "--proof-campaign", ident, "--json")
     assert verified.exit_code == 2, (verified.output, verified.exception)
     payload = json.loads(verified.output)

@@ -8,7 +8,7 @@ from pathlib import PurePosixPath
 
 from . import runner
 from .evidence import decode_json, json_bytes
-from .project import _NAME, _digest, _path
+from .project import NAME_PATTERN, safe_relative_path, tree_digest
 
 
 def _protected(path, base_files):
@@ -69,7 +69,7 @@ def approved_mutations(contract, files):
     if config is None:
         return []
     path = config
-    if not isinstance(path, str) or _path(path) not in files:
+    if not isinstance(path, str) or safe_relative_path(path) not in files:
         raise ValueError("missing approved source mutation manifest")
     manifest = decode_json(files[path])
     if (
@@ -86,7 +86,7 @@ def approved_mutations(contract, files):
     claims = {claim.id for claim in contract.claims}
     mutations = []
     for ident, mutation in manifest["mutants"].items():
-        if not isinstance(ident, str) or not _NAME.fullmatch(ident):
+        if not isinstance(ident, str) or not NAME_PATTERN.fullmatch(ident):
             raise ValueError("invalid source mutation ID")
         if (
             not isinstance(mutation, dict)
@@ -102,7 +102,7 @@ def approved_mutations(contract, files):
             or mutation["expected_case"] not in check.case_report.required_cases
         ):
             raise ValueError(f"source mutation requires a named behavior case: {ident}")
-        target = _path(mutation["path"])
+        target = safe_relative_path(mutation["path"])
         if _protected(target, contract.base_files):
             raise ValueError(f"protected source mutation path: {target}")
         if not mutation["before"] or mutation["before"] == mutation["after"]:
@@ -176,8 +176,8 @@ def run_source_mutations(
     checks = {check.id: check for check in project.contract.behavior}
     runtime_sha = hashlib.sha256(json_bytes(info)).hexdigest()
     results, artifacts = [], {}
-    remaining = runner._MAX_RUN_OUTPUT if output_budget is None else output_budget
-    if type(remaining) is not int or not 0 <= remaining <= runner._MAX_RUN_OUTPUT:
+    remaining = runner.MAX_RUN_OUTPUT if output_budget is None else output_budget
+    if type(remaining) is not int or not 0 <= remaining <= runner.MAX_RUN_OUTPUT:
         raise ValueError("Invalid source qualification output budget")
     for number, mutation in enumerate(mutations, 1):
         check = checks[mutation["check"]]
@@ -244,7 +244,7 @@ def run_source_mutations(
         result["bindings"]["source_after_sha256"] = hashlib.sha256(changed).hexdigest()
         result["applied_count"] = 1
         files = {**snapshot.files, mutation["path"]: (mode, changed)}
-        candidate = replace(snapshot, files=files, digest=_digest(files))
+        candidate = replace(snapshot, files=files, digest=tree_digest(files))
         isolated = replace(
             project,
             contract=project.contract.model_copy(

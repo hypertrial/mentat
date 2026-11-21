@@ -9,7 +9,7 @@ import pytest
 
 from mentat import runner
 from mentat.evidence import json_bytes
-from mentat.project import Contract, Project, Snapshot, _digest
+from mentat.project import Contract, Project, Snapshot, tree_digest
 from mentat.qualification import approved_mutations, run_source_mutations
 
 SCRIPT = '''import json, os, sys, time
@@ -62,7 +62,7 @@ def project(tmp_path, mutants=None, **behavior_changes):
     manifest = json.dumps({"version": 1, "mutants": mutants if mutants is not None else {"mutant": mutation()}}).encode()
     files = {"check.py": SCRIPT.encode(), "mutants.json": manifest}
     candidate_files = {"source.py": (0o644, b"baseline")}
-    candidate = Snapshot(revision="a" * 40, digest=_digest(candidate_files), files=candidate_files)
+    candidate = Snapshot(revision="a" * 40, digest=tree_digest(candidate_files), files=candidate_files)
     return Project(root=tmp_path, base="b" * 40, runner="host", contract=contract, files=files,
                    fingerprint="c" * 64, verifier_digest="d" * 64), candidate
 
@@ -142,7 +142,7 @@ def test_missing_or_multiple_matches_are_incomplete_without_mutation(tmp_path, s
     project_value, candidate = project(tmp_path)
     baseline = [{"id": "behavior", "claim": "claim", "status": "pass", "command_status": "pass", "exit_code": 0, "case_results": {"first": "pass", "second": "pass"}}]
     files = {"source.py": (0o644, source)}
-    candidate = replace(candidate, files=files, digest=_digest(files))
+    candidate = replace(candidate, files=files, digest=tree_digest(files))
     results, artifacts = execute(project_value, candidate, baseline)
     assert results[0]["status"] == "incomplete" and results[0]["applied_count"] == 0
     assert not artifacts and candidate.files == files
@@ -151,7 +151,7 @@ def test_missing_or_multiple_matches_are_incomplete_without_mutation(tmp_path, s
 def test_overlapping_byte_occurrences_are_not_unique(tmp_path):
     project_value, candidate = project(tmp_path, {"overlap": mutation(before="aaa", after="b")})
     files = {"source.py": (0o644, b"aaaa")}
-    candidate = replace(candidate, files=files, digest=_digest(files))
+    candidate = replace(candidate, files=files, digest=tree_digest(files))
     baseline = [{"id": "behavior", "claim": "claim", "status": "pass", "command_status": "pass", "exit_code": 0, "case_results": {"first": "pass", "second": "pass"}}]
     results, artifacts = execute(project_value, candidate, baseline)
     assert results[0]["status"] == "incomplete" and results[0]["applied_count"] == 0
@@ -174,7 +174,7 @@ def test_manifest_rejects_target_outside_declared_case_inventory(tmp_path):
 def test_symlink_target_is_not_mutated(tmp_path):
     project_value, candidate = project(tmp_path)
     files = {"source.py": (0o120000, b"elsewhere")}
-    candidate = replace(candidate, files=files, digest=_digest(files))
+    candidate = replace(candidate, files=files, digest=tree_digest(files))
     baseline = [{"id": "behavior", "claim": "claim", "status": "pass", "command_status": "pass", "exit_code": 0, "case_results": {"first": "pass", "second": "pass"}}]
     results, artifacts = execute(project_value, candidate, baseline)
     assert results[0]["status"] == "incomplete" and results[0]["applied_count"] == 0
@@ -254,7 +254,7 @@ def test_rejects_invalid_mutation_entries(tmp_path, changes):
 @pytest.mark.parametrize("budget_offset", [-1, 0, 17])
 def test_qualification_budget_prioritizes_required_report_over_optional_log(tmp_path, monkeypatch, budget_offset):
     project_value, candidate = project(tmp_path)
-    monkeypatch.setattr(runner, "_MAX_RUN_OUTPUT", 2048)
+    monkeypatch.setattr(runner, "MAX_RUN_OUTPUT", 2048)
     info = {"runner": "host", "path": os.environ.get("PATH", ""), "executables": {}}
     baseline, baseline_artifacts = runner.run_behavior(project_value, candidate, None, info, "run-identifier")
     assert baseline[0]["status"] == "pass"
@@ -281,7 +281,7 @@ def test_qualification_budget_prioritizes_required_report_over_optional_log(tmp_
 @pytest.mark.parametrize("budget", [-1, True, 1.5, 2049])
 def test_rejects_invalid_qualification_output_budget(tmp_path, monkeypatch, budget):
     project_value, candidate = project(tmp_path)
-    monkeypatch.setattr(runner, "_MAX_RUN_OUTPUT", 2048)
+    monkeypatch.setattr(runner, "MAX_RUN_OUTPUT", 2048)
     info = {"runner": "host", "path": os.environ.get("PATH", ""), "executables": {}}
     baseline, _ = runner.run_behavior(project_value, candidate, None, info, "run-identifier")
     with pytest.raises(ValueError):

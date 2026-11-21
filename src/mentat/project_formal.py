@@ -22,7 +22,7 @@ _LEAN_FIRST = (
     r"\u1f00-\u1ffe\u2100-\u214f\U0001d49c-\U0001d59f"
 )
 _LEAN_PART = rf"[{_LEAN_FIRST}][{_LEAN_FIRST}0-9'!?\u2080-\u2089\u2090-\u209c\u1d62-\u1d6a\u2c7c]*"
-_NAME = re.compile(rf"{_LEAN_PART}(?:\.{_LEAN_PART})*")
+LEAN_NAME_PATTERN = re.compile(rf"{_LEAN_PART}(?:\.{_LEAN_PART})*")
 _COMMAND = re.compile(r'\(\s*(?:;[^\n]*\n\s*)*([a-zA-Z][a-zA-Z0-9_-]*)(?=[ \t\r\n();"|])')
 
 
@@ -305,7 +305,7 @@ def _run_lean(check, files, tools):
     if "error" in tool or tool.get("version") != LEAN_VERSION or not tool.get("executable"):
         result["detail"] = tool.get("error", f"Lean {LEAN_VERSION} tool information is missing")
         return result
-    if not _NAME.fullmatch(check.theorem):
+    if not LEAN_NAME_PATTERN.fullmatch(check.theorem):
         result["detail"] = "The theorem must be a plain qualified Lean identifier"
         return result
     try:

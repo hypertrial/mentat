@@ -12,10 +12,10 @@ from pathlib import Path
 
 from . import process
 
-_MAX_FILE = 1_000_000
-_MAX_TOTAL = 32_000_000
-_MAX_FILES = 4096
-_MAX_PATH = 512
+MAX_FILE = 1_000_000
+MAX_TOTAL = 32_000_000
+MAX_FILES = 4096
+MAX_PATH = 512
 # Long enough for a repository path or an object name from rev-parse.
 _LINE = 4096
 
@@ -75,7 +75,7 @@ def _git(root: Path, *args: str, limit: int, data: bytes | None = None) -> bytes
         raise ValueError(f"git command failed: {args[0]}") from exc
 
 
-def _ls_tree(
+def ls_tree(
     root: Path, revision: str, flags: str, scope: list[bytes], deadline: float
 ) -> Iterator[bytes]:
     # Streamed rather than run through process.run: callers consume records as they arrive,
@@ -114,7 +114,7 @@ def _ls_tree(
                         return
                     *records, pending = (pending + chunk).split(b"\0")
                     yield from records
-                    if len(pending) > 4 * _MAX_PATH + 100:
+                    if len(pending) > 4 * MAX_PATH + 100:
                         raise ValueError("Git tree path exceeds size limit")
                 raise ValueError("git command timed out: ls-tree")
             finally:
@@ -124,13 +124,13 @@ def _ls_tree(
         raise ValueError("git command failed: ls-tree") from exc
 
 
-def _root(repo: Path) -> Path:
+def repo_root(repo: Path) -> Path:
     return Path(
         os.fsdecode(_git(repo, "rev-parse", "--show-toplevel", limit=_LINE).removesuffix(b"\n"))
     ).resolve()
 
 
-def _revision(root: Path, rev: str) -> str:
+def verify_revision(root: Path, rev: str) -> str:
     fmt = _git(root, "rev-parse", "--show-object-format", limit=_LINE).strip()
     length = {b"sha1": 40, b"sha256": 64}.get(fmt)
     if length is None or not re.fullmatch(rf"[0-9a-f]{{{length}}}", rev):
@@ -152,7 +152,7 @@ def _revision(root: Path, rev: str) -> str:
     return result
 
 
-def _read_blobs(root: Path, entries: dict[str, tuple[int, bytes]]) -> dict[str, tuple[int, bytes]]:
+def read_blobs(root: Path, entries: dict[str, tuple[int, bytes]]) -> dict[str, tuple[int, bytes]]:
     if not entries:
         return {}
     ids = b"".join(oid + b"\n" for _, oid in entries.values())
@@ -171,7 +171,7 @@ def _read_blobs(root: Path, entries: dict[str, tuple[int, bytes]]) -> dict[str, 
         if len(parts) != 3 or parts[0] != oid or parts[1] != b"blob" or not parts[2].isdigit():
             raise ValueError("invalid Git object")
         sizes.append(int(parts[2]))
-    if any(size > _MAX_FILE for size in sizes) or sum(sizes) > _MAX_TOTAL:
+    if any(size > MAX_FILE for size in sizes) or sum(sizes) > MAX_TOTAL:
         raise ValueError("Git blobs exceed size limit")
     # Each object adds its header, a newline after the header, and a newline after its content.
     limit = sum(sizes) + sum(
