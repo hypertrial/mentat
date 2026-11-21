@@ -124,10 +124,23 @@ def test_missing_verifier_module_is_refused(checked_repo, verifier):
         _load(checked_repo)
 
 
-def test_unclassified_module_in_verifier_package_is_refused(checked_repo, verifier):
-    (verifier / "extra.py").write_text("VALUE = 1\n")
-    with pytest.raises(ValueError, match="^Unclassified module in the verifier package$"):
+@pytest.mark.parametrize("stray", ["extra.py", "extra/rules.py"])
+def test_unclassified_module_in_verifier_package_is_refused(checked_repo, verifier, stray):
+    path = verifier / stray
+    path.parent.mkdir(exist_ok=True)
+    path.write_text("VALUE = 1\n")
+    name = stray.split("/")[0]
+    with pytest.raises(ValueError, match=f"^Unclassified module in the verifier package: {name}$"):
         _load(checked_repo)
+
+
+def test_files_python_cannot_import_do_not_block_the_verifier(checked_repo, verifier):
+    before = _load(checked_repo)
+    (verifier / "._cli.py").write_text("metadata\n")
+    (verifier / "notes.txt").write_text("notes\n")
+    (verifier / "data").mkdir()
+    (verifier / "data" / "table.json").write_text("{}\n")
+    assert _load(checked_repo).verifier_digest == before.verifier_digest
 
 
 def test_z3_version_changes_verifier_digest_and_fingerprint(checked_repo, monkeypatch):
