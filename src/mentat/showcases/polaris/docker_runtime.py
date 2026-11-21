@@ -392,6 +392,10 @@ def run_pytest(
         if create_attempted and name:
             try:
                 cleanup_ok = _docker(context, "rm", "-f", name, timeout=20)[0] == 0
+                if not cleanup_ok:
+                    # A failed create leaves nothing to remove; an absent container is clean.
+                    listed = _docker(context, "ps", "-aq", "--filter", f"name={name}", timeout=20)
+                    cleanup_ok = listed == (0, b"")
             except (ValueError, RuntimeError, OSError):
                 cleanup_ok = False
             if not cleanup_ok:
