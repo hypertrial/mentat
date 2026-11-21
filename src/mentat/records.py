@@ -2,8 +2,10 @@
 
 Models validate; the raw parsed dict stays the carrier. Writers, hashes and comparisons use
 the raw dict, and callers keep their own messages by catching pydantic.ValidationError.
-Models carry no string constraints: non-empty, pattern and membership checks stay as code in
-evidence, so strings that JSON can carry (such as lone surrogates) get the same outcome as before.
+Models carry no string constraints (non-empty, pattern and membership checks stay as code in
+evidence), so strings that JSON can carry, such as lone surrogates, get the same outcome as before.
+The one exception is the frozen contract assurance shape (the Assurance section): its string
+constraints are the contract's own, and removing them would change which records load.
 Imports stay limited to the standard library, pydantic and canonical.
 """
 
@@ -118,7 +120,7 @@ class _Frozen(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
 
-class _Citation(_Frozen):
+class ClaimCitation(_Frozen):
     commit: str = Field(pattern=_OBJECT_ID)
     blob: str = Field(pattern=_OBJECT_ID)
     path: str
@@ -133,7 +135,7 @@ class _Citation(_Frozen):
         return self
 
 
-class _EvidenceRef(_Frozen):
+class EvidenceRef(_Frozen):
     check_id: str
     case_ids: list[str] = Field(default_factory=list, max_length=128)
 
@@ -151,12 +153,12 @@ class _EvidenceRef(_Frozen):
         return self
 
 
-class _Bound(_Frozen):
+class Bound(_Frozen):
     id: str
     statement: str = Field(pattern=r"\S", max_length=4096)
     # Literal keeps the old "Input should be" message for this one closed set.
     kind: Literal["enforced", "assumed"]
-    checks: list[_EvidenceRef] = Field(default_factory=list, max_length=128)
+    checks: list[EvidenceRef] = Field(default_factory=list, max_length=128)
     assumption: str | None = Field(default=None, min_length=1, max_length=4096)
 
     @model_validator(mode="after")
@@ -171,25 +173,25 @@ class _Bound(_Frozen):
         return self
 
 
-class _Exclusion(_Frozen):
+class Exclusion(_Frozen):
     scenario: str = Field(pattern=r"\S", max_length=4096)
     reason: str = Field(pattern=r"\S", max_length=4096)
     effect: str = Field(pattern=r"\S", max_length=4096)
     affected_claims: list[str] = Field(min_length=1, max_length=128)
 
 
-class _Deviation(_Frozen):
-    citation: _Citation
+class Deviation(_Frozen):
+    citation: ClaimCitation
     rationale: str = Field(pattern=r"\S", max_length=4096)
     effect: str = Field(pattern=r"\S", max_length=4096)
 
 
 class Assurance(_Frozen):
-    implementation_checks: list[_EvidenceRef] = Field(default_factory=list, max_length=128)
-    witness_checks: list[_EvidenceRef] = Field(default_factory=list, max_length=128)
-    bounds: list[_Bound] = Field(default_factory=list, max_length=128)
-    exclusions: list[_Exclusion] = Field(default_factory=list, max_length=128)
-    deviations: list[_Deviation] = Field(default_factory=list, max_length=128)
+    implementation_checks: list[EvidenceRef] = Field(default_factory=list, max_length=128)
+    witness_checks: list[EvidenceRef] = Field(default_factory=list, max_length=128)
+    bounds: list[Bound] = Field(default_factory=list, max_length=128)
+    exclusions: list[Exclusion] = Field(default_factory=list, max_length=128)
+    deviations: list[Deviation] = Field(default_factory=list, max_length=128)
 
     @model_validator(mode="after")
     def distinct_bounds(self):
@@ -212,10 +214,6 @@ class Claim(_Record):
     id: StrictStr
     statement: StrictStr
     assumptions: list[StrictStr] = []
-
-
-class ClaimReview(_Record):
-    titles: dict[Any, Any] = {}
 
 
 class ReviewGroup(_Record):
@@ -259,22 +257,24 @@ class NegativeControl(_Record):
 
 
 class References(_Record):
-    """The artifact references of a result or control."""
+    """The artifact references of a result, control or projected qualification."""
 
     artifacts: dict[Any, Any] = {}
 
 
-class Omissions(_Record):
-    """The files and streams a result omitted from its evidence."""
-
+class ArtifactOmissions(_Record):
     artifact_omissions: list[StrictStr] = []
+
+
+class LogOmissions(_Record):
     log_omissions: list[StrictStr] = []
 
 
-class Cases(_Record):
-    """The case inventory of a behavior check or negative control."""
-
+class RequiredCases(_Record):
     required_cases: list[StrictStr] = []
+
+
+class CaseResults(_Record):
     case_results: dict[Any, Any] = {}
 
 

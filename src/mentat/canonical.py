@@ -14,7 +14,7 @@ def decode_json(data: bytes, *, limit: int | None = 1_000_000):
         result = {}
         for key, value in pairs:
             if key in result:
-                raise ValueError("duplicate JSON key")
+                raise ValueError(f"duplicate JSON key: {key}")
             result[key] = value
         return result
 

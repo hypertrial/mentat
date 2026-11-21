@@ -128,6 +128,7 @@ def test_summary_rejects_existing_and_symlink_destinations(tmp_path):
 
 
 @pytest.mark.parametrize("problem", ["revision", "formal", "missing-case", "witness-mismatch", "control", "control-extra-change", "raw-mismatch", "same-count-substitution"])
+@pytest.mark.saves_invalid_run
 def test_summary_rejects_invalid_but_receipt_valid_results(tmp_path, problem):
     def mutate(old, record, docs):
         check = record["cases"][0]["checks"][0]

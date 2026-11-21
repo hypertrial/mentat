@@ -5,11 +5,15 @@
 - Add typed validation for check results and the run record. `mentat.records` now models
   formal and behavior check results, negative controls, case inventories and the saved
   `project-verification` run, and `evidence.validate_run_record` replaces the hand validator
-  that lived in `evidence_html`; the saved dicts, hashes and comparisons are unchanged and
-  the existing error messages are kept. There is no stored-format change. A saved run whose
-  manifest repeats a JSON key is now refused with `duplicate JSON key`; large valid manifests
-  still load. The verifier modules `canonical`, `cli`, `evidence`, `proof` and `records` changed, so
-  approvals, proof campaigns and pending acceptances must be renewed.
+  that lived in `evidence_html`. The saved dicts, hashes and comparisons are unchanged, and the
+  existing error messages are kept. There is no stored-format change. Two intended changes for
+  saved run manifests: a manifest that repeats a JSON key is refused with `duplicate JSON key`,
+  and a manifest with a `NaN` or `Infinity` constant, or nesting too deep for the parser, is
+  refused as an error instead of crashing. Large valid manifests still load. `SourceQualification`
+  bindings no longer constrain their key types, so keys that JSON can carry, such as lone
+  surrogates, are accepted as they were before the models. The verifier modules `canonical`,
+  `cli`, `evidence` and `records` changed, and the Polaris pack digest changes, so approvals,
+  proof campaigns and pending acceptances must be renewed.
 - Add typed validation for approval, acceptance and source-qualification records. A new
   verifier module, `mentat.records`, holds pydantic models that check these records at each
   boundary; the raw saved dicts stay what is stored, hashed and compared, and the existing

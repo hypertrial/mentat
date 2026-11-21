@@ -144,6 +144,7 @@ def test_compare_does_not_create_missing_state(tmp_path):
     assert not state.parent.exists()
 
 
+@pytest.mark.saves_invalid_run
 def test_across_contracts_preserves_original_verdicts_and_side_specific_checks(compare):
     state, run = compare
     before_id, after_id = "a" * 32, "b" * 32

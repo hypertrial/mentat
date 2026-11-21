@@ -9,8 +9,7 @@ mutation corpus from the fixtures. A change to a check is a deliberate change to
 import re
 from datetime import datetime
 
-from mentat.canonical import STATUSES, digest, json_bytes
-from mentat.evidence_report import claim_groups
+from mentat.canonical import STATUSES, digest, json_bytes, status
 from mentat.project import Assurance
 
 _CASE_STATUSES = {"pass", "fail", "skip", "error"}
@@ -233,7 +232,7 @@ def validate_record(record):
     for check in source_qualifications(record):
         _references(check, artifacts)
         _cases(check)
-    return claim_groups(record)
+    return frozen_claim_groups(record)
 
 
 def _check_evidence(check: dict, artifacts: dict) -> dict:
@@ -503,3 +502,54 @@ def source_qualifications(record: dict) -> list[dict]:
     if observed_ids != declared.keys():
         raise ValueError("Missing source qualification result")
     return projected
+
+
+# The report's claim grouping, copied from evidence_report and evidence as they were, so the
+# oracle's validation and grouping never call the live source_qualifications.
+def frozen_qualification_status(checks: list[dict]) -> str:
+    ran = [check for check in checks if check["status"] != "skipped"]
+    return status(ran, incomplete_first=True) if ran else "skipped"
+
+
+def _frozen_verdict(checks: list[dict], skipped) -> str:
+    executed = [check for check in checks if check["status"] != "skipped"]
+    result = status(executed, incomplete_first=True) if executed else "skipped"
+    if skipped and result == "pass":
+        result = "skipped"
+    return result if checks or skipped else "incomplete"
+
+
+def frozen_claim_groups(record: dict) -> list[tuple[str, list[dict]]]:
+    claims = {
+        claim["id"]: {**claim, "formal": [], "behavior": [], "qualification": []}
+        for claim in record["claims"]
+    }
+    for check in record["model_checks"]:
+        claims[check["claim"]]["formal"].append(check)
+    for case in record["cases"]:
+        for check in case["checks"]:
+            claims[check["claim"]]["behavior"].append(check)
+    for check in source_qualifications(record):
+        claims[check["claim"]]["qualification"].append(check)
+    skipped = record.get("behavior_skipped")
+    if skipped:
+        for check in record.get("behavior_checks", []):
+            claims[check["claim"]]["behavior"].append(
+                {**check, "status": "skipped", "detail": "Formal checks did not pass"}
+            )
+    split = "source_qualification_status" in record
+    for claim in claims.values():
+        if split:
+            claim["status"] = _frozen_verdict(claim["formal"] + claim["behavior"], skipped)
+            if claim["qualification"]:
+                claim["qualification_status"] = frozen_qualification_status(claim["qualification"])
+        else:
+            claim["status"] = _frozen_verdict(
+                claim["formal"] + claim["behavior"] + claim["qualification"], skipped
+            )
+    groups = record.get("claim_review", {}).get("groups") or [
+        {"title": "Claims", "claim_ids": list(claims)}
+    ]
+    return [
+        (group["title"], [claims[claim_id] for claim_id in group["claim_ids"]]) for group in groups
+    ]
