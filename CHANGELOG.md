@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Pin the proof checker's Lean toolchain. The checker refuses a toolchain whose
+  contents differ from the official 4.35.0 x86_64 or aarch64 archive, and the
+  expected digests are part of the verifier source, so approvals and proof
+  campaigns must be renewed.
 - Narrow the verifier fingerprint to an explicit list of verifier modules plus
   the installed Z3 version. Edits to the HTML report, Notion publishing, and
   OpenSpec import no longer invalidate approvals; code under `showcases/` remains
