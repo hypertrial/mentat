@@ -290,6 +290,16 @@ def test_only_the_pinned_toolchain_for_this_architecture_is_accepted(
             proof_checker._pinned_toolchain_digest()
 
 
+def test_real_identity_refuses_an_unpinned_toolchain_before_running_it(checker_identity, monkeypatch):
+    def run(*args, **kwargs):
+        raise AssertionError("an unpinned toolchain binary was executed")
+
+    monkeypatch.setattr(proof_checker, "_toolchain_digest", lambda: "f" * 64)
+    monkeypatch.setattr(proof_checker.subprocess, "run", run)
+    with pytest.raises(ValueError, match="does not match the pinned official distribution$"):
+        proof_checker.checker_identity()
+
+
 def test_toolchain_pins_cover_the_installer_architectures():
     installer = (Path(__file__).parents[1] / "scripts/install-proof-checker").read_text()
     architectures = set(re.findall(r"^  (\w+)\)\n    proof_archive=", installer, re.MULTILINE))
