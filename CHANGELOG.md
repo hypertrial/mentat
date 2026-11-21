@@ -11,9 +11,6 @@
   covers the edited files, so Polaris approvals must be renewed. Saved proofs
   from Lean 4.35.0 keep loading; a checker bump must add its version to the
   saved-version set.
-  needs `--across-contracts`. The Polaris pack digest now also covers
-  `project_formal.py`, so Polaris approvals change too. Saved proofs from Lean
-  4.35.0 keep loading after a future checker bump.
 - Stop the Polaris native regression from reporting a cleanup failure when
   container creation failed and no container exists to remove.
 - Isolate the Lean proof checker's submission sources and exporter: submissions
