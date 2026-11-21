@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Retry a failed `mentat spec import-openspec` blob batch one file at a time. A file
+  that still fails gets a diagnostic naming that file, its neighbors still import,
+  and later batches keep running. A batch in which no file can be read still stops
+  the import with one diagnostic on its first path. Batch reads remain the fast path.
+  The OpenSpec import is presentation code, so approvals do not need renewal.
 - Count proof round and time budgets from earlier campaigns in the same state folder
   with the same approved contract digest and candidate snapshot digest. This stops a
   reset only by preparing again for the same candidate; a new candidate commit, base,

@@ -12,6 +12,11 @@ from markdown_it import MarkdownIt
 from .project import _MAX_FILES, _MAX_TOTAL, _git_path, _ls_tree, _read_blobs, _revision, _root
 
 
+def _read_failure(exc: Exception) -> str:
+    # Only ValueError messages are fixed text; OS and subprocess errors may carry paths or argv.
+    return str(exc) if isinstance(exc, ValueError) else "git blob read failed"
+
+
 def import_spec(repo: Path, base: str) -> dict:
     root = _root(repo)
     revision = _revision(root, base)
@@ -54,36 +59,41 @@ def import_spec(repo: Path, base: str) -> dict:
     if not entries and not diagnostics:
         diagnostic("openspec/specs", 1, "no capability specs found")
 
-    def read_batch(batch):
-        path = batch[0][0]
-        if time.monotonic() >= deadline:
-            yield path, None, None, "spec import exceeded time limit", True
-            return True
-        try:
-            blobs = _read_blobs(root, dict(batch))
-        except (ValueError, OSError, subprocess.SubprocessError) as exc:
-            cause = exc
-            while cause is not None:
-                if isinstance(cause, (OSError, subprocess.SubprocessError)):
-                    yield path, None, None, str(exc), True
-                    return True
-                cause = cause.__cause__
-            if len(batch) == 1:
-                yield path, batch[0][1], None, str(exc), False
-                return False
-            midpoint = len(batch) // 2
-            if (yield from read_batch(batch[:midpoint])):
-                return True
-            return (yield from read_batch(batch[midpoint:]))
-        for path, entry in batch:
-            yield path, entry, blobs.pop(path)[1], None, False
-        return False
-
     def read_specs():
         ordered = sorted(entries.items())
         for start in range(0, len(ordered), 32):
-            if (yield from read_batch(ordered[start : start + 32])):
+            batch = ordered[start : start + 32]
+            if time.monotonic() >= deadline:
+                yield batch[0][0], None, None, "spec import exceeded time limit", True
                 return
+            try:
+                blobs = _read_blobs(root, dict(batch))
+            except (ValueError, OSError, subprocess.SubprocessError) as exc:
+                if len(batch) == 1:
+                    yield batch[0][0], None, None, _read_failure(exc), False
+                    continue
+                # Retry one file at a time. If no file reads, the failure is not file-specific.
+                outcomes = []
+                for path, entry in batch:
+                    if time.monotonic() >= deadline:
+                        outcomes.append((path, None, None, "spec import exceeded time limit", True))
+                        break
+                    try:
+                        data = _read_blobs(root, {path: entry})[path][1]
+                    except (ValueError, OSError, subprocess.SubprocessError) as file_exc:
+                        outcomes.append((path, None, None, _read_failure(file_exc), False))
+                    else:
+                        outcomes.append((path, entry, data, None, False))
+                stopped = outcomes[-1][4]
+                if not stopped and all(item[3] is not None for item in outcomes):
+                    yield batch[0][0], None, None, _read_failure(exc), True
+                    return
+                yield from outcomes
+                if stopped:
+                    return
+                continue
+            for path, entry in batch:
+                yield path, entry, blobs.pop(path)[1], None, False
 
     parser = MarkdownIt("commonmark")
     total = 0
