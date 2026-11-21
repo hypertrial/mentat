@@ -99,8 +99,9 @@ def _kill(process):
     except ProcessLookupError:
         pass
     except OSError:
-        # macOS reports EPERM for a group whose only member has exited but is not yet reaped.
-        # If the child is still alive the group could not be signalled, and waiting could block.
-        if process.poll() is None:
-            raise
+        # macOS reports EPERM for a group whose leader is exiting or exited but not yet
+        # reaped. Kill the child itself, and never wait without a bound on this path.
+        process.kill()
+        process.wait(timeout=5)
+        return
     process.wait()
