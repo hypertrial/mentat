@@ -14,6 +14,7 @@ import stat
 import subprocess
 import tarfile
 import tempfile
+from functools import partial
 from pathlib import Path, PurePosixPath
 
 from . import process
@@ -373,6 +374,279 @@ def _docker_artifact(context, name, artifact):
         return tar.extractfile(members[0]).read(_MAX_ARTIFACT + 1)
 
 
+_PHASE_ERRORS = (
+    OSError,
+    ValueError,
+    RuntimeError,
+    TimeoutError,
+    subprocess.SubprocessError,
+    json.JSONDecodeError,
+    tarfile.TarError,
+)
+
+
+def _record_status(check, result, code, oom, docker):
+    result["exit_code"] = code
+    if oom or code < 0 or (docker and code in (125, 126, 127, 137)):
+        result["detail"] = "Check terminated abnormally"
+    elif code == 0:
+        result.update(status="pass", detail="Check passed")
+    elif code in check.violation_exit_codes:
+        result.update(status="violation", detail="Check reported a violation")
+    else:
+        result["detail"] = "Check exited unexpectedly"
+    if check.case_report or check.negative_control:
+        result["command_status"] = result["status"]
+
+
+def _collect_artifact(read_artifact, number, artifact, prefix, result, files, remaining):
+    # remaining is a one-element list so every helper debits the same run budget in place.
+    try:
+        if remaining[0] == 0:
+            raise ValueError("run output limit reached")
+        data = read_artifact(artifact)
+        if data is None or len(data) > remaining[0]:
+            raise ValueError("artifact missing or exceeds run output limit")
+        key = f"{prefix}.artifact-{number:03d}.{artifact}"
+        files[key] = data
+        result.setdefault("artifacts", {})[artifact] = key
+        remaining[0] -= len(data)
+        return data
+    except (OSError, ValueError, RuntimeError, tarfile.TarError):
+        result.setdefault("artifact_omissions", []).append(artifact)
+        return None
+
+
+def _record_case_report(check, result, report_data):
+    try:
+        report = decode_json(report_data) if report_data is not None else None
+        if isinstance(report, dict) and isinstance(report.get("cases"), dict):
+            result["case_results"] = {
+                case: value
+                for case, value in report["cases"].items()
+                if case in check.case_report.required_cases
+                and isinstance(value, str)
+                and value in ("pass", "fail", "skip", "error")
+            }
+        if (
+            not isinstance(report, dict)
+            or set(report) != {"schema_version", "cases"}
+            or type(report["schema_version"]) is not int
+            or report["schema_version"] != 1
+            or not isinstance(report["cases"], dict)
+            or set(report["cases"]) != set(check.case_report.required_cases)
+            or any(
+                value not in ("pass", "fail", "skip", "error") for value in report["cases"].values()
+            )
+        ):
+            raise ValueError("invalid case report")
+        result["case_results"] = report["cases"]
+        outcomes = set(report["cases"].values())
+        if (
+            outcomes & {"skip", "error"}
+            or (result["status"] == "pass" and "fail" in outcomes)
+            or (result["status"] == "violation" and "fail" not in outcomes)
+        ):
+            result.update(
+                status="incomplete",
+                detail="Case report is inconclusive or contradicts exit code",
+            )
+    except (ValueError, TypeError, UnicodeError):
+        result.update(status="incomplete", detail="Missing or invalid case report")
+
+
+def _record_outputs(check, result, prefix, stdout, stderr, read_artifact, files, remaining):
+    report_data = None
+    if check.case_report:
+        number = check.artifacts.index(check.case_report.artifact) + 1
+        report_data = _collect_artifact(
+            read_artifact, number, check.case_report.artifact, prefix, result, files, remaining
+        )
+    if check.case_report:
+        _record_case_report(check, result, report_data)
+    for suffix, data in (("stdout", stdout), ("stderr", stderr)):
+        if data:
+            if len(data) > remaining[0]:
+                result.setdefault("log_omissions", []).append(suffix)
+                continue
+            key = f"{prefix}.{suffix}.log"
+            files[key] = data
+            result[suffix] = key
+            remaining[0] -= len(data)
+    for number, artifact in enumerate(check.artifacts, start=1):
+        if not check.case_report or artifact != check.case_report.artifact:
+            _collect_artifact(read_artifact, number, artifact, prefix, result, files, remaining)
+
+
+def _host_precheck(check, result, missing, inherited, info):
+    """Mark a host check that cannot run here; return True when it must not run."""
+    if missing:
+        result["detail"] = (
+            f"Missing host prerequisites: {', '.join(missing)}. Run mentat doctor for details."
+        )
+        return True
+    missing_environment = [name for name in check.host_environment if not inherited[name]]
+    if missing_environment:
+        result["detail"] = (
+            "Missing host environment variables: " + ", ".join(missing_environment) + "."
+        )
+        return True
+    command = check.effective_argv()[0]
+    executable = info["executables"].get(command)
+    if executable and executable["status"] == "missing":
+        result["detail"] = f"Host executable not found: {command!r}"
+        return True
+    return False
+
+
+def _host_phase(project, snapshot, inherited, info, files, remaining, check, result, prefix, args):
+    try:
+        with tempfile.TemporaryDirectory(prefix="mentat-run-") as temp:
+            root = Path(temp)
+            candidate, checks, artifacts = (root / p for p in ("candidate", "checks", "artifacts"))
+            _stage(candidate, snapshot.files)
+            _stage(checks, project.files, trusted=True)
+            artifacts.mkdir(mode=0o777)
+            artifacts.chmod(0o777)
+            home = root / "home"
+            home.mkdir()
+            env = {
+                "PATH": info["path"],
+                "HOME": str(home),
+                "MENTAT_CANDIDATE_DIR": str(candidate),
+                "MENTAT_CHECKS_DIR": str(checks),
+                "MENTAT_ARTIFACTS_DIR": str(artifacts),
+                **{name: inherited[name] for name in check.host_environment},
+            }
+            argv = _arguments([*check.effective_argv(), *args], str(checks))
+            code, stdout, stderr = _process(
+                argv, cwd=candidate, env=env, timeout=check.timeout_seconds
+            )
+            _record_status(check, result, code, False, docker=False)
+            _record_outputs(
+                check,
+                result,
+                prefix,
+                stdout,
+                stderr,
+                lambda artifact: _artifact(artifacts / artifact),
+                files,
+                remaining,
+            )
+    except _PHASE_ERRORS as exc:
+        result.update(status="incomplete", detail=str(exc) or "Check could not complete")
+
+
+def _container_command(name, run_id, info, argv):
+    return [
+        "create",
+        "--name",
+        name,
+        "--label",
+        f"org.hypertrial.mentat.run={run_id}",
+        "--network",
+        "none",
+        "--pull",
+        "never",
+        "--no-healthcheck",
+        "--log-driver",
+        "none",
+        "--cap-drop",
+        "ALL",
+        "--security-opt",
+        "no-new-privileges",
+        "--pids-limit",
+        "128",
+        "--memory",
+        "1g",
+        "--cpus",
+        "1",
+        "--user",
+        "65534:65534",
+        "--workdir",
+        "/mentat/candidate",
+        "--env",
+        "HOME=/tmp",
+        "--env",
+        f"PATH={info['path']}",
+        "--env",
+        "MENTAT_CANDIDATE_DIR=/mentat/candidate",
+        "--env",
+        "MENTAT_CHECKS_DIR=/mentat/checks",
+        "--env",
+        "MENTAT_ARTIFACTS_DIR=/mentat/artifacts",
+        "--entrypoint",
+        argv[0],
+        info["image_id"],
+        *argv[1:],
+    ]
+
+
+def _docker_phase(
+    project, snapshot, context, run_id, info, files, remaining, check, result, prefix, args
+):
+    name = "mentat-" + secrets.token_hex(16)
+    created = False
+    try:
+        with tempfile.TemporaryDirectory(prefix="mentat-run-"):
+            argv = _arguments([*check.effective_argv(), *args], "/mentat/checks")
+            command = _container_command(name, run_id, info, argv)
+            # Track the name even if the CLI is interrupted after Docker creates it.
+            created = True
+            create_code, _, diagnostic = _docker(context, *command)
+            if create_code:
+                raise RuntimeError(
+                    "container creation failed: " + diagnostic.decode(errors="replace")[:2048]
+                )
+            with tempfile.TemporaryFile() as archive:
+                _stage_archive(archive, snapshot.files, project.files)
+                copy_code, _, diagnostic = _docker(
+                    context, "cp", "-", f"{name}:/", input_file=archive
+                )
+                if copy_code:
+                    raise RuntimeError(
+                        "container staging failed: " + diagnostic.decode(errors="replace")[:2048]
+                    )
+            code, stdout, stderr = _docker(
+                context, "start", "-a", name, timeout=check.timeout_seconds
+            )
+            inspect_code, state, _ = _docker(
+                context, "inspect", "--format", "{{json .State}}", name
+            )
+            state = json.loads(state) if not inspect_code else {}
+            oom = (
+                state.get("OOMKilled")
+                or state.get("Error")
+                or state.get("Status") != "exited"
+                or state.get("ExitCode") != code
+            )
+            _record_status(check, result, code, oom, docker=True)
+            _record_outputs(
+                check,
+                result,
+                prefix,
+                stdout,
+                stderr,
+                lambda artifact: _docker_artifact(context, name, artifact),
+                files,
+                remaining,
+            )
+    except _PHASE_ERRORS as exc:
+        result.update(status="incomplete", detail=str(exc) or "Check could not complete")
+    finally:
+        if created:
+            try:
+                cleanup, _, diagnostic = _docker(context, "rm", "-f", "-v", name, timeout=20)
+                cleanup_failed = bool(cleanup and b"No such container" not in diagnostic)
+            except (RuntimeError, ValueError):
+                cleanup_failed = True
+            if cleanup_failed:
+                result.update(
+                    status="incomplete",
+                    detail=f"{result['detail']}. Container cleanup failed ({name})",
+                )
+
+
 def run_behavior(
     project, snapshot, context, info, run_id, *, output_budget=None
 ) -> tuple[list[dict], dict[str, bytes]]:
@@ -389,7 +663,7 @@ def run_behavior(
     )
     inherited = {name: os.environ.get(name) for name in names}
     results, files = [], {}
-    remaining = MAX_RUN_OUTPUT if output_budget is None else output_budget
+    remaining = [MAX_RUN_OUTPUT if output_budget is None else output_budget]
     if project.runner == "docker":
         context = info["context"]
     elif "path" not in info:
@@ -409,222 +683,10 @@ def run_behavior(
     ]
     if prerequisites.get("loopback") and prerequisites["loopback"]["status"] != "available":
         missing.append("loopback")
-
-    def phase(check, result, prefix, args):
-        nonlocal remaining
-        name = "mentat-" + secrets.token_hex(16)
-        created = False
-        try:
-            with tempfile.TemporaryDirectory(prefix="mentat-run-") as temp:
-                root = Path(temp)
-                candidate, checks, artifacts = (
-                    root / p for p in ("candidate", "checks", "artifacts")
-                )
-                if project.runner == "host":
-                    _stage(candidate, snapshot.files)
-                    _stage(checks, project.files, trusted=True)
-                    artifacts.mkdir(mode=0o777)
-                    artifacts.chmod(0o777)
-                    home = root / "home"
-                    home.mkdir()
-                    env = {
-                        "PATH": info["path"],
-                        "HOME": str(home),
-                        "MENTAT_CANDIDATE_DIR": str(candidate),
-                        "MENTAT_CHECKS_DIR": str(checks),
-                        "MENTAT_ARTIFACTS_DIR": str(artifacts),
-                        **{name: inherited[name] for name in check.host_environment},
-                    }
-                    argv = _arguments([*check.effective_argv(), *args], str(checks))
-                    code, stdout, stderr = _process(
-                        argv, cwd=candidate, env=env, timeout=check.timeout_seconds
-                    )
-                    oom = False
-                else:
-                    argv = _arguments([*check.effective_argv(), *args], "/mentat/checks")
-                    command = [
-                        "create",
-                        "--name",
-                        name,
-                        "--label",
-                        f"org.hypertrial.mentat.run={run_id}",
-                        "--network",
-                        "none",
-                        "--pull",
-                        "never",
-                        "--no-healthcheck",
-                        "--log-driver",
-                        "none",
-                        "--cap-drop",
-                        "ALL",
-                        "--security-opt",
-                        "no-new-privileges",
-                        "--pids-limit",
-                        "128",
-                        "--memory",
-                        "1g",
-                        "--cpus",
-                        "1",
-                        "--user",
-                        "65534:65534",
-                        "--workdir",
-                        "/mentat/candidate",
-                        "--env",
-                        "HOME=/tmp",
-                        "--env",
-                        f"PATH={info['path']}",
-                        "--env",
-                        "MENTAT_CANDIDATE_DIR=/mentat/candidate",
-                        "--env",
-                        "MENTAT_CHECKS_DIR=/mentat/checks",
-                        "--env",
-                        "MENTAT_ARTIFACTS_DIR=/mentat/artifacts",
-                        "--entrypoint",
-                        argv[0],
-                        info["image_id"],
-                        *argv[1:],
-                    ]
-                    # Track the name even if the CLI is interrupted after Docker creates it.
-                    created = True
-                    create_code, _, diagnostic = _docker(context, *command)
-                    if create_code:
-                        raise RuntimeError(
-                            "container creation failed: "
-                            + diagnostic.decode(errors="replace")[:2048]
-                        )
-                    with tempfile.TemporaryFile() as archive:
-                        _stage_archive(archive, snapshot.files, project.files)
-                        copy_code, _, diagnostic = _docker(
-                            context, "cp", "-", f"{name}:/", input_file=archive
-                        )
-                        if copy_code:
-                            raise RuntimeError(
-                                "container staging failed: "
-                                + diagnostic.decode(errors="replace")[:2048]
-                            )
-                    code, stdout, stderr = _docker(
-                        context, "start", "-a", name, timeout=check.timeout_seconds
-                    )
-                    inspect_code, state, _ = _docker(
-                        context, "inspect", "--format", "{{json .State}}", name
-                    )
-                    state = json.loads(state) if not inspect_code else {}
-                    oom = (
-                        state.get("OOMKilled")
-                        or state.get("Error")
-                        or state.get("Status") != "exited"
-                        or state.get("ExitCode") != code
-                    )
-                result["exit_code"] = code
-                if oom or code < 0 or (project.runner == "docker" and code in (125, 126, 127, 137)):
-                    result["detail"] = "Check terminated abnormally"
-                elif code == 0:
-                    result.update(status="pass", detail="Check passed")
-                elif code in check.violation_exit_codes:
-                    result.update(status="violation", detail="Check reported a violation")
-                else:
-                    result["detail"] = "Check exited unexpectedly"
-                if check.case_report or check.negative_control:
-                    result["command_status"] = result["status"]
-
-                def collect_artifact(number, artifact):
-                    nonlocal remaining
-                    try:
-                        if remaining == 0:
-                            raise ValueError("run output limit reached")
-                        data = (
-                            _artifact(artifacts / artifact)
-                            if project.runner == "host"
-                            else _docker_artifact(context, name, artifact)
-                        )
-                        if data is None or len(data) > remaining:
-                            raise ValueError("artifact missing or exceeds run output limit")
-                        key = f"{prefix}.artifact-{number:03d}.{artifact}"
-                        files[key] = data
-                        result.setdefault("artifacts", {})[artifact] = key
-                        remaining -= len(data)
-                        return data
-                    except (OSError, ValueError, RuntimeError, tarfile.TarError):
-                        result.setdefault("artifact_omissions", []).append(artifact)
-                        return None
-
-                report_data = None
-                if check.case_report:
-                    number = check.artifacts.index(check.case_report.artifact) + 1
-                    report_data = collect_artifact(number, check.case_report.artifact)
-                if check.case_report:
-                    try:
-                        report = decode_json(report_data) if report_data is not None else None
-                        if isinstance(report, dict) and isinstance(report.get("cases"), dict):
-                            result["case_results"] = {
-                                case: value
-                                for case, value in report["cases"].items()
-                                if case in check.case_report.required_cases
-                                and isinstance(value, str)
-                                and value in ("pass", "fail", "skip", "error")
-                            }
-                        if (
-                            not isinstance(report, dict)
-                            or set(report) != {"schema_version", "cases"}
-                            or type(report["schema_version"]) is not int
-                            or report["schema_version"] != 1
-                            or not isinstance(report["cases"], dict)
-                            or set(report["cases"]) != set(check.case_report.required_cases)
-                            or any(
-                                value not in ("pass", "fail", "skip", "error")
-                                for value in report["cases"].values()
-                            )
-                        ):
-                            raise ValueError("invalid case report")
-                        result["case_results"] = report["cases"]
-                        outcomes = set(report["cases"].values())
-                        if (
-                            outcomes & {"skip", "error"}
-                            or (result["status"] == "pass" and "fail" in outcomes)
-                            or (result["status"] == "violation" and "fail" not in outcomes)
-                        ):
-                            result.update(
-                                status="incomplete",
-                                detail="Case report is inconclusive or contradicts exit code",
-                            )
-                    except (ValueError, TypeError, UnicodeError):
-                        result.update(status="incomplete", detail="Missing or invalid case report")
-                for suffix, data in (("stdout", stdout), ("stderr", stderr)):
-                    if data:
-                        if len(data) > remaining:
-                            result.setdefault("log_omissions", []).append(suffix)
-                            continue
-                        key = f"{prefix}.{suffix}.log"
-                        files[key] = data
-                        result[suffix] = key
-                        remaining -= len(data)
-                for number, artifact in enumerate(check.artifacts, start=1):
-                    if not check.case_report or artifact != check.case_report.artifact:
-                        collect_artifact(number, artifact)
-
-        except (
-            OSError,
-            ValueError,
-            RuntimeError,
-            TimeoutError,
-            subprocess.SubprocessError,
-            json.JSONDecodeError,
-            tarfile.TarError,
-        ) as exc:
-            result.update(status="incomplete", detail=str(exc) or "Check could not complete")
-        finally:
-            if created:
-                try:
-                    cleanup, _, diagnostic = _docker(context, "rm", "-f", "-v", name, timeout=20)
-                    cleanup_failed = bool(cleanup and b"No such container" not in diagnostic)
-                except (RuntimeError, ValueError):
-                    cleanup_failed = True
-                if cleanup_failed:
-                    result.update(
-                        status="incomplete",
-                        detail=f"{result['detail']}. Container cleanup failed ({name})",
-                    )
-
+    if project.runner == "host":
+        phase = partial(_host_phase, project, snapshot, inherited, info, files, remaining)
+    else:
+        phase = partial(_docker_phase, project, snapshot, context, run_id, info, files, remaining)
     for index, check in enumerate(project.contract.behavior, start=1):
         prefix = f"check-{index:03d}"
         result = {
@@ -639,23 +701,8 @@ def run_behavior(
         results.append(result)
         if check.case_report:
             result["required_cases"] = check.case_report.required_cases
-        if project.runner == "host":
-            if missing:
-                result["detail"] = (
-                    f"Missing host prerequisites: {', '.join(missing)}. Run mentat doctor for details."
-                )
-                continue
-            missing_environment = [name for name in check.host_environment if not inherited[name]]
-            if missing_environment:
-                result["detail"] = (
-                    "Missing host environment variables: " + ", ".join(missing_environment) + "."
-                )
-                continue
-            command = check.effective_argv()[0]
-            executable = info["executables"].get(command)
-            if executable and executable["status"] == "missing":
-                result["detail"] = f"Host executable not found: {command!r}"
-                continue
+        if project.runner == "host" and _host_precheck(check, result, missing, inherited, info):
+            continue
         phase(check, result, prefix, [])
         if check.negative_control and result["status"] == "pass":
             control = {

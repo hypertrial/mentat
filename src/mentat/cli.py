@@ -1,27 +1,24 @@
 """Verify a Git commit against a separately approved project contract."""
 
 import os
-import shlex
 import shutil
 import stat
 import subprocess
-import sys
 from importlib.metadata import version
 from pathlib import Path
 from typing import Annotated, Literal
-from uuid import uuid4
 
 import typer
 from pydantic import ValidationError
 
-from . import evidence, records, spec_review
+from . import evidence, records, spec_review, verification
 from .claims import checked_claims, provenance_lines, write_claims
 from .claims_notion import notion_claims
 from .command import emit, finish, operator_confirm, visible_text
-from .evidence_report import decision_source, review_context
+from .evidence_report import decision_source
 from .project import Project, load_project, snapshot
 from .project_formal import run_formal, tool_info
-from .runner import host_diagnostics, host_path, run_behavior, runner_info
+from .runner import host_diagnostics, run_behavior, runner_info
 from .showcases.polaris.cli import app as polaris_app
 
 app = typer.Typer(no_args_is_help=True, pretty_exceptions_enable=False)
@@ -316,27 +313,6 @@ def approve_spec(
         _error(exc, False)
 
 
-def _reproduce(project: Project, state: Path, revision: str, context: str | None) -> str:
-    argv = ["mentat", "--state", str(state)]
-    if project.runner == "docker" and context:
-        argv += ["--docker-context", context]
-    return shlex.join(
-        argv
-        + [
-            "verify",
-            "--repo",
-            str(project.root),
-            "--base",
-            project.base,
-            "--rev",
-            revision,
-            "--runner",
-            project.runner,
-            "--json",
-        ]
-    )
-
-
 @proof_app.command("prepare")
 def prepare_proof(
     ctx: typer.Context,
@@ -402,171 +378,22 @@ def verify(
 ) -> None:
     """Run the approved formal and behavior checks for a commit."""
     try:
-        project = load_project(repo, base, runner)
-        state = _state(ctx, project)
-        approved = _approval(state, project)
-        candidate = snapshot(project.root, rev)
-        run_id = uuid4().hex
-        tools = tool_info(project)
-        models = run_formal(project, tools)
-        cases = []
-        qualifications = []
-        artifacts = {}
-        if proof_campaign:
-            from . import proof
-
-            checked, artifacts = proof.recheck(state, project, candidate, approved, proof_campaign)
-            by_id = {item["id"]: item for item in checked}
-            if len(by_id) != len(checked) or set(by_id) - {
-                check.id for check in project.contract.formal if check.engine == "lean-comparator"
-            }:
-                raise ValueError("Proof recheck returned unexpected formal obligations")
-            models = [by_id.get(item["id"], item) for item in models]
-            from .runner import MAX_RUN_OUTPUT
-
-            # Source evidence is required; proof diagnostics are optional.
-            retained = {}
-            remaining = MAX_RUN_OUTPUT
-            for model in checked:
-                filename = model.get("artifacts", {}).get("proof-source")
-                if filename:
-                    data = artifacts[filename]
-                    if len(data) <= remaining:
-                        retained[filename] = data
-                        remaining -= len(data)
-                    else:
-                        model.update(
-                            status="incomplete",
-                            detail="Proof source evidence exceeded the run output budget",
-                        )
-                        del model["artifacts"]["proof-source"]
-                        model.setdefault("artifact_omissions", []).append(filename)
-            remaining = min(remaining, 1024 * 1024)
-            for model in checked:
-                for name, filename in list(model.get("artifacts", {}).items()):
-                    if name == "proof-source":
-                        continue
-                    data = artifacts[filename]
-                    if len(data) <= remaining:
-                        retained[filename] = data
-                        remaining -= len(data)
-                    else:
-                        del model["artifacts"][name]
-                        model.setdefault("artifact_omissions", []).append(filename)
-            artifacts = retained
-        runtime = {"runner": runner}
-        context = ctx.obj["docker"]
-        if len(models) != len(project.contract.formal):
-            raise ValueError("Formal runner returned incomplete check results")
-        if evidence.status(models, incomplete_first=True) == "pass":
-            runtime = runner_info(project, context)
-            if artifacts:
-                from .runner import MAX_RUN_OUTPUT
-
-                behavior, behavior_artifacts = run_behavior(
-                    project,
-                    candidate,
-                    context,
-                    runtime,
-                    run_id,
-                    output_budget=MAX_RUN_OUTPUT - sum(map(len, artifacts.values())),
-                )
-            else:
-                behavior, behavior_artifacts = run_behavior(
-                    project, candidate, context, runtime, run_id
-                )
-            artifacts.update(behavior_artifacts)
-            if len(behavior) != len(project.contract.behavior):
-                raise ValueError("Behavior runner returned incomplete check results")
-            cases = [
-                {"case_id": check["id"], "status": check["status"], "checks": [check]}
-                for check in behavior
-            ]
-        if runner == "host":
-            runtime.setdefault("path", host_path())
-            runtime["mentat_python"] = sys.executable
-            runtime["invocation_path"] = os.environ.get("PATH", os.defpath)
-            runtime["invocation_directory"] = str(Path.cwd())
-        if project.contract.source_mutations and cases:
-            from . import runner as behavior_runner
-            from .qualification import run_source_mutations
-
-            qualifications, mutation_artifacts = run_source_mutations(
-                project,
-                candidate,
-                context,
-                runtime,
-                run_id,
-                behavior,
-                output_budget=max(
-                    0, behavior_runner.MAX_RUN_OUTPUT - sum(map(len, artifacts.values()))
-                ),
-            )
-            artifacts.update(mutation_artifacts)
-        if load_project(repo, base, runner).fingerprint != project.fingerprint:
-            raise ValueError("Contract or verifier changed during the run. Repeat after approval")
-        if _approval(state, project) != approved:
-            raise ValueError("Approval changed during the run")
-        record = {
-            "schema_version": 2,
-            "kind": "project-verification",
-            "run_id": run_id,
-            "recorded_at": evidence.now(),
-            **_scope(project),
-            "status": evidence.status([*models, *cases], incomplete_first=True),
-            "revision": candidate.revision,
-            "snapshot_digest": candidate.digest,
-            "approval": approved,
-            "claims": [
-                claim.model_dump(mode="json", exclude={"title"}, exclude_none=True)
-                for claim in project.contract.claims
-            ],
-            "claim_review": review_context(project.contract),
-            "comparison_inputs": spec_review.comparison_inputs(project),
-            "model_checks": models,
-            "behavior_checks": [
-                {"id": check.id, "claim": check.claim} for check in project.contract.behavior
-            ],
-            "behavior_skipped": not bool(cases),
-            "cases": cases,
-            "runtime": runtime,
-            "tools": tools,
-            "reproduce": _reproduce(project, state, candidate.revision, runtime.get("context")),
-        }
-        if proof_campaign:
-            record["proof_campaigns"] = proof_campaign
-            record["reproduce"] += " " + shlex.join(
-                [arg for campaign in proof_campaign for arg in ("--proof-campaign", campaign)]
-            )
-        if project.contract.source_mutations:
-            from .qualification import approved_mutations
-
-            checks = {check.id: check for check in project.contract.behavior}
-            record["source_mutation_checks"] = [
-                {
-                    "id": mutation["id"],
-                    "claim": mutation["claim"],
-                    "check": mutation["check"],
-                    "expected_case": mutation["expected_case"],
-                    "required_cases": checks[mutation["check"]].case_report.required_cases,
-                    "violation_exit_codes": checks[mutation["check"]].violation_exit_codes,
-                }
-                for mutation in approved_mutations(project.contract, project.files)
-            ]
-            record["source_qualifications"] = qualifications
-            record["source_qualification_status"] = evidence.qualification_status(qualifications)
-            record["source_mutation_manifest_sha256"] = evidence.digest(
-                project.files[project.contract.source_mutations]
-            )
-        if runner == "host":
-            args = shlex.split(record["reproduce"])[1:]
-            launcher = [sys.executable, "-P", "-c", "from mentat.cli import app; app()"]
-            record["host_reproduce"] = (
-                f"cd {shlex.quote(runtime['invocation_directory'])} && "
-                f"PATH={shlex.quote(runtime['invocation_path'])} {shlex.join([*launcher, *args])}"
-            )
-        bundle = evidence.save_run(state, record, artifacts)
-        finish({**record, "bundle": str(bundle)}, output_json)
+        record = verification.verify(
+            repo,
+            base,
+            rev,
+            runner,
+            proof_campaign,
+            state_root=ctx.obj["state"],
+            docker_context=ctx.obj["docker"],
+            read_approval=_approval,
+            scope=_scope,
+            tool_info=tool_info,
+            run_formal=run_formal,
+            runner_info=runner_info,
+            run_behavior=run_behavior,
+        )
+        finish(record, output_json)
     except _USER_ERRORS as exc:
         _error(exc, output_json)
 

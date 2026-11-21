@@ -16,7 +16,7 @@ from mentat import cli, evidence, proof
 from mentat.project import load_project, snapshot
 
 
-def _build_campaign(root, patch, param=None):
+def _build_campaign(root, patch, param=None, check_argv=None):
     identity = {"checker": "synthetic-v1", "version": "4.35.0", "toolchain_sha256": "a" * 64,
                 "bwrap_sha256": "b" * 64, "policy_sha256": "c" * 64}
     outcomes = []
@@ -62,7 +62,8 @@ def _build_campaign(root, patch, param=None):
              "theorem": f"Proof.{name}", "allowed_imports": ["Init"], "permitted_axioms": []}
             for name in ("first", "second")
         ],
-        "behavior": [{"id": "behavior", "claim": "claim", "argv": [sys.executable, "{checks}/check.py"]}],
+        "behavior": [{"id": "behavior", "claim": "claim",
+                      "argv": check_argv or [sys.executable, "{checks}/check.py"]}],
     }
     (checks / "contract.json").write_text(json.dumps(contract))
     (checks / "proof.lean").write_text("-- approved synthetic theorem\n")
