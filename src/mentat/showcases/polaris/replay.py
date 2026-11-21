@@ -8,7 +8,7 @@ from pathlib import Path
 from mentat import gitio
 
 _PREFIX = "client/python/apache_polaris/cli/"
-_MAX_FILE = 2 * 1024 * 1024
+MAX_CANDIDATE_FILE = 2 * 1024 * 1024
 _MAX_TOTAL = 16 * 1024 * 1024
 _MAX_FILES = 4096
 _MAX_PATH = 512
@@ -80,7 +80,7 @@ def snapshot(repo: Path, revision: str) -> Snapshot:
         if len(parts) != 3 or parts[0] != oid or parts[1] != b"blob" or not parts[2].isdigit():
             raise ValueError("invalid Git object")
         sizes.append(int(parts[2]))
-    if any(size > _MAX_FILE for size in sizes) or sum(sizes) > _MAX_TOTAL:
+    if any(size > MAX_CANDIDATE_FILE for size in sizes) or sum(sizes) > _MAX_TOTAL:
         raise ValueError("candidate CLI exceeds the snapshot size limit")
     limit = sum(sizes) + sum(
         len(oid) + len(str(size)) + 8 for (_, _, oid), size in zip(paths, sizes, strict=True)

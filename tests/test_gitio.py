@@ -42,12 +42,12 @@ def test_snapshot_and_approved_file_digests_are_pinned(tmp_path):
     snapshot = project.snapshot(tmp_path, revision)
     assert snapshot.files == {"a.txt": (0o644, b"alpha\n"), "dir/b.py": (0o755, b"print(1)\n")}
     assert snapshot.digest == "dd2df11186ee11201b0356c60463461c1499211c90c697a837bded841a41c3b1"
-    assert project._digest({"a.txt": (0o644, b"alpha\n")}) == (
+    assert project.tree_digest({"a.txt": (0o644, b"alpha\n")}) == (
         "b7a1aedec12278ccae22e2a55eb0998a7fd0b63888822232983a7e00bf1611cb"
     )
     _, _, _, files = project.contract_inputs(tmp_path, revision)
     assert sorted(files) == ["check.py", "contract.json", "model.smt2"]
-    approved = project._digest({path: (0o644, data) for path, data in files.items()})
+    approved = project.tree_digest({path: (0o644, data) for path, data in files.items()})
     assert approved == "10232f2f1a3e7498cf211b4216e77905a457a4e2b81fa85c888cba4eb4a78810"
 
 
@@ -133,7 +133,7 @@ def test_ls_tree_kills_child_when_a_record_path_exceeds_the_cap(tmp_path, fake_g
     _fake_git(fake_git, body)
     started = time.monotonic()
     with pytest.raises(ValueError, match="^Git tree path exceeds size limit$"):
-        list(gitio._ls_tree(tmp_path, "HEAD", "-z", [], time.monotonic() + 10))
+        list(gitio.ls_tree(tmp_path, "HEAD", "-z", [], time.monotonic() + 10))
     # Without the kill the call would only return when the 30 second sleep ends.
     assert time.monotonic() - started < 15
     _assert_reaped(pidfile)
@@ -144,7 +144,7 @@ def test_ls_tree_kills_child_at_the_deadline(tmp_path, fake_git):
     _fake_git(fake_git, f'echo $$ > "{pidfile}"\nexec sleep 30')
     started = time.monotonic()
     with pytest.raises(ValueError, match="^git command timed out: ls-tree$"):
-        list(gitio._ls_tree(tmp_path, "HEAD", "-z", [], time.monotonic() + 1))
+        list(gitio.ls_tree(tmp_path, "HEAD", "-z", [], time.monotonic() + 1))
     # Without the kill the call would only return when the 30 second sleep ends.
     assert time.monotonic() - started < 15
     _assert_reaped(pidfile)

@@ -101,7 +101,7 @@ def test_missing_case_report_and_timeout_are_incomplete():
 
 
 def test_case_report_lost_to_output_budget_is_incomplete(monkeypatch):
-    monkeypatch.setattr(runner, "_MAX_RUN_OUTPUT", 1)
+    monkeypatch.setattr(runner, "MAX_RUN_OUTPUT", 1)
     result, _ = run_check(script_for(report(first="pass", second="pass"), 0))
     assert result["status"] == "incomplete"
 

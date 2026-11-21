@@ -74,10 +74,10 @@ def test_batch_rejects_oversize_and_missing_objects(tmp_path, monkeypatch):
     git(tmp_path, "add", ".")
     git(tmp_path, "commit", "-qm", "test")
     rev = git(tmp_path, "rev-parse", "HEAD")
-    monkeypatch.setattr(replay, "_MAX_FILE", 6)
+    monkeypatch.setattr(replay, "MAX_CANDIDATE_FILE", 6)
     with pytest.raises(ValueError, match="snapshot size limit"):
         replay.snapshot(tmp_path, rev)
-    monkeypatch.setattr(replay, "_MAX_FILE", 100)
+    monkeypatch.setattr(replay, "MAX_CANDIDATE_FILE", 100)
     oid = git(tmp_path, "rev-parse", f"{rev}:{replay._PREFIX}command/setup.py")
     (tmp_path / ".git/objects" / oid[:2] / oid[2:]).unlink()
     with pytest.raises(ValueError, match="invalid Git object"):

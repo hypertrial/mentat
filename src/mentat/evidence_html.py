@@ -163,7 +163,7 @@ def _cases(check):
             raise ValueError("Unexpected saved case result")
 
 
-def _validate(record):
+def validate_record(record):
     if (
         not isinstance(record, dict)
         or record.get("kind") != "project-verification"
@@ -287,7 +287,7 @@ def _validate(record):
     return claim_groups(record)
 
 
-def _accepted(state, record, digest):
+def acceptance_status(state, record, digest):
     path = state / "acceptances" / (record["run_id"] + ".json")
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
@@ -686,9 +686,9 @@ def render_run(state: Path, run_id: str, output: Path) -> None:
     try:
         state = evidence.state_directory(state, create=False)
         _, record, manifest_digest = evidence.read_run_snapshot(state, run_id)
-        groups = _validate(record)
+        groups = validate_record(record)
         content = _render(
-            record, groups, manifest_digest, _accepted(state, record, manifest_digest)
+            record, groups, manifest_digest, acceptance_status(state, record, manifest_digest)
         )
         _write_html(state, output, content)
     except (KeyError, TypeError, IndexError, AttributeError, UnicodeError) as exc:
@@ -707,7 +707,7 @@ def render_comparison(
         records, claims, contexts, overviews = [], [], [], []
         for label, run_id in (("Before", before_id), ("After", after_id)):
             _, record, manifest = evidence.read_run_snapshot(state, run_id)
-            groups = _validate(record)
+            groups = validate_record(record)
             items = {claim["id"]: claim for _, area in groups for claim in area}
             checks = {
                 check["id"]: check
@@ -726,7 +726,7 @@ def render_comparison(
                 ("Contract digest", record["contract_digest"]),
                 *([("Approval source", source)] if source else []),
                 ("Manifest SHA-256", manifest),
-                ("Operator acceptance", _accepted(state, record, manifest)),
+                ("Operator acceptance", acceptance_status(state, record, manifest)),
             ]
             if "source_qualification_status" in record:
                 fields.insert(

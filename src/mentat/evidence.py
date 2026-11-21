@@ -11,9 +11,9 @@ from pathlib import Path
 
 # canonical's helpers are re-exported here: callers use evidence.json_bytes and friends.
 from .canonical import STATUSES, decode_json, digest, json_bytes, status
-from .claims import _code_span, _inline_prose
+from .claims import code_span, inline_prose
 from .command import visible_text
-from .project_formal import _NAME
+from .project_formal import LEAN_NAME_PATTERN
 
 RUN_ID = re.compile(r"[a-f0-9]{32}\Z")
 # Every checker version that has ever written saved proofs, including the current one.
@@ -106,8 +106,8 @@ def report(record: dict) -> bytes:
                 claim = f"`{check['claim']}` · " if "claim" in check else ""
                 lines.append(f"  - {claim}{check.get('status', 'incomplete')} · {detail}")
     for regression in record.get("regressions", []):
-        case_id = _code_span(visible_text(regression["case_id"]))
-        status = _inline_prose(visible_text(regression["status"]))
+        case_id = code_span(visible_text(regression["case_id"]))
+        status = inline_prose(visible_text(regression["status"]))
         label = (
             " (advisory; candidate code may influence it)"
             if "regressions" in record.get("advisory_results", [])
@@ -118,7 +118,7 @@ def report(record: dict) -> bytes:
             if check.get("status") != "pass":
                 parts = [check.get("name", "check"), check.get("status", "incomplete")]
                 parts.extend(check[key] for key in ("stage", "detail") if check.get(key))
-                lines.append("  - " + " · ".join(_inline_prose(visible_text(part)) for part in parts))
+                lines.append("  - " + " · ".join(inline_prose(visible_text(part)) for part in parts))
     for method, counts in record.get("counts", {}).items():
         summary = ", ".join(f"{count} {name.replace('_', ' ')}" for name, count in counts.items())
         baseline = "advisory_results" in record and method in ("upstream-pytest", "hypothesis")
@@ -251,7 +251,7 @@ def proof_evidence(record: dict) -> None:
             if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value):
                 raise ValueError("Invalid saved proof source identity")
         theorem = info.get("theorem")
-        if not isinstance(theorem, str) or not _NAME.fullmatch(theorem):
+        if not isinstance(theorem, str) or not LEAN_NAME_PATTERN.fullmatch(theorem):
             raise ValueError("Invalid saved proof theorem identity")
         expected = {key: record.get(key) for key in ("revision", "base", "contract_digest")}
         expected["verifier_digest"] = record.get("comparison_inputs", {}).get("verifier")

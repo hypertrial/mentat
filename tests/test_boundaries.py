@@ -1,3 +1,4 @@
+import ast
 import json
 import os
 import subprocess
@@ -9,6 +10,7 @@ from helpers import git
 from pydantic import ValidationError
 from typer.testing import CliRunner
 
+import mentat
 from mentat.cli import app
 from mentat.evidence import read_run, save_run
 from mentat.project import PRESENTATION_MODULES, VERIFIER_MODULES
@@ -590,3 +592,87 @@ def test_core_module_imports_alone_in_a_fresh_interpreter(module):
         [sys.executable, "-c", f"import {module}"], capture_output=True, text=True, timeout=120
     )
     assert result.returncode == 0, result.stderr
+
+
+# (file under src/mentat, private name) pairs that may cross a module boundary. Keep this empty:
+# make the name public instead. An entry needs a comment that says why it cannot be public.
+PRIVATE_ALLOWLIST: frozenset[tuple[str, str]] = frozenset()
+
+
+def _is_private(name):
+    return name.startswith("_") and not (name.startswith("__") and name.endswith("__"))
+
+
+def _dotted_name(node):
+    if isinstance(node, ast.Name):
+        return [node.id]
+    if isinstance(node, ast.Attribute) and (head := _dotted_name(node.value)) is not None:
+        return [*head, node.attr]
+    return None
+
+
+def _cross_module_private_uses():
+    """Static imports and import-alias attribute reads, under src/mentat only, that reach another
+    mentat module's private name. Tests, the self-check and string lookups are out of scope."""
+    root = Path(mentat.__file__).parent
+    modules = {
+        path: ".".join(["mentat", *path.relative_to(root).with_suffix("").parts]).removesuffix(
+            ".__init__"
+        )
+        for path in root.rglob("*.py")
+    }
+    known = set(modules.values())
+    uses = []  # (relative path, private name, description)
+    for path, me in modules.items():
+        relative = path.relative_to(root).as_posix()
+        package = me.split(".") if path.name == "__init__.py" else me.split(".")[:-1]
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        # Local names bound to modules, from every import in the file, including local imports.
+        aliases = {}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.asname:
+                        aliases[alias.asname] = alias.name
+                    else:
+                        aliases.setdefault(alias.name.split(".")[0], alias.name.split(".")[0])
+            elif isinstance(node, ast.ImportFrom):
+                base = package[: len(package) - node.level + 1] if node.level else []
+                source = ".".join([*base, node.module] if node.module else base)
+                for alias in node.names:
+                    if f"{source}.{alias.name}" in known:
+                        aliases[alias.asname or alias.name] = f"{source}.{alias.name}"
+                    crosses = source.split(".")[0] == "mentat" and source != me
+                    if crosses and _is_private(alias.name):
+                        uses.append(
+                            (
+                                relative,
+                                alias.name,
+                                f"{relative}:{node.lineno}: from {source} import {alias.name}",
+                            )
+                        )
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Attribute) and _is_private(node.attr):
+                parts = _dotted_name(node.value)
+                if parts and parts[0] in aliases:
+                    target = ".".join([aliases[parts[0]], *parts[1:]])
+                    if target in known and target != me:
+                        uses.append(
+                            (
+                                relative,
+                                node.attr,
+                                f"{relative}:{node.lineno}: {ast.unparse(node)}",
+                            )
+                        )
+    return uses
+
+
+def test_no_private_name_crosses_a_mentat_module_boundary():
+    uses = [
+        text
+        for path, name, text in _cross_module_private_uses()
+        if (path, name) not in PRIVATE_ALLOWLIST
+    ]
+    assert not uses, "Make these names public instead of reaching them privately:\n" + "\n".join(
+        uses
+    )

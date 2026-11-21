@@ -9,7 +9,7 @@ from urllib.parse import quote
 from uuid import uuid4
 
 from .canonical import decode_json
-from .gitio import _MAX_FILE, _root
+from .gitio import MAX_FILE, repo_root
 from .project import Claim, Contract, Review, contract_inputs
 
 _FILENAME = "claims.md"
@@ -19,7 +19,7 @@ _ORDERED_LIST = re.compile(r"^([ \t]*\d+)([.)])(?=[ \t]|$)", re.MULTILINE)
 _HEADING_END = re.compile(r"(?<!\S)#+$")
 
 
-def _prose(value: str) -> str:
+def escape_prose(value: str) -> str:
     value = value.replace("\r\n", "\n").replace("\r", "\n")
     value = _MARKUP.sub(r"\\\1", value)
     value = _LINE_MARKUP.sub(r"\1\\", value)
@@ -27,16 +27,16 @@ def _prose(value: str) -> str:
 
 
 def _review_prose(value: str) -> str:
-    return re.sub(r"^[ \t]+", "", _prose(value), flags=re.MULTILINE).strip("\n")
+    return re.sub(r"^[ \t]+", "", escape_prose(value), flags=re.MULTILINE).strip("\n")
 
 
-def _inline_prose(value: str) -> str:
+def inline_prose(value: str) -> str:
     # Grouped list entries represent one paragraph in both Git and Notion.
     paragraphs = re.split(r"\r\n?|\n", value)
-    return _prose(" ".join(line.strip(" \t") for line in paragraphs if line.strip(" \t")))
+    return escape_prose(" ".join(line.strip(" \t") for line in paragraphs if line.strip(" \t")))
 
 
-def _code_span(value: str) -> str:
+def code_span(value: str) -> str:
     delimiter = "`" * (max((len(run) for run in re.findall(r"`+", value)), default=0) + 1)
     if (
         value.startswith("`")
@@ -52,21 +52,21 @@ def provenance_lines(provenance: dict) -> list[str]:
     for citation in provenance["citations"]:
         location = f"{citation['path']}:{citation['start_line']}-{citation['end_line']}"
         lines.append(
-            f"- Source {_code_span(location)} · commit {_code_span(citation['commit'])}"
-            f" · blob {_code_span(citation['blob'])}"
+            f"- Source {code_span(location)} · commit {code_span(citation['commit'])}"
+            f" · blob {code_span(citation['blob'])}"
         )
     return lines
 
 
 def _append_selectors(lines: list[str], contract: Contract, claim_id: str) -> None:
     selectors = [
-        f"- Check `{check.id}` selects {_prose(selector)}"
+        f"- Check `{check.id}` selects {escape_prose(selector)}"
         for check in contract.behavior
         if check.claim == claim_id
         for selector in (check.selectors or [])
     ]
     environment = [
-        f"- Check `{check.id}` inherits host environment {_code_span(name)}"
+        f"- Check `{check.id}` inherits host environment {code_span(name)}"
         for check in contract.behavior
         if check.claim == claim_id
         for name in check.host_environment
@@ -85,11 +85,11 @@ def _assurance_lines(claim: Claim, contract: Contract) -> list[str]:
     def reference(label, ref):
         check = checks[ref.check_id]
         support = (
-            f" · supporting claim {_code_span(check.claim)}" if check.claim != claim.id else ""
+            f" · supporting claim {code_span(check.claim)}" if check.claim != claim.id else ""
         )
-        lines.append(f"- {label} {_code_span(ref.check_id)}{support}")
+        lines.append(f"- {label} {code_span(ref.check_id)}{support}")
         for case in ref.case_ids:
-            lines.append(f"- Assurance case {_code_span(case)}")
+            lines.append(f"- Assurance case {code_span(case)}")
 
     for ref in assurance.implementation_checks:
         reference("Implementation check", ref)
@@ -97,23 +97,23 @@ def _assurance_lines(claim: Claim, contract: Contract) -> list[str]:
         reference("Witness check", ref)
     for bound in assurance.bounds:
         lines.append(
-            f"- Bound {_code_span(bound.id)} · {bound.kind} · {_inline_prose(bound.statement)}"
+            f"- Bound {code_span(bound.id)} · {bound.kind} · {inline_prose(bound.statement)}"
         )
         if bound.assumption is not None:
-            lines.append("- Bound assumption · " + _inline_prose(bound.assumption))
+            lines.append("- Bound assumption · " + inline_prose(bound.assumption))
         for ref in bound.checks:
             reference("Bound check", ref)
     for exclusion in assurance.exclusions:
-        lines.append("- Exclusion · " + _inline_prose(exclusion.scenario))
-        lines.append("- Reason · " + _inline_prose(exclusion.reason))
-        lines.append("- Effect · " + _inline_prose(exclusion.effect))
+        lines.append("- Exclusion · " + inline_prose(exclusion.scenario))
+        lines.append("- Reason · " + inline_prose(exclusion.reason))
+        lines.append("- Effect · " + inline_prose(exclusion.effect))
         lines.append(
             "- Affected claims · "
-            + ", ".join(_code_span(item) for item in exclusion.affected_claims)
+            + ", ".join(code_span(item) for item in exclusion.affected_claims)
         )
     for deviation in assurance.deviations:
-        lines.append("- Deviation · " + _inline_prose(deviation.rationale))
-        lines.append("- Effect · " + _inline_prose(deviation.effect))
+        lines.append("- Deviation · " + inline_prose(deviation.rationale))
+        lines.append("- Effect · " + inline_prose(deviation.effect))
         lines.extend(
             provenance_lines(
                 {"origin": "declared", "citations": [deviation.citation.model_dump()]}
@@ -125,21 +125,21 @@ def _assurance_lines(claim: Claim, contract: Contract) -> list[str]:
 def _contract_policy_lines(claim: Claim, contract: Contract, *, grouped: bool) -> list[str]:
     lines = []
     if contract.source_mutations is not None and claim.id == contract.claims[0].id:
-        lines.append("- Source mutations manifest · " + _inline_prose(contract.source_mutations))
+        lines.append("- Source mutations manifest · " + inline_prose(contract.source_mutations))
     if not grouped:
         for check in contract.formal:
             if check.claim == claim.id and check.engine == "lean-comparator":
                 lines.append(
-                    f"- Lean comparator {_code_span(check.id)} · theorem "
-                    + _inline_prose(check.theorem)
+                    f"- Lean comparator {code_span(check.id)} · theorem "
+                    + inline_prose(check.theorem)
                 )
                 lines.append(
                     "- Allowed imports · "
-                    + (", ".join(_code_span(name) for name in check.allowed_imports) or "None")
+                    + (", ".join(code_span(name) for name in check.allowed_imports) or "None")
                 )
                 lines.append(
                     "- Permitted axioms · "
-                    + (", ".join(_code_span(name) for name in check.permitted_axioms) or "None")
+                    + (", ".join(code_span(name) for name in check.permitted_axioms) or "None")
                 )
     return lines
 
@@ -156,7 +156,7 @@ def _review_intro(review: Review) -> list[str]:
         "",
     ]
     for limit in review.scope_limits:
-        text = _inline_prose(limit) if review.groups else _review_prose(limit).replace("\n", "\n  ")
+        text = inline_prose(limit) if review.groups else _review_prose(limit).replace("\n", "\n  ")
         lines.append("- " + text)
     if review.examples:
         lines.extend(("", "## Examples", ""))
@@ -164,25 +164,25 @@ def _review_intro(review: Review) -> list[str]:
             url = quote(example.url, safe=":/?#[]@!$&'()*+,;=%-._~")
             url = url.replace("&", "&amp;").replace("(", r"\(").replace(")", r"\)")
             summary = (
-                _inline_prose(example.summary)
+                inline_prose(example.summary)
                 if review.groups
                 else _review_prose(example.summary).replace("\n", "\n  ")
             )
-            lines.append(f"- [{_prose(example.label)}]({url}) — {summary}")
+            lines.append(f"- [{escape_prose(example.label)}]({url}) — {summary}")
     return lines
 
 
 def _append_review_claim(
     lines: list[str], contract: Contract, number: int, claim: Claim, *, grouped: bool
 ) -> None:
-    title = _HEADING_END.sub(r"\\\g<0>", _prose(claim.title.rstrip()))
-    lines.extend(("", f"### {number}. {title}", "", _prose(claim.statement)))
+    title = _HEADING_END.sub(r"\\\g<0>", escape_prose(claim.title.rstrip()))
+    lines.extend(("", f"### {number}. {title}", "", escape_prose(claim.statement)))
     behavior = ", ".join(f"`{check.id}`" for check in contract.behavior if check.claim == claim.id)
     formal = ", ".join(f"`{check.id}`" for check in contract.formal if check.claim == claim.id)
     if claim.assumptions and not (grouped and formal):
         lines.extend(("", "Assumptions", ""))
         for item in claim.assumptions:
-            text = _inline_prose(item) if grouped else _prose(item).replace("\n", "\n  ")
+            text = inline_prose(item) if grouped else escape_prose(item).replace("\n", "\n  ")
             lines.append("- " + text)
     if not grouped:
         _append_selectors(lines, contract, claim.id)
@@ -204,7 +204,7 @@ def _grouped_claims(contract: Contract) -> bytes:
     claims = {claim.id: claim for claim in contract.claims}
     number = 0
     for group in review.groups:
-        title = _HEADING_END.sub(r"\\\g<0>", _prose(group.title))
+        title = _HEADING_END.sub(r"\\\g<0>", escape_prose(group.title))
         lines.extend(("", f"## {title}"))
         for claim_id in group.claim_ids:
             number += 1
@@ -212,28 +212,28 @@ def _grouped_claims(contract: Contract) -> bytes:
     lines.extend(("", "## Verification coverage and limits"))
     if review.verification_limits:
         lines.extend(("", "### Coverage limits", ""))
-        lines.extend("- " + _inline_prose(item) for item in review.verification_limits)
+        lines.extend("- " + inline_prose(item) for item in review.verification_limits)
     lines.extend(("", "### Behavior checks"))
     for check in contract.behavior:
-        row = f"Check {_code_span(check.id)} · Claim {_code_span(check.claim)}"
+        row = f"Check {code_span(check.id)} · Claim {code_span(check.claim)}"
         if not (
             check.selectors or check.host_environment or check.case_report or check.negative_control
         ):
             row += " · Standalone check"
         lines.extend(("", row))
-        details = [f"- Selector {_code_span(selector)}" for selector in check.selectors or []]
-        details.extend(f"- Host environment {_code_span(name)}" for name in check.host_environment)
+        details = [f"- Selector {code_span(selector)}" for selector in check.selectors or []]
+        details.extend(f"- Host environment {code_span(name)}" for name in check.host_environment)
         if check.case_report:
             details.extend(
-                f"- Required case {_code_span(case)}" for case in check.case_report.required_cases
+                f"- Required case {code_span(case)}" for case in check.case_report.required_cases
             )
         if check.negative_control:
             control = check.negative_control
             requirement = (
-                f"- Negative control requires exit {_code_span(str(control.violation_exit_code))}"
+                f"- Negative control requires exit {code_span(str(control.violation_exit_code))}"
             )
             if control.failing_case:
-                requirement += f" and failure of {_code_span(control.failing_case)}"
+                requirement += f" and failure of {code_span(control.failing_case)}"
             details.append(requirement)
         if details:
             lines.extend(("", *details))
@@ -243,7 +243,7 @@ def _grouped_claims(contract: Contract) -> bytes:
         lines.extend(
             (
                 "",
-                f"Formal check {_code_span(check.id)} · Claim {_code_span(check.claim)} · "
+                f"Formal check {code_span(check.id)} · Claim {code_span(check.claim)} · "
                 + (
                     "Z3"
                     if check.engine == "z3"
@@ -255,18 +255,18 @@ def _grouped_claims(contract: Contract) -> bytes:
         )
         if check.engine == "lean-comparator":
             lines.append("")
-            lines.append("- Comparator theorem · " + _inline_prose(check.theorem))
+            lines.append("- Comparator theorem · " + inline_prose(check.theorem))
             lines.append(
                 "- Allowed imports · "
-                + (", ".join(_code_span(name) for name in check.allowed_imports) or "None")
+                + (", ".join(code_span(name) for name in check.allowed_imports) or "None")
             )
             lines.append(
                 "- Permitted axioms · "
-                + (", ".join(_code_span(name) for name in check.permitted_axioms) or "None")
+                + (", ".join(code_span(name) for name in check.permitted_axioms) or "None")
             )
         if check.claim not in shown and (assumptions := claims[check.claim].assumptions):
             lines.append("")
-            lines.extend("- Assumption " + _inline_prose(item) for item in assumptions)
+            lines.extend("- Assumption " + inline_prose(item) for item in assumptions)
             shown.add(check.claim)
     counts = (
         (len(contract.behavior), "behavior check"),
@@ -298,11 +298,11 @@ def render_claims(contract: Contract) -> bytes:
         "Generated from `contract.json`. Edit the contract and regenerate.",
     ]
     for claim in contract.claims:
-        lines.extend(("", f"## {_prose(claim.id)}", "", _prose(claim.statement)))
+        lines.extend(("", f"## {escape_prose(claim.id)}", "", escape_prose(claim.statement)))
         if claim.assumptions:
             lines.extend(("", "Assumptions", ""))
             for assumption in claim.assumptions:
-                lines.append("- " + _prose(assumption).replace("\n", "\n  "))
+                lines.append("- " + escape_prose(assumption).replace("\n", "\n  "))
             lines.extend(("", "Checks"))
         if claim.provenance:
             lines.extend(("", *provenance_lines(claim.provenance.model_dump())))
@@ -323,15 +323,15 @@ def _read(directory: int, name: str) -> bytes:
     with os.fdopen(fd, "rb") as stream:
         if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
             raise ValueError(f"expected a regular .mentat/{name} file")
-        data = stream.read(_MAX_FILE + 1)
-    if len(data) > _MAX_FILE:
+        data = stream.read(MAX_FILE + 1)
+    if len(data) > MAX_FILE:
         raise ValueError(f".mentat/{name} exceeds the file size limit")
     return data
 
 
 @contextmanager
 def _worktree_contract(repo: Path):
-    directory = os.open(_root(repo) / ".mentat", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    directory = os.open(repo_root(repo) / ".mentat", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
         contract = Contract.model_validate(decode_json(_read(directory, "contract.json")))
         yield directory, render_claims(contract)
@@ -357,7 +357,7 @@ def checked_claims(repo: Path, base: str | None) -> tuple[bytes, bool]:
 
 def write_claims(repo: Path) -> None:
     with _worktree_contract(repo) as (directory, expected):
-        if len(expected) > _MAX_FILE:
+        if len(expected) > MAX_FILE:
             raise ValueError("generated .mentat/claims.md exceeds the contract file size limit")
         if _matches_local(directory, expected):
             return

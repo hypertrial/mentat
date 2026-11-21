@@ -544,7 +544,7 @@ def test_cli_shares_output_budget_between_baseline_and_mutation(campaign, monkey
     report = json.dumps({"schema_version": 1, "cases": {"target <case>": "pass", "other": "pass"}}).encode()
     baseline_log = b"PRIVATE_LOG_CONTENT\n"
     limit = len(report) + len(baseline_log) + extra_report_space * len(report)
-    monkeypatch.setattr(runner, "_MAX_RUN_OUTPUT", limit)
+    monkeypatch.setattr(runner, "MAX_RUN_OUTPUT", limit)
     result, payload = verify()
     _, record = evidence.read_run(state, payload["run_id"])
     bundle = state / "runs" / payload["run_id"]

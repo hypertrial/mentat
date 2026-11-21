@@ -571,10 +571,10 @@ def approval_scope(root):
         )
     assert result.exit_code == 2 and "approve" in result.output.lower(), result.output
     runtime.assert_not_called()
-    original = project._digest
+    original = project.tree_digest
     with patch.object(
         project,
-        "_digest",
+        "tree_digest",
         side_effect=lambda files: "changed" if "cli.py" in files else original(files),
     ):
         assert f.verify(f.base, next_base)[0].exit_code == 2
