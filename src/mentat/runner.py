@@ -129,7 +129,7 @@ def _host_info(project):
     declared = requirements.executables if requirements else []
     commands = [check.effective_argv()[0] for check in project.contract.behavior]
     executables = {command: _executable(command, path) for command in [*commands, *declared]}
-    for check, command in zip(project.contract.behavior, commands):
+    for check, command in zip(project.contract.behavior, commands, strict=False):
         executables[command].setdefault("checks", []).append(check.id)
     distributions = requirements.python_distributions if requirements else []
     packages = {name: {"status": "unavailable"} for name in distributions}
@@ -371,7 +371,7 @@ def _docker_artifact(context, name, artifact):
             or members[0].size > _MAX_ARTIFACT
         ):
             raise ValueError("invalid artifact archive")
-        return tar.extractfile(members[0]).read(_MAX_ARTIFACT + 1)
+        return tar.extractfile(members[0]).read(_MAX_ARTIFACT + 1)  # type: ignore[reportOptionalMemberAccess]  # isfile() is checked above, so extractfile returns a file
 
 
 _PHASE_ERRORS = (

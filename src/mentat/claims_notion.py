@@ -260,7 +260,7 @@ def _normalized(markdown: str) -> list[str]:
 
 def _blocks(lines: list[str], prefix: str) -> Iterator[tuple[str, list[str]]]:
     starts = [i for i, line in enumerate(lines) if line.startswith(prefix)]
-    for start, end in zip(starts, [*starts[1:], len(lines)]):
+    for start, end in zip(starts, [*starts[1:], len(lines)], strict=False):
         yield lines[start], lines[start + 1 : end]
 
 

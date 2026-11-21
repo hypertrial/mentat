@@ -519,7 +519,7 @@ def _model(model, value: dict, message: str | dict[str, str]) -> None:
     except ValidationError as exc:
         location = exc.errors()[0]["loc"]
         if isinstance(message, dict):
-            raise ValueError(message.get(location[0] if location else "", _RECORD_INVALID)) from exc
+            raise ValueError(message.get(location[0] if location else "", _RECORD_INVALID)) from exc  # type: ignore[reportCallIssue, reportArgumentType]  # pydantic loc entries may be ints; dict.get then returns the default
         raise ValueError(message) from exc
 
 
@@ -914,8 +914,8 @@ def compare_runs(
             raise ValueError(f"Saved runs contain different results for check {check_id}")
         if left is not None and right is not None and left["claim"] != right["claim"]:
             raise ValueError(f"Saved runs disagree on the claim for check {check_id}")
-        claim = (left or right)["claim"]
-        outcomes = {"id": check_id, "kind": kind}
+        claim = (left or right)["claim"]  # type: ignore[reportOptionalSubscript]  # every key comes from at least one side
+        outcomes: dict[str, object] = {"id": check_id, "kind": kind}
         for side, check in (("before", left), ("after", right)):
             outcomes[side] = (
                 {key: value for key, value in check.items() if key != "claim"}

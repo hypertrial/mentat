@@ -26,7 +26,7 @@ polaris = ["pyyaml>=6.0.3,<7"]
 mentat = "mentat.cli:app"
 
 [dependency-groups]
-dev = ["hypothesis>=6,<7", "pytest>=9,<10", "pytest-xdist>=3.6,<4", "ruff>=0.11,<1"]
+dev = ["hypothesis>=6,<7", "pyright[nodejs]>=1.1.414,<2", "pytest>=9,<10", "pytest-xdist>=3.6,<4", "ruff>=0.11,<1"]
 
 [build-system]
 requires = ["hatchling==1.29.0"]
@@ -48,4 +48,22 @@ target-version = "py312"
 line-length = 100
 
 [tool.ruff.lint]
-select = ["E4", "E7", "E9", "F", "I"]
+select = ["B", "E4", "E7", "E9", "F", "I", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+# Typer option defaults are the framework's idiom (B008). Editing this file would change the Polaris pack digest.
+"src/mentat/showcases/polaris/cli.py" = ["B008"]
+# The %r template is a Python source literal, not a plain format string; an f-string rewrite would need brace escaping. Editing this file would change the Polaris pack digest.
+"src/mentat/showcases/polaris/regression.py" = ["UP031"]
+# Verbatim copies of the old code, kept as oracles.
+"tests/saved_record_oracle.py" = ["B", "UP"]
+"tests/proof_record_oracle.py" = ["B", "UP"]
+# Approved base file: not edited. Its loop closures are called within the same iteration.
+".mentat/selfcheck.py" = ["B", "UP"]
+
+[tool.pyright]
+# Basic mode on the core package. showcases is excluded: it has 43 basic-mode errors, mostly z3 Ref attribute access.
+typeCheckingMode = "basic"
+pythonVersion = "3.12"
+include = ["src/mentat"]
+exclude = ["src/mentat/showcases", "**/__pycache__"]

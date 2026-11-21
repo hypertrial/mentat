@@ -38,17 +38,17 @@ def run(argv, *, output_limit, timeout, cwd=None, env=None, stdin=None, stderr=T
     try:
         with selectors.DefaultSelector() as selector:
             for stream in streams:
-                selector.register(stream, selectors.EVENT_READ)
+                selector.register(stream, selectors.EVENT_READ)  # type: ignore[reportArgumentType]  # Popen(stdout/stderr=PIPE) makes these streams non-None
             while selector.get_map():
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise TimeoutError("execution timed out")
                 for key, _ in selector.select(remaining):
-                    chunk = os.read(key.fileobj.fileno(), 65536)
+                    chunk = os.read(key.fileobj.fileno(), 65536)  # type: ignore[reportAttributeAccessIssue]  # selector keys are the pipe objects registered above
                     if not chunk:
                         selector.unregister(key.fileobj)
                     else:
-                        data = streams[key.fileobj]
+                        data = streams[key.fileobj]  # type: ignore[reportArgumentType]  # selector keys are the pipe objects registered above
                         data.extend(chunk)
                         if len(data) > output_limit:
                             raise RuntimeError("execution output exceeded limit")
@@ -59,7 +59,7 @@ def run(argv, *, output_limit, timeout, cwd=None, env=None, stdin=None, stderr=T
             _kill(process)
         finally:
             for stream in streams:
-                stream.close()
+                stream.close()  # type: ignore[reportOptionalMemberAccess]  # Popen(stdout/stderr=PIPE) makes these streams non-None
 
 
 def run_to_files(argv, *, file_size_limit, timeout, cwd=None, env=None, stdin=None):

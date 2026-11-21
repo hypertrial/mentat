@@ -131,15 +131,15 @@ def _contract_policy_lines(claim: Claim, contract: Contract, *, grouped: bool) -
             if check.claim == claim.id and check.engine == "lean-comparator":
                 lines.append(
                     f"- Lean comparator {code_span(check.id)} · theorem "
-                    + inline_prose(check.theorem)
+                    + inline_prose(check.theorem)  # type: ignore[reportArgumentType]  # Formal.shape requires theorem for lean-comparator
                 )
                 lines.append(
                     "- Allowed imports · "
-                    + (", ".join(code_span(name) for name in check.allowed_imports) or "None")
+                    + (", ".join(code_span(name) for name in check.allowed_imports) or "None")  # type: ignore[reportOptionalIterable]  # Formal.shape requires allowed_imports for lean-comparator
                 )
                 lines.append(
                     "- Permitted axioms · "
-                    + (", ".join(code_span(name) for name in check.permitted_axioms) or "None")
+                    + (", ".join(code_span(name) for name in check.permitted_axioms) or "None")  # type: ignore[reportOptionalIterable]  # Formal.shape requires permitted_axioms for lean-comparator
                 )
     return lines
 
@@ -175,7 +175,7 @@ def _review_intro(review: Review) -> list[str]:
 def _append_review_claim(
     lines: list[str], contract: Contract, number: int, claim: Claim, *, grouped: bool
 ) -> None:
-    title = _HEADING_END.sub(r"\\\g<0>", escape_prose(claim.title.rstrip()))
+    title = _HEADING_END.sub(r"\\\g<0>", escape_prose(claim.title.rstrip()))  # type: ignore[reportOptionalMemberAccess]  # Claim.relationships requires titles when review is set
     lines.extend(("", f"### {number}. {title}", "", escape_prose(claim.statement)))
     behavior = ", ".join(f"`{check.id}`" for check in contract.behavior if check.claim == claim.id)
     formal = ", ".join(f"`{check.id}`" for check in contract.formal if check.claim == claim.id)
@@ -199,11 +199,11 @@ def _append_review_claim(
 
 
 def _grouped_claims(contract: Contract) -> bytes:
-    review = contract.review
+    review: Review = contract.review  # type: ignore[reportAssignmentType]  # render_claims calls this only when review is set
     lines = _review_intro(review)
     claims = {claim.id: claim for claim in contract.claims}
     number = 0
-    for group in review.groups:
+    for group in review.groups:  # type: ignore[reportOptionalIterable]  # render_claims calls this only when groups are set
         title = _HEADING_END.sub(r"\\\g<0>", escape_prose(group.title))
         lines.extend(("", f"## {title}"))
         for claim_id in group.claim_ids:
@@ -255,14 +255,14 @@ def _grouped_claims(contract: Contract) -> bytes:
         )
         if check.engine == "lean-comparator":
             lines.append("")
-            lines.append("- Comparator theorem · " + inline_prose(check.theorem))
+            lines.append("- Comparator theorem · " + inline_prose(check.theorem))  # type: ignore[reportArgumentType]  # Formal.shape requires theorem for lean-comparator
             lines.append(
                 "- Allowed imports · "
-                + (", ".join(code_span(name) for name in check.allowed_imports) or "None")
+                + (", ".join(code_span(name) for name in check.allowed_imports) or "None")  # type: ignore[reportOptionalIterable]  # Formal.shape requires allowed_imports for lean-comparator
             )
             lines.append(
                 "- Permitted axioms · "
-                + (", ".join(code_span(name) for name in check.permitted_axioms) or "None")
+                + (", ".join(code_span(name) for name in check.permitted_axioms) or "None")  # type: ignore[reportOptionalIterable]  # Formal.shape requires permitted_axioms for lean-comparator
             )
         if check.claim not in shown and (assumptions := claims[check.claim].assumptions):
             lines.append("")
