@@ -755,7 +755,7 @@ def test_cli_prepare_check_and_repeat_campaigns_recheck_formal_gate(campaign, tm
     record = json.loads(complete.output)
     assert record["status"] == "pass" and record["behavior_skipped"] is False
     assert {item["id"]: item["status"] for item in record["model_checks"]} == {"first": "pass", "second": "pass"}
-    assert {item["id"]: item["evidence"]["campaign_id"] for item in record["model_checks"]} == dict(zip(("first", "second"), ids))
+    assert {item["id"]: item["evidence"]["campaign_id"] for item in record["model_checks"]} == dict(zip(("first", "second"), ids, strict=False))
     assert len(c.calls) == 5  # two checks, one partial recheck, two full rechecks
 
 

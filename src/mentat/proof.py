@@ -12,6 +12,7 @@ import tempfile
 import time
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 from pydantic import ValidationError
@@ -701,7 +702,7 @@ def recheck(state: Path, project, candidate, approval: dict, campaign_ids: list[
                         None,
                     )
                     completion = finished.get(latest["attempt"]) if latest else None
-                    outcome = {
+                    outcome: dict[str, Any] = {
                         "status": "incomplete",
                         "detail": "Latest proof submission is not accepted",
                     }

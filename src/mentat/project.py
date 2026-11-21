@@ -4,7 +4,7 @@ import hashlib
 import re
 import time
 import unicodedata
-from collections.abc import Iterable, Iterator
+from collections.abc import Generator, Iterable
 from contextlib import closing
 from dataclasses import dataclass
 from importlib import metadata
@@ -569,7 +569,7 @@ class Project:
     verifier_digest: str
 
 
-def _tree_records(root: Path, revision: str, *, approved: bool) -> Iterator[bytes]:
+def _tree_records(root: Path, revision: str, *, approved: bool) -> Generator[bytes, None, None]:
     deadline = time.monotonic() + 60
     if approved:
         yield from ls_tree(root, revision, "-rtz", [b".mentat"], deadline)

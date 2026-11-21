@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Add pyright (basic mode) and the ruff `B` (bugbear) and `UP` (pyupgrade) rule groups to the gate.
+  `tests/test_static_checks.py` runs pyright once over `src/mentat` (`showcases/` stays excluded). Pyright
+  and its Node engine come from the `dev` group (`pyright[nodejs]`), so no download happens after `uv sync`.
+  The changes are type annotations, `type: ignore` comments with reasons, and an explicit
+  `strict=False` on existing `zip` calls; no runtime behavior changes. The verifier digest changes (the
+  verifier modules `claims`, `evidence`, `gitio`, `process`, `project`, `proof`, `runner`, `spec_review`
+  and `verification` changed), and the Polaris pack digest changes too (it covers `claims`, `evidence`,
+  `gitio`, `process` and `project`). So approvals, pending acceptances and proof campaigns must be renewed.
 - Add typed validation for proof campaign manifests and ledger entries. `mentat.records` now
   models the manifest fields and target entries, the ledger entries and the checker results
   that `proof` reads, and the saved lean-comparator checks that `evidence.proof_evidence`

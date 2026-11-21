@@ -6,7 +6,7 @@ import selectors
 import subprocess
 import tempfile
 import time
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import nullcontext
 from pathlib import Path
 
@@ -48,7 +48,7 @@ def run(
     command = argv(root, *args)
     with (tempfile.TemporaryFile() if data is not None else nullcontext()) as source:
         if source is not None:
-            source.write(data)
+            source.write(data)  # type: ignore[reportArgumentType]  # data is not None whenever source is opened
             source.seek(0)
         try:
             code, output, _ = process.run(
@@ -77,7 +77,7 @@ def _git(root: Path, *args: str, limit: int, data: bytes | None = None) -> bytes
 
 def ls_tree(
     root: Path, revision: str, flags: str, scope: list[bytes], deadline: float
-) -> Iterator[bytes]:
+) -> Generator[bytes, None, None]:
     # Streamed rather than run through process.run: callers consume records as they arrive,
     # and the deadline and path-length checks stop a long listing early.
     # Match the stored path bytes even on filesystems where Git normally precomposes Unicode.

@@ -98,7 +98,7 @@ def test_summary_exports_receipt_validated_bundles_and_hashes(tmp_path):
             PRIMARY: "primary operation failed", other: "other operation failed"
         }
     assert summary["evidence"]["bundle_sha256"] == hashlib.sha256(bundle_file.read_bytes()).hexdigest()
-    for side, run_id in zip(("before", "fixed"), ids):
+    for side, run_id in zip(("before", "fixed"), ids, strict=False):
         original = state / "runs" / run_id
         assert {p.name for p in (out / side).iterdir()} == {p.name for p in original.iterdir()}
         for file in original.iterdir():

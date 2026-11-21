@@ -92,7 +92,7 @@ def main() -> int:
             raise RuntimeError(f"formal checks failed: {checks}")
         print("formal checks: pass", flush=True)
         run_prefix = "smoke-" + uuid4().hex
-        for index, (candidate, expected) in enumerate(zip(candidates, ("violation", "pass"))):
+        for index, (candidate, expected) in enumerate(zip(candidates, ("violation", "pass"), strict=False)):
             for case_index, case in enumerate(cases):
                 run_id = f"{run_prefix}-replay-{index}-{case_index}"
                 run_checked(
@@ -100,7 +100,7 @@ def main() -> int:
                     run_id,
                     expected,
                     lambda: docker_runtime.run_case(
-                        candidate, args.docker_context, case, spec.selected_properties, run_id
+                        candidate, args.docker_context, case, spec.selected_properties, run_id  # noqa: B023 - run_checked calls this lambda before the loop variable changes
                     ),
                 )
             run_id = f"{run_prefix}-pytest-{index}"
@@ -109,7 +109,7 @@ def main() -> int:
                 args.docker_context,
                 run_id,
                 expected,
-                lambda: docker_runtime.run_pytest(candidate, args.docker_context, source, run_id),
+                lambda: docker_runtime.run_pytest(candidate, args.docker_context, source, run_id),  # noqa: B023 - run_checked calls this lambda before the loop variable changes
             )
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
         print(f"smoke failed: {exc}", file=sys.stderr)
