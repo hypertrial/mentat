@@ -1,4 +1,4 @@
-"""Typed views of saved approval, acceptance, source-qualification and run records.
+"""Typed views of saved approval, acceptance, source-qualification, run and proof records.
 
 Models validate; the raw parsed dict stays the carrier. Writers, hashes and comparisons use
 the raw dict, and callers keep their own messages by catching pydantic.ValidationError.
@@ -342,3 +342,63 @@ class QualificationRun(_Record):
     runtime: dict[Any, Any]
     comparison_inputs: dict[Any, Any]
     source_mutation_manifest_sha256: StrictStr
+
+
+# Proof campaign manifests, ledger entries, checker results and saved proof checks. Only type
+# shapes are modelled: hashes, identities, the ledger hash chain, budgets and every comparison
+# stay in proof and evidence, on the raw dicts. Items of lists and dicts are checked as code.
+
+
+class ProofManifest(_Record):
+    """The fields of a proof campaign manifest that proof reads before it trusts the manifest."""
+
+    repo: StrictStr
+    base: StrictStr
+    runner: StrictStr
+    revision: StrictStr
+    contract_digest: StrictStr
+    verifier_digest: StrictStr
+    snapshot_digest: StrictStr
+    approval: dict[Any, Any]
+    checker_identity: dict[Any, Any]
+    targets: list[Any]
+    all_targets: list[Any]
+    obligations: list[Any]
+
+
+class ProofTarget(_Record):
+    """One approved target in a manifest's all_targets."""
+
+    id: StrictStr
+    approved_sha256: StrictStr
+
+
+class LedgerEntry(_Record):
+    """A ledger entry as it is read from disk, before its place in the chain is known."""
+
+    previous: StrictStr
+
+
+class LedgerAttempt(_Record):
+    attempt: StrictStr
+
+
+class LedgerReserve(_Record):
+    target: StrictStr
+
+
+class LedgerCompletion(_Record):
+    logs: dict[Any, Any]
+
+
+class CheckerResult(_Record):
+    """The status and logs of a checker result; detail and identity are checked as code."""
+
+    status: StrictStr
+    logs: dict[Any, Any]
+
+
+class ProofCheck(_Record):
+    """A saved lean-comparator check; only its evidence field is typed here."""
+
+    evidence: dict[Any, Any] = {}

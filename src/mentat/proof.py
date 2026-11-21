@@ -35,6 +35,14 @@ def _json(value):
     return evidence.json_bytes(value)
 
 
+def _valid(model, value) -> bool:
+    try:
+        records.check(model, value)
+    except ValidationError:
+        return False
+    return True
+
+
 def _regular(path, limit=_LIMIT):
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     try:
@@ -129,21 +137,10 @@ def _fresh(state, project, candidate, approval):
 
 def _manifest_shape(manifest):
     # Fields this module dereferences; wrong types or missing keys are user errors, not crashes.
-    types = {
-        "repo": str, "base": str, "runner": str, "revision": str, "contract_digest": str,
-        "verifier_digest": str, "snapshot_digest": str, "approval": dict,
-        "checker_identity": dict, "targets": list, "all_targets": list, "obligations": list,
-    }
     return (
-        isinstance(manifest, dict)
-        and all(isinstance(manifest.get(key), kind) for key, kind in types.items())
+        _valid(records.ProofManifest, manifest)
         and all(isinstance(item, str) for item in manifest["targets"])
-        and all(
-            isinstance(item, dict)
-            and isinstance(item.get("id"), str)
-            and isinstance(item.get("approved_sha256"), str)
-            for item in manifest["all_targets"]
-        )
+        and all(_valid(records.ProofTarget, item) for item in manifest["all_targets"])
     )
 
 
@@ -194,7 +191,6 @@ def _current(state, manifest):
     selected = manifest["targets"]
     if (
         _json(manifest["all_targets"]) != _json(expected)
-        or not isinstance(selected, list)
         or not selected
         or selected != [item for item in ids if item in selected]
     ):
@@ -216,7 +212,7 @@ def _ledger(path):
         if entry.name != f"{_hash(raw)}.json":
             raise ValueError("Proof ledger entry failed integrity validation")
         item = evidence.decode_json(raw)
-        if not isinstance(item, dict) or not isinstance(item.get("previous"), str):
+        if not _valid(records.LedgerEntry, item):
             raise ValueError("Invalid proof campaign ledger entry")
         if item["previous"] in by_previous:
             raise ValueError("Proof campaign ledger has conflicting entries")
@@ -230,12 +226,12 @@ def _ledger(path):
         ledger.append(item)
         previous = _hash(_json(item))
         attempt = item.get("attempt")
-        if not isinstance(attempt, str) or not _ID.fullmatch(attempt):
+        if not _valid(records.LedgerAttempt, item) or not _ID.fullmatch(attempt):
             raise ValueError("Invalid proof attempt ID")
         if item.get("kind") == "reserve":
             if attempt in reserved:
                 raise ValueError("Duplicate proof attempt")
-            if not isinstance(item.get("target"), str):
+            if not _valid(records.LedgerReserve, item):
                 raise ValueError("Invalid proof campaign ledger entry")
             data = _source(path / "submissions" / f"{attempt}.lean")
             if _hash(data) != item.get("source_sha256"):
@@ -252,7 +248,7 @@ def _ledger(path):
                 item.get("status") not in {"accepted", "rejected", "incomplete"}
                 or not isinstance(item.get("duration_seconds"), (int, float))
                 or item["duration_seconds"] < 0
-                or not isinstance(item.get("logs"), dict)
+                or not _valid(records.LedgerCompletion, item)
             ):
                 raise ValueError("Invalid proof attempt result")
             for name, digest in item["logs"].items():
@@ -301,14 +297,12 @@ def _usage(ledger):
 
 def _valid_checker_result(value, identity):
     if (
-        not isinstance(value, dict)
-        or not isinstance(value.get("status"), str)
+        not _valid(records.CheckerResult, value)
         or value["status"] not in {"accepted", "rejected", "incomplete"}
         or value.get("identity") != identity
         or type(value.get("detail")) is not str
         or len(value["detail"]) > 4096
         or any(ord(char) < 32 and char not in "\n\r\t" for char in value["detail"])
-        or not isinstance(value.get("logs"), dict)
     ):
         return False
     logs = value["logs"]
