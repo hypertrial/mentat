@@ -5,13 +5,14 @@ import fcntl
 import hashlib
 import math
 import os
+import re
 import sys
 import tempfile
 from pathlib import Path
 
 import pytest
 
-from mentat import proof_checker
+from mentat import evidence, project_formal, proof_checker
 
 APPROVED = b'''import Init
 namespace Proof
@@ -49,7 +50,7 @@ def checker_identity():
         if required:
             pytest.fail(f"Required real proof checker prerequisites unavailable: {exc}")
         pytest.skip(f"Optional real proof checker prerequisites unavailable: {exc}")
-    assert identity["version"] == proof_checker.LEAN_VERSION
+    assert identity["version"] == "4.35.0"
     return identity
 
 
@@ -267,3 +268,18 @@ end Proof
 def test_real_checker_timeout_is_incomplete(checker_identity):
     result = proof_checker.check_submission(APPROVED, VALID, **POLICY, timeout_seconds=1)
     assert_result(result, "incomplete", APPROVED, VALID, checker_identity)
+
+
+def test_pinned_lean_versions_are_explicit():
+    # A version bump must be a reviewed change to these literals.
+    assert project_formal.LEAN_VERSION == "4.31.0"
+    assert proof_checker.LEAN_VERSION == "4.35.0"
+
+
+def test_saved_proof_checker_versions_include_the_current_checker():
+    assert proof_checker.LEAN_VERSION in evidence._SAVED_CHECKER_VERSIONS
+
+
+def test_driver_sandbox_paths_use_the_pinned_lean_version():
+    paths = re.findall(r"/opt/lean-([^/'\"\s]+)", proof_checker._DRIVER)
+    assert paths and set(paths) == {proof_checker.LEAN_VERSION}
