@@ -3,6 +3,7 @@
 import ast
 import json
 import re
+import shutil
 import sys
 from pathlib import Path
 
@@ -266,3 +267,50 @@ def test_records_imports_nothing_from_project():
     tree = ast.parse(MODULE.read_text(encoding="utf-8"))
     names = {node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)}
     assert not any(name and "project" in name for name in names)
+
+
+def _saved_run(tmp_path: Path) -> tuple[Path, str]:
+    """Copy one released fixture run into a state directory the tests may change."""
+    source = ROOT / "v0.1.2" / "state"
+    state = tmp_path / "state"
+    shutil.copytree(source, state)
+    run_id = next(path.name for path in (state / "runs").iterdir())
+    return state, run_id
+
+
+def _rewrite_manifest(state: Path, run_id: str, raw: bytes) -> None:
+    """Replace a saved manifest and its receipt, so only the manifest's content is under test."""
+    (state / "runs" / run_id / "manifest.json").write_bytes(raw)
+    (state / "receipts" / run_id).write_text(evidence.digest(raw))
+
+
+def test_saved_manifest_with_duplicate_keys_is_refused(tmp_path):
+    state, run_id = _saved_run(tmp_path)
+    raw = (state / "runs" / run_id / "manifest.json").read_bytes()
+    duplicated = b'{"run_id":"%s",' % run_id.encode() + raw[1:]
+    _rewrite_manifest(state, run_id, duplicated)
+    with pytest.raises(ValueError, match="^duplicate JSON key$"):
+        evidence.read_run_snapshot(state, run_id)
+
+
+def test_large_valid_saved_manifest_still_loads(tmp_path):
+    state, run_id = _saved_run(tmp_path)
+    record = json.loads((state / "runs" / run_id / "manifest.json").read_bytes())
+    record["padding"] = "x" * 3_000_000
+    raw = evidence.json_bytes(record)
+    assert len(raw) > 3_000_000
+    _rewrite_manifest(state, run_id, raw)
+    _, loaded, _ = evidence.read_run_snapshot(state, run_id)
+    assert len(loaded["padding"]) == 3_000_000
+
+
+@pytest.mark.parametrize("model", [records.Approval, records.Acceptance])
+def test_check_ignores_undeclared_keys_that_pydantic_cannot_encode(model):
+    raw = APPROVAL if model is records.Approval else ACCEPTANCE
+    hostile = {**raw, "\ud800": 1, "nested": {"\ud800": [1]}}
+    with pytest.raises(ValidationError):
+        model.model_validate(hostile)
+    records.check(model, hostile)
+    declared = next(iter(model.model_fields))
+    with pytest.raises(ValidationError):
+        records.check(model, {**raw, declared: 1, "\ud800": 1})

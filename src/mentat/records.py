@@ -1,13 +1,26 @@
-"""Typed views of saved approval, acceptance and source-qualification records.
+"""Typed views of saved approval, acceptance, source-qualification and run records.
 
 Models validate; the raw parsed dict stays the carrier. Writers, hashes and comparisons use
 the raw dict, and callers keep their own messages by catching pydantic.ValidationError.
+Models carry no string constraints: non-empty, pattern and membership checks stay as code in
+evidence, so strings that JSON can carry (such as lone surrogates) get the same outcome as before.
 Imports stay limited to the standard library, pydantic and canonical.
 """
 
-from typing import Annotated, Any
+import re
+import unicodedata
+from pathlib import PurePosixPath
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, StrictStr
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    StrictInt,
+    StrictStr,
+    model_validator,
+)
 
 
 class _Record(BaseModel):
@@ -76,4 +89,256 @@ class SourceQualification(_Record):
     detail: StrictStr
     applied_count: Annotated[StrictInt, Field(ge=0, le=1)]
     assertion_failed: StrictBool | None = None
-    bindings: dict[str, Any]
+    bindings: dict[Any, Any]
+
+
+# The contract's assurance shape as saved, frozen here rather than imported from project.
+# Unknown keys stay rejected and messages keep their old text, so the config is the contract's.
+# The string constraints below are kept on purpose: the contract refused some strings through
+# them, and removing them would change which saved records load.
+_MAX_PATH = 512  # gitio.MAX_PATH when the shape was frozen
+_OBJECT_ID = r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+_NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}\Z")
+
+
+def _safe_relative_path(value: str) -> str:
+    if (
+        not value
+        or len(value) > _MAX_PATH
+        or "\\" in value
+        or any(ord(c) < 32 for c in value)
+        or any(p.casefold() in ("", ".", "..", ".git") for p in value.split("/"))
+        or str(PurePosixPath(value)) != value
+    ):
+        raise ValueError(f"unsafe relative path: {value!r}")
+    return value
+
+
+class _Frozen(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+
+class _Citation(_Frozen):
+    commit: str = Field(pattern=_OBJECT_ID)
+    blob: str = Field(pattern=_OBJECT_ID)
+    path: str
+    start_line: int = Field(ge=1)
+    end_line: int = Field(ge=1)
+
+    @model_validator(mode="after")
+    def valid_reference(self):
+        _safe_relative_path(self.path)
+        if len(self.commit) != len(self.blob) or self.end_line < self.start_line:
+            raise ValueError("invalid citation object IDs or line range")
+        return self
+
+
+class _EvidenceRef(_Frozen):
+    check_id: str
+    case_ids: list[str] = Field(default_factory=list, max_length=128)
+
+    @model_validator(mode="after")
+    def valid_reference(self):
+        if (
+            not _NAME.fullmatch(self.check_id)
+            or len(set(self.case_ids)) != len(self.case_ids)
+            or any(
+                not case or len(case) > 256 or any(unicodedata.category(c) == "Cc" for c in case)
+                for case in self.case_ids
+            )
+        ):
+            raise ValueError("invalid evidence reference")
+        return self
+
+
+class _Bound(_Frozen):
+    id: str
+    statement: str = Field(pattern=r"\S", max_length=4096)
+    # Literal keeps the old "Input should be" message for this one closed set.
+    kind: Literal["enforced", "assumed"]
+    checks: list[_EvidenceRef] = Field(default_factory=list, max_length=128)
+    assumption: str | None = Field(default=None, min_length=1, max_length=4096)
+
+    @model_validator(mode="after")
+    def valid_bound(self):
+        if not _NAME.fullmatch(self.id):
+            raise ValueError("invalid bound ID")
+        if self.kind == "enforced":
+            if not self.checks or "assumption" in self.model_fields_set:
+                raise ValueError("enforced bounds require checks and forbid an assumption")
+        elif self.checks or not self.assumption:
+            raise ValueError("assumed bounds require an assumption and forbid checks")
+        return self
+
+
+class _Exclusion(_Frozen):
+    scenario: str = Field(pattern=r"\S", max_length=4096)
+    reason: str = Field(pattern=r"\S", max_length=4096)
+    effect: str = Field(pattern=r"\S", max_length=4096)
+    affected_claims: list[str] = Field(min_length=1, max_length=128)
+
+
+class _Deviation(_Frozen):
+    citation: _Citation
+    rationale: str = Field(pattern=r"\S", max_length=4096)
+    effect: str = Field(pattern=r"\S", max_length=4096)
+
+
+class Assurance(_Frozen):
+    implementation_checks: list[_EvidenceRef] = Field(default_factory=list, max_length=128)
+    witness_checks: list[_EvidenceRef] = Field(default_factory=list, max_length=128)
+    bounds: list[_Bound] = Field(default_factory=list, max_length=128)
+    exclusions: list[_Exclusion] = Field(default_factory=list, max_length=128)
+    deviations: list[_Deviation] = Field(default_factory=list, max_length=128)
+
+    @model_validator(mode="after")
+    def distinct_bounds(self):
+        ids = [bound.id for bound in self.bounds]
+        if len(ids) != len(set(ids)):
+            raise ValueError("duplicate bound ID")
+        return self
+
+
+# Saved run records (kind "project-verification", schema 2). Non-empty and membership checks
+# for these fields are in evidence.validate_run_record.
+
+
+class RunArtifacts(_Record):
+    # Keys and values are checked as code: pydantic would refuse some keys the old checks accepted.
+    artifacts: dict[Any, Any]
+
+
+class Claim(_Record):
+    id: StrictStr
+    statement: StrictStr
+    assumptions: list[StrictStr] = []
+
+
+class ClaimReview(_Record):
+    titles: dict[Any, Any] = {}
+
+
+class ReviewGroup(_Record):
+    title: StrictStr
+    claim_ids: list[StrictStr]
+
+
+class RunInventory(_Record):
+    behavior_skipped: StrictBool
+    model_checks: list[Any]
+    cases: list[Any]
+
+
+# Each model covers one group of fields, in the order the checks have always run. Membership
+# checks (claim, status, kind) run as code before the first group, and each group's defect is
+# reported before the next group's, as before.
+
+
+class FormalCheck(_Record):
+    detail: StrictStr
+    artifacts: dict[Any, Any] = {}
+    id: StrictStr
+    claim: Any
+    status: Any
+    kind: Any
+
+
+class BehaviorCheck(_Record):
+    detail: StrictStr
+    artifacts: dict[Any, Any] = {}
+    id: StrictStr
+    claim: Any
+    status: Any
+
+
+class NegativeControl(_Record):
+    detail: StrictStr
+    qualified: StrictBool = False
+    artifacts: dict[Any, Any] = {}
+    status: Any
+
+
+class References(_Record):
+    """The artifact references of a result or control."""
+
+    artifacts: dict[Any, Any] = {}
+
+
+class Omissions(_Record):
+    """The files and streams a result omitted from its evidence."""
+
+    artifact_omissions: list[StrictStr] = []
+    log_omissions: list[StrictStr] = []
+
+
+class Cases(_Record):
+    """The case inventory of a behavior check or negative control."""
+
+    required_cases: list[StrictStr] = []
+    case_results: dict[Any, Any] = {}
+
+
+class FormalEvidence(_Record):
+    evidence: dict[Any, Any] = {}
+
+
+class ExitCode(_Record):
+    exit_code: StrictInt | None = None
+
+
+class BehaviorCase(_Record):
+    checks: list[Any] = Field(min_length=1)
+
+
+class RunRecord(_Record):
+    """The top level of a saved run, as a typed view. Sections are checked by evidence."""
+
+    kind: StrictStr
+    schema_version: Annotated[StrictInt, Field(ge=2, le=2)]
+    run_id: StrictStr
+    revision: StrictStr
+    base: StrictStr
+    contract_digest: StrictStr
+    runner: StrictStr
+    status: StrictStr
+    artifacts: dict[Any, Any]
+    claims: list[Any]
+    claim_review: Any = None
+    behavior_skipped: StrictBool
+    model_checks: list[Any]
+    cases: list[Any]
+
+
+class ClaimId(_Record):
+    id: StrictStr
+
+
+class CheckStatus(_Record):
+    id: StrictStr
+    status: StrictStr
+
+
+class CaseChecks(_Record):
+    checks: list[Any]
+
+
+class QualificationContext(_Record):
+    """What a source qualification is checked against. Items and statuses are checked as code."""
+
+    claims: list[Any]
+    behavior_skipped: StrictBool
+    cases: list[Any]
+
+
+class QualificationRun(_Record):
+    """Run fields a source qualification binds to; presence is checked here, values as code."""
+
+    run_id: Any
+    revision: Any
+    snapshot_digest: Any
+    base: Any
+    contract_digest: Any
+    runner: Any
+    runtime: dict[Any, Any]
+    comparison_inputs: dict[Any, Any]
+    source_mutation_manifest_sha256: StrictStr

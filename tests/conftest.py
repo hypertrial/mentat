@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from mentat import evidence, project_formal
+from mentat import evidence, project_formal, records
 
 
 @pytest.fixture(scope="session")
@@ -17,7 +17,7 @@ def lean_tools():
 
 @pytest.fixture(autouse=True)
 def canonical_saved_manifests(monkeypatch):
-    """Check every real save: canonical manifest bytes and a receipt that matches them."""
+    """Check every real save: canonical manifest bytes, a matching receipt, and the run record model."""
     save_run = evidence.save_run
 
     def checked_save_run(state, record, artifacts):
@@ -26,6 +26,8 @@ def canonical_saved_manifests(monkeypatch):
         assert evidence.json_bytes(json.loads(raw)) == raw, "saved manifest is not canonical JSON"
         receipt = (state / "receipts" / record["run_id"]).read_bytes()
         assert receipt == evidence.digest(raw).encode(), "receipt does not match the manifest"
+        if record.get("kind") == "project-verification":
+            records.check(records.RunRecord, json.loads(raw))
         return destination
 
     monkeypatch.setattr(evidence, "save_run", checked_save_run)
