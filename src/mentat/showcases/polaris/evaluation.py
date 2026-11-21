@@ -198,20 +198,16 @@ def evaluate(
             )
     checks = {method: _score(baseline_rows, method) for method in ("upstream-pytest", "hypothesis")}
     checks["mentat"] = _score(rows, "mentat")
-    native_outcomes = [item["status"] for item in native]
-    expected_native = ["violation", "pass"]
+    # Native pytest never decides status; baselines decide only incompleteness, not pass or violation.
     outcome = "pass"
-    if "incomplete" in native_outcomes or any(counts["incomplete"] for counts in checks.values()):
+    if not rows or any(counts["incomplete"] for counts in checks.values()):
         outcome = "incomplete"
-    elif (
-        native_outcomes != expected_native
-        or checks["mentat"]["false_positive"]
-        or checks["mentat"]["missed"]
-    ):
+    elif checks["mentat"]["false_positive"] or checks["mentat"]["missed"]:
         outcome = "violation"
     return {
         "status": outcome,
-        "native_regression": native_outcomes,
+        "native_regression": [item["status"] for item in native],
+        "advisory_results": ["native_regression"],
         "rows": rows,
         "baseline_rows": baseline_rows,
         "counts": checks,

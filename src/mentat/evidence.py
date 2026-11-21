@@ -150,7 +150,12 @@ def report(record: dict) -> bytes:
 
         case_id = _code_span(visible_text(regression["case_id"]))
         status = _inline_prose(visible_text(regression["status"]))
-        lines.append(f"- Native pytest · {case_id} · {status}")
+        label = (
+            " (advisory; candidate code may influence it)"
+            if "regressions" in record.get("advisory_results", [])
+            else ""
+        )
+        lines.append(f"- Native pytest{label} · {case_id} · {status}")
         for check in regression.get("checks", []):
             if check.get("status") != "pass":
                 parts = [check.get("name", "check"), check.get("status", "incomplete")]
@@ -158,11 +163,19 @@ def report(record: dict) -> bytes:
                 lines.append("  - " + " · ".join(_inline_prose(visible_text(part)) for part in parts))
     for method, counts in record.get("counts", {}).items():
         summary = ", ".join(f"{count} {name.replace('_', ' ')}" for name, count in counts.items())
-        lines.append(f"- {method} · {summary}")
+        baseline = "advisory_results" in record and method in ("upstream-pytest", "hypothesis")
+        label = " (baseline; candidate code may influence it)" if baseline else ""
+        lines.append(f"- {method}{label} · {summary}")
     if record.get("kind") == "evaluation":
         lines.append(f"- Formal checks · {record['formal_seconds']} seconds")
+        label = (
+            " (advisory; candidate code may influence it)"
+            if "native_regression" in record.get("advisory_results", [])
+            else ""
+        )
         lines.append(
-            f"- Native historical and repaired regression · {' / '.join(record['native_regression'])}"
+            f"- Native historical and repaired regression{label} · "
+            f"{' / '.join(record['native_regression'])}"
         )
     lines += ["", "## Reproduce", ""]
     if record.get("host_reproduce"):

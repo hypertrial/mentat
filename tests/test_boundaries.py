@@ -318,6 +318,100 @@ def test_evaluation_failed_preflight_keeps_planned_rows(tmp_path, monkeypatch, s
             assert "--docker-context 'context with spaces' doctor --prepare" in method["detail"]
 
 
+_VIOLATING = ("historical", "drop-namespace", "change-property", "native-0")
+
+
+def _honest_pytest(run_id):
+    return "violation" if any(name in run_id for name in _VIOLATING) else "pass"
+
+
+def _evaluate_with_pytest(
+    tmp_path, monkeypatch, spec, pytest_status, *, oracle_status=_honest_pytest, cases=1
+):
+    """Evaluate fixtures with stubbed native, baseline, and oracle outcomes."""
+    monkeypatch.setattr(
+        "mentat.showcases.polaris.evaluation.snapshot",
+        lambda repo, rev: Snapshot(rev, rev, (("command/setup.py", b"# sample\n"),)),
+    )
+    monkeypatch.setattr("mentat.showcases.polaris.evaluation._upstream_test", lambda *args: "")
+    monkeypatch.setattr(
+        "mentat.showcases.polaris.evaluation.docker_runtime.doctor", lambda _: {"ok": True}
+    )
+    monkeypatch.setattr(
+        "mentat.showcases.polaris.evaluation.docker_runtime.run_pytest",
+        lambda candidate, context, source, run_id, support=None: {"status": pytest_status(run_id)},
+    )
+    monkeypatch.setattr(
+        "mentat.showcases.polaris.evaluation.run_case",
+        lambda *args: {"status": oracle_status(args[-1])},
+    )
+    public = load_cases(PACK / "public.json", spec)[0]
+    return evaluate(tmp_path, FIXED, "test-context", spec, [public] * cases, public, "sample")
+
+
+@pytest.mark.parametrize("forged", ["pass", "violation", "incomplete"])
+def test_forged_native_result_does_not_change_status_or_counts(tmp_path, monkeypatch, spec, forged):
+    honest = _evaluate_with_pytest(tmp_path, monkeypatch, spec, _honest_pytest)
+    result = _evaluate_with_pytest(
+        tmp_path,
+        monkeypatch,
+        spec,
+        lambda run_id: forged if "-native-" in run_id else _honest_pytest(run_id),
+    )
+    assert honest["status"] == "pass"
+    assert result["native_regression"] == [forged, forged]
+    assert result["status"] == honest["status"]
+    assert result["counts"] == honest["counts"]
+    assert result["advisory_results"] == ["native_regression"]
+
+
+@pytest.mark.parametrize("method", ["upstream-pytest", "hypothesis"])
+def test_incomplete_baseline_makes_evaluation_incomplete(tmp_path, monkeypatch, spec, method):
+    result = _evaluate_with_pytest(
+        tmp_path,
+        monkeypatch,
+        spec,
+        lambda run_id: "incomplete" if run_id.endswith(method) else _honest_pytest(run_id),
+    )
+    assert result["status"] == "incomplete"
+    assert result["counts"][method]["incomplete"] == 5
+    assert result["counts"]["mentat"]["incomplete"] == 0
+
+
+@pytest.mark.parametrize("method", ["upstream-pytest", "hypothesis"])
+def test_wrong_baseline_result_does_not_change_status(tmp_path, monkeypatch, spec, method):
+    result = _evaluate_with_pytest(
+        tmp_path,
+        monkeypatch,
+        spec,
+        lambda run_id: "violation"
+        if run_id.endswith(method) and "candidate" in run_id
+        else _honest_pytest(run_id),
+    )
+    assert result["status"] == "pass"
+    assert result["counts"][method]["false_positive"] == 1
+
+
+def test_incomplete_oracle_alone_makes_evaluation_incomplete(tmp_path, monkeypatch, spec):
+    result = _evaluate_with_pytest(
+        tmp_path,
+        monkeypatch,
+        spec,
+        _honest_pytest,
+        oracle_status=lambda run_id: "incomplete" if "-candidate-" in run_id else _honest_pytest(run_id),
+    )
+    assert result["native_regression"] == ["violation", "pass"]
+    assert result["counts"]["upstream-pytest"]["incomplete"] == 0
+    assert result["counts"]["mentat"]["incomplete"] == 1
+    assert result["status"] == "incomplete"
+
+
+def test_evaluation_without_oracle_rows_is_incomplete(tmp_path, monkeypatch, spec):
+    result = _evaluate_with_pytest(tmp_path, monkeypatch, spec, _honest_pytest, cases=0)
+    assert result["rows"] == []
+    assert result["status"] == "incomplete"
+
+
 def test_snapshot_staging_is_readable_in_container_under_restrictive_umask(tmp_path):
     cli = tmp_path / "cli"
     previous = os.umask(0o077)

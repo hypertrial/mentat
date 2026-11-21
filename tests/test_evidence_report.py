@@ -115,7 +115,7 @@ def test_native_regressions_render_diagnostics_and_accept_legacy_without_checks(
     from mentat.command import emit
 
     record = _record()
-    record.update(kind="verification", cases=[], model_checks=[], regressions=[
+    record.update(kind="verification", cases=[], model_checks=[], advisory_results=["regressions"], regressions=[
         {"case_id": "current", "status": "incomplete", "checks": [
             {"name": "pytest", "status": "incomplete", "stage": "source copy",
              "detail": "Candidate source copy failed"},
@@ -129,5 +129,44 @@ def test_native_regressions_render_diagnostics_and_accept_legacy_without_checks(
     markdown = evidence.report(record).decode()
     for output in (terminal, markdown):
         assert "current" in output and "legacy" in output
+        assert "advisory; candidate code may influence it" in output
         assert "Candidate source copy failed" in output
         assert "Container could not be removed" in output
+
+
+def test_polaris_labels_follow_advisory_results_and_legacy_records_render_unchanged(capsys):
+    from mentat.command import emit
+
+    evaluation = {
+        "kind": "evaluation", "run_id": "a" * 32, "revision": "b" * 40,
+        "contract_digest": "c" * 64, "status": "pass", "reproduce": "example",
+        "formal_seconds": 1.0, "native_regression": ["violation", "pass"],
+        "counts": {"mentat": {"detected": 1}, "hypothesis": {"incomplete": 0}},
+    }
+    legacy = evidence.report(evaluation).decode()
+    assert "- Native historical and repaired regression · violation / pass" in legacy
+    assert "- hypothesis · 0 incomplete" in legacy
+    assert "advisory" not in legacy and "candidate" not in legacy
+    emit(evaluation, False)
+    terminal = capsys.readouterr().out
+    assert 'hypothesis  {"incomplete": 0}' in terminal
+    assert "advisory" not in terminal and "candidate" not in terminal
+
+    current = {**evaluation, "advisory_results": ["native_regression"]}
+    markdown = evidence.report(current).decode()
+    assert (
+        "- Native historical and repaired regression (advisory; candidate code may influence it) "
+        "· violation / pass" in markdown
+    )
+    assert "- hypothesis (baseline; candidate code may influence it) · 0 incomplete" in markdown
+    assert "- mentat · 1 detected" in markdown
+    emit(current, False)
+    terminal = capsys.readouterr().out
+    assert 'hypothesis (baseline; candidate code may influence it)  {"incomplete": 0}' in terminal
+    assert "mentat  {" in terminal and "mentat (" not in terminal
+
+    verification = {"kind": "verification", "regressions": [{"case_id": "legacy", "status": "pass"}]}
+    emit(verification, False)
+    assert "Native pytest  legacy  pass" in capsys.readouterr().out
+    emit({**verification, "advisory_results": ["regressions"]}, False)
+    assert "Native pytest (advisory; candidate code may influence it)  legacy  pass" in capsys.readouterr().out
