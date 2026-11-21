@@ -9,6 +9,7 @@ import re
 import sys
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -321,3 +322,59 @@ def test_saved_proof_checker_versions_include_the_current_checker():
 def test_driver_sandbox_paths_use_the_pinned_lean_version():
     paths = re.findall(r"/opt/lean-([^/'\"\s]+)", proof_checker._DRIVER)
     assert paths and set(paths) == {proof_checker.LEAN_VERSION}
+
+
+@pytest.mark.parametrize(
+    "stop_code, procs, expected",
+    [
+        (0, "", None),
+        (1, "", "Protected checker cleanup did not complete"),
+        (0, "42\n", "Protected checker descendants did not stop"),
+    ],
+)
+def test_service_reads_result_only_after_stop_and_empty_control_group(
+    tmp_path, monkeypatch, stop_code, procs, expected
+):
+    # Stubs the privileged systemd calls; only the stop and the result read are recorded.
+    events = []
+    root = tmp_path / "check"
+    root.mkdir()
+    cgroup = tmp_path / "cgroup" / "mentat.slice"
+    cgroup.mkdir(parents=True)
+    (cgroup / "cgroup.procs").write_text(procs)
+    real_path = proof_checker.Path
+    monkeypatch.setattr(
+        proof_checker, "Path",
+        lambda value, *args: tmp_path / "cgroup" if value == "/sys/fs/cgroup" else real_path(value, *args),
+    )
+    monkeypatch.setattr(proof_checker.tempfile, "mkdtemp", lambda prefix: str(root))
+
+    def privileged(args, **kwargs):
+        if args[:2] == ["/usr/bin/systemctl", "stop"]:
+            events.append("stop")
+            return SimpleNamespace(returncode=stop_code, stdout=b"")
+        return SimpleNamespace(returncode=0, stdout=b"")
+
+    monkeypatch.setattr(proof_checker, "_privileged", privileged)
+    monkeypatch.setattr(proof_checker, "_unit_properties", lambda unit: {
+        "Result": "success", "ExecMainCode": "1", "ExecMainStatus": "0", "SubState": "exited",
+        "ControlGroup": "/mentat.slice"})
+
+    reads = []
+
+    def read_result(path):
+        events.append("read")
+        reads.append(path)
+        # Extra keys must not reach the caller, where they would override the evidence fields.
+        return {"status": "accepted", "detail": "ok", "logs": {}, "identity": {"forged": True},
+                "source_sha256": "forged", "theorem": "forged"}
+
+    monkeypatch.setattr(proof_checker, "_read_result", read_result)
+    result = proof_checker._service({"Solution.lean": b""}, 1)
+    if expected is None:
+        assert result == {"status": "accepted", "detail": "ok", "logs": {}}
+        assert events == ["stop", "read", "stop"]
+        assert reads == [root / "result" / "result.json"]
+    else:
+        assert result == {"status": "incomplete", "detail": expected, "logs": {}}
+        assert events == ["stop", "stop"] and reads == []

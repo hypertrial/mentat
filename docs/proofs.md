@@ -92,10 +92,13 @@ or their supporting definitions.
 `proof check` exits zero for accepted submissions, one for a definitive rejection,
 and two when checking cannot complete. A failed attempt is retained. Only the
 latest submission for a target is eligible; a later failure cannot fall back to an
-earlier accepted proof. `proof check` results are advisory. Ordinary verification
-checks an accepted latest submission again against the approved source from the
-base commit. Missing or rejected proofs make formal obligations incomplete,
-and the formal gate skips behavior checks. They do not demonstrate a product defect.
+earlier accepted proof. The latest-submission rule holds for an intact ledger. A
+rolled-back ledger can at most re-select an earlier submission, which is still
+rechecked against the approved contract. `proof check` results are advisory.
+Ordinary verification checks an accepted latest submission again against the
+approved source from the base commit. Missing or rejected proofs make formal
+obligations incomplete, and the formal gate skips behavior checks. They do not
+demonstrate a product defect.
 
 Repeat `--proof-campaign` to combine campaigns with disjoint targets and identical
 candidate, contract, approval, verifier and checker identity. Verification records
@@ -148,7 +151,19 @@ authors, author budgets and the following recorded workflow:
    of accumulated checking and a 120-second service limit per attempt. An
    interrupted reserved attempt consumes 120 seconds until its completion exists.
 5. Resume the same campaign and ledger rather than preparing a fresh campaign to
-   reset an exhausted budget. Run full clean verification after integrating proofs.
+   reset an exhausted budget. Mentat counts rounds and time from earlier campaigns in
+   the same state folder with the same approved contract digest and candidate snapshot
+   digest. Rounds count per target; the thirty-minute limit is shared by all targets
+   of those campaigns. Verification rechecks are charged only to their own campaign and do not use up
+   other campaigns' budgets. The
+   contract digest covers the repository path, base commit, runner, approved files and
+   verifier version, and the snapshot digest covers the candidate. A new candidate
+   commit, base, runner, repository path or verifier version therefore starts a new
+   budget; the counting only stops a reset by preparing again for the same candidate.
+   An unreadable or malformed campaign entry in the state blocks checks, and so does a
+   campaign with the same contract and candidate whose files or ledger are invalid,
+   until it is removed. Deleting state is outside what Mentat can enforce. Run full clean
+   verification after integrating proofs.
 
 An amendment proposal must contain the counterexample or mismatch, requested
 change, guarantee impact and witness impact. Have it reviewed independently and

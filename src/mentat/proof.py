@@ -126,7 +126,28 @@ def _fresh(state, project, candidate, approval):
     return current, revision
 
 
-def _campaign(state, campaign_id):
+def _manifest_shape(manifest):
+    # Fields this module dereferences; wrong types or missing keys are user errors, not crashes.
+    types = {
+        "repo": str, "base": str, "runner": str, "revision": str, "contract_digest": str,
+        "verifier_digest": str, "snapshot_digest": str, "approval": dict,
+        "checker_identity": dict, "targets": list, "all_targets": list, "obligations": list,
+    }
+    return (
+        isinstance(manifest, dict)
+        and all(isinstance(manifest.get(key), kind) for key, kind in types.items())
+        and all(isinstance(item, str) for item in manifest["targets"])
+        and all(
+            isinstance(item, dict)
+            and isinstance(item.get("id"), str)
+            and isinstance(item.get("approved_sha256"), str)
+            for item in manifest["all_targets"]
+        )
+    )
+
+
+def _receipted(state, campaign_id):
+    # Receipt-checked manifest only; the rest of the campaign is validated by _campaign.
     if not isinstance(campaign_id, str) or not _ID.fullmatch(campaign_id):
         raise ValueError("Invalid proof campaign ID")
     path = state / "proof-campaigns" / campaign_id
@@ -136,8 +157,15 @@ def _campaign(state, campaign_id):
     if _hash(raw) != receipt:
         raise ValueError("Proof campaign manifest failed integrity validation")
     manifest = evidence.decode_json(raw)
+    if not _manifest_shape(manifest):
+        raise ValueError("Proof campaign manifest is malformed")
     if manifest.get("campaign_id") != campaign_id:
         raise ValueError("Proof campaign ID does not match its manifest")
+    return path, manifest
+
+
+def _campaign(state, campaign_id):
+    path, manifest = _receipted(state, campaign_id)
     if _hash(_regular(path / "TASK.md")) != manifest.get("task_sha256"):
         raise ValueError("Proof task instructions failed integrity validation")
     for target in manifest["all_targets"]:
@@ -206,6 +234,8 @@ def _ledger(path):
         if item.get("kind") == "reserve":
             if attempt in reserved:
                 raise ValueError("Duplicate proof attempt")
+            if not isinstance(item.get("target"), str):
+                raise ValueError("Invalid proof campaign ledger entry")
             data = _source(path / "submissions" / f"{attempt}.lean")
             if _hash(data) != item.get("source_sha256"):
                 raise ValueError("Proof submission failed integrity validation")
@@ -440,10 +470,11 @@ def prepare(state: Path, project, candidate, approval: dict, out: Path, *, targe
             campaign_created = True
             _publish_directory(task_tree, out)
         except BaseException:
-            if receipt_created:
-                (receipts / campaign_id).unlink(missing_ok=True)
+            # A concurrent reader may briefly see a partial campaign; either order fails closed.
             if campaign_created:
                 shutil.rmtree(parent / campaign_id)
+            if receipt_created:
+                (receipts / campaign_id).unlink(missing_ok=True)
             raise
         finally:
             shutil.rmtree(tasks_staging)
@@ -474,15 +505,56 @@ def _submissions(directory, targets):
     return solutions
 
 
-def _run_attempt(path, manifest, ledger, target, solution, approved, *, recheck=False):
+def _carried(state, path, manifest):
+    # Caller holds proof-build.lock, which serializes every ledger append in this state.
+    # Sibling ledger.lock files are not taken: two checks could wait on each other's locks.
+    rounds, seconds = {}, 0.0
+    for entry in (state / "proof-campaigns").iterdir():
+        # Staging names from prepare and macOS metadata files are never campaigns.
+        name = entry.name
+        metadata = name == ".DS_Store" or (name.startswith("._") and entry.is_file())
+        if name == path.name or name.startswith(".prepare-") or metadata:
+            continue
+        try:
+            _, other = _receipted(state, name)
+            if (other["contract_digest"], other["snapshot_digest"]) != (
+                manifest["contract_digest"],
+                manifest["snapshot_digest"],
+            ):
+                continue
+            sibling, _ = _campaign(state, name)
+            reserved, finished, _ = _usage(_ledger(sibling))
+            # Verification rechecks are not proof work, so they do not use up sibling budgets.
+            seconds += sum(
+                finished[key]["duration_seconds"] if key in finished else _ATTEMPT_SECONDS
+                for key, item in reserved.items()
+                if not item.get("recheck")
+            )
+            for item in reserved.values():
+                if not item.get("recheck") and not item.get("denied"):
+                    rounds[item["target"]] = rounds.get(item["target"], 0) + 1
+        except (ValueError, OSError) as exc:
+            # An unreadable sibling could hide spent budget, so nothing runs until it is removed.
+            label = f"Proof campaign {name}" if _ID.fullmatch(name) else "Another proof campaign"
+            raise ValueError(
+                f"{label} in this state is invalid, so budgets cannot be established"
+            ) from exc
+    return rounds, seconds
+
+
+def _run_attempt(path, manifest, ledger, target, solution, approved, carried, *, recheck=False):
     from . import proof_checker
 
     reserved, finished, total = _usage(ledger)
-    rounds = sum(
+    carried_rounds, carried_seconds = carried
+    rounds = carried_rounds.get(target["id"], 0) + sum(
         1
         for item in reserved.values()
         if item["target"] == target["id"] and not item.get("recheck") and not item.get("denied")
     )
+    if not recheck:
+        # Rechecks are charged only their own campaign's time, as before carry-over.
+        total += carried_seconds
     exhausted = (not recheck and rounds >= _ROUNDS) or total + _ATTEMPT_SECONDS > _CAMPAIGN_SECONDS
     attempt = uuid4().hex
     evidence.write_record(path / "submissions" / f"{attempt}.lean", solution)
@@ -554,19 +626,20 @@ def _run_attempt(path, manifest, ledger, target, solution, approved, *, recheck=
 
 def check(state: Path, campaign_id: str, submission: Path) -> dict:
     state = Path(state).resolve()
-    path, manifest = _campaign(state, campaign_id)
-    solutions = _submissions(submission, set(manifest["targets"]))
+    path, _ = _campaign(state, campaign_id)
     with _lock(path / "ledger.lock"):
         path, manifest = _campaign(state, campaign_id)
+        solutions = _submissions(submission, set(manifest["targets"]))
         project, _ = _current(state, manifest)
         ledger = _ledger(path)
         targets = {target["id"]: target for target in manifest["all_targets"]}
         outcomes = []
         with _lock(state / "proof-build.lock", blocking=False):
+            carried = _carried(state, path, manifest)
             for target_id, solution in solutions.items():
                 target = targets[target_id]
                 outcome = _run_attempt(
-                    path, manifest, ledger, target, solution, project.files[target["source"]]
+                    path, manifest, ledger, target, solution, project.files[target["source"]], carried
                 )
                 outcomes.append({"id": target_id, **outcome})
         status = (
@@ -652,6 +725,7 @@ def recheck(state: Path, project, candidate, approval: dict, campaign_ids: list[
                             target,
                             solution,
                             project.files[target["source"]],
+                            ({}, 0.0),  # rechecks read no sibling campaigns
                             recheck=True,
                         )
                     result = {

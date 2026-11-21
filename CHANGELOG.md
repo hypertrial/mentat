@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Count proof round and time budgets from earlier campaigns in the same state folder
+  with the same approved contract digest and candidate snapshot digest. This stops a
+  reset only by preparing again for the same candidate; a new candidate commit, base,
+  runner, repository path or verifier version starts a new budget. Verification
+  rechecks are charged only to their own campaign. An unreadable or malformed
+  campaign entry in the state, or an invalid campaign with the same contract and
+  candidate, blocks checks until it is removed. Malformed proof campaign
+  manifests and ledger entries fail as user errors. The verifier modules changed, so
+  approvals and proof campaigns must be renewed.
 - Make Polaris native pytest results advisory. Native pytest runs candidate code
   inside its container, which prints the result marker, so its result may be
   influenced by the candidate. It no longer decides a Polaris verification or
