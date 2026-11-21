@@ -1,5 +1,6 @@
 import copy
 import json
+import os
 import subprocess
 
 import pytest
@@ -740,6 +741,9 @@ def test_trusted_chat_relay_requires_valid_scope_and_records_source(project_repo
     html = rendered.read_text()
     assert "<dt>Approval source</dt><dd class=\"\">unverified agent relay</dd>" in html
     assert "Recorded at " in html and " (unverified agent relay)</dd>" in html
+    compared = tmp_path / "relay-compare.html"
+    assert runner.invoke(cli.app, prefix + ["evidence", "compare", run_id, run_id, "--out", str(compared)]).exit_code == 0
+    assert "<dt>Approval source</dt><dd>unverified agent relay</dd>" in compared.read_text()
     summary = runner.invoke(cli.app, prefix + ["evidence", "pr-summary", run_id, "--head", base, "--report-url", "https://example.test/report"])
     assert "unverified agent relay" in summary.output
     (state / "runs" / run_id / "report.md").write_text("tampered")
@@ -828,4 +832,48 @@ def test_unknown_decision_source_is_escaped_in_every_rendering(project_repo, tmp
     assert "Acceptance for this saved revision: **Recorded at " in summary.output
     assert f"({escaped})**." in summary.output
     assert hostile not in summary.output
+
+
+def test_decision_source_labels_known_values_and_escapes_unknown_ones():
+    from mentat.evidence_report import decision_source
+
+    assert decision_source(None) is None
+    assert decision_source(["decision_source"]) is None
+    assert decision_source({}) is None
+    assert decision_source({"decision_source": None}) is None
+    assert decision_source({"decision_source": ["x"]}) is None
+    assert decision_source({"decision_source": ""}) is None
+    assert decision_source({"decision_source": "unverified_agent_relay"}) == "unverified agent relay"
+    assert decision_source({"decision_source": "a\nb\x1b[31m<b>*\ud800\u202e"}) == (
+        "a\\nb\\x1b[31m<b>*\\ud800\\u202e"
+    )
+
+
+def test_spec_check_ignores_a_non_regular_approval_record(project_repo, tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+
+    from mentat import cli, evidence
+
+    repo, base, _ = project_repo
+    state = tmp_path / "state"
+    state.mkdir(mode=0o700)
+    runner = CliRunner()
+    scope = ["--repo", str(repo), "--base", base, "--runner", "host"]
+    prefix = ["--state", str(state)]
+    digest = json.loads(runner.invoke(cli.app, prefix + ["spec", "check", *scope, "--json"]).output)[
+        "contract_digest"
+    ]
+    (state / "approvals").mkdir()
+    fifo = state / "approvals" / f"{digest}.json"
+    os.mkfifo(fifo)
+    real_read_json = evidence.read_json
+
+    def refuse_fifo(path):
+        assert path != fifo, "spec check opened a non-regular approval record"
+        return real_read_json(path)
+
+    monkeypatch.setattr(evidence, "read_json", refuse_fifo)
+    checked = runner.invoke(cli.app, prefix + ["spec", "check", *scope, "--json"])
+    assert checked.exit_code == 0, checked.output
+    assert "approval_decision_source" not in json.loads(checked.output)
 

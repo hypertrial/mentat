@@ -14,11 +14,13 @@ _DECISION_SOURCES = {"unverified_agent_relay": "unverified agent relay"}
 
 
 def decision_source(approval) -> str | None:
-    """Label how an approval was decided; an unrecognized recorded source is shown as stored."""
+    """Label how an approval was decided; an unrecognized recorded source is shown escaped."""
     source = approval.get("decision_source") if isinstance(approval, dict) else None
     if not isinstance(source, str) or not source:
         return None
-    return _DECISION_SOURCES.get(source, source)
+    if source in _DECISION_SOURCES:
+        return _DECISION_SOURCES[source]
+    return visible_text(source)
 
 
 def pr_summary(record, head, report_url, acceptance, ci_status="unavailable"):

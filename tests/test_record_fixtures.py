@@ -312,14 +312,15 @@ def test_report_text_matches_expectation(label, tmp_path):
     different = {}
     for run_id in runs:
         rebuilt, original = _rebuild(tmp_path / "state", label, run_id)
-        new = (rebuilt / "report.md").read_text(encoding="utf-8").splitlines()
-        old = (original / "report.md").read_text(encoding="utf-8").splitlines()
+        new = (rebuilt / "report.md").read_bytes()
+        old = (original / "report.md").read_bytes()
         if new != old:
             different[run_id] = (new, old)
     assert set(different) == RELAY_REPORT_RUNS[label], sorted(different)
+    line = (RELAY_LINE + "\n").encode()
     for new, old in different.values():
-        assert new.count(RELAY_LINE) == 1
-        assert [line for line in new if line != RELAY_LINE] == old
+        assert new.count(line) == 1
+        assert new.replace(line, b"", 1) == old
 
 
 @pytest.mark.parametrize(("label", "run_id", "target"), TAMPER)

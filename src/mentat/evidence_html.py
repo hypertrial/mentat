@@ -713,11 +713,13 @@ def render_comparison(
             records.append(record)
             claims.append(items)
             contexts.append(checks)
+            source = decision_source(record.get("approval"))
             fields = [
                 ("Revision", record["revision"]),
                 ("Run", run_id),
                 ("Contract base", record["base"]),
                 ("Contract digest", record["contract_digest"]),
+                *([("Approval source", source)] if source else []),
                 ("Manifest SHA-256", manifest),
                 ("Operator acceptance", _accepted(state, record, manifest)),
             ]

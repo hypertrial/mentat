@@ -64,10 +64,13 @@
   relaying the user's explicit decision. Mentat cannot verify the relay and
   records its source as `unverified_agent_relay`.
 - Show a relayed approval as an unverified agent relay in `report.md`, the HTML
-  overview, `spec check` (terminal and `--json`), and `verify` output. The label
-  is display only: stored approval, acceptance, and run records are unchanged and
-  no verdict depends on it. Verifier modules changed, so all approvals and pending
-  acceptances must be renewed.
+  overview and comparison, `spec check` (terminal and `--json`), and `verify`
+  output. The label is display only: no verdict depends on it, and stored approval
+  and acceptance records are unchanged. Newly saved runs under a relayed approval
+  carry one extra line in their saved `report.md`. The HTML acceptance row now
+  shows any recorded decision source, not only the relay. Verifier modules changed,
+  so approvals, proof campaigns, and pending acceptances must be renewed, and
+  `evidence compare` across the change needs `--across-contracts`.
 - Install the proof checker with a restrictive bubblewrap policy on hosted CI
   runners (`scripts/install-proof-checker --ci-profile`).
 - Batch OpenSpec blob reads while preserving valid neighboring specs, ordered

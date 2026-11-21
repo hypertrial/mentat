@@ -3,6 +3,7 @@
 import os
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
 from importlib.metadata import version
@@ -105,9 +106,11 @@ def _approval(state: Path, project: Project) -> dict:
 
 
 def _displayed_approval(ctx: typer.Context, project: Project) -> dict:
-    """The current approval for display only; a missing or invalid record shows nothing."""
+    """Read the current approval for display only; anything unreadable shows nothing."""
     try:
         state = evidence.state_directory(ctx.obj["state"], create=False, candidate_root=project.root)
+        if not stat.S_ISREG(_approval_path(state, project).lstat().st_mode):
+            return {}
         return _approval(state, project)
     except _USER_ERRORS:
         return {}
