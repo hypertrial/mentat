@@ -71,6 +71,17 @@ def status(checks: list[dict], *, incomplete_first: bool = False) -> str:
     return "incomplete" if "incomplete" in outcomes else "pass"
 
 
+def qualification_status(checks: list[dict]) -> str:
+    """Summarize the source qualifications that ran; a formal-gated run ran none."""
+    ran = [check for check in checks if check["status"] != "skipped"]
+    return status(ran, incomplete_first=True) if ran else "skipped"
+
+
+def acceptable(record: dict) -> bool:
+    """A product pass is acceptable only when its recorded source qualification also passes."""
+    return record["status"] == "pass" and record.get("source_qualification_status", "pass") == "pass"
+
+
 def now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
 
@@ -215,7 +226,10 @@ def read_run_snapshot(state: Path, run_id: str) -> tuple[Path, dict, str]:
         if path.is_symlink() or not path.is_file() or digest(path.read_bytes()) != expected:
             raise ValueError(f"Evidence artifact failed its integrity check: {name}")
     proof_evidence(record)
-    if "source_mutation_checks" in record or "source_qualifications" in record:
+    split = "source_qualification_status" in record
+    if split and not {"source_mutation_checks", "source_qualifications"} <= record.keys():
+        raise ValueError("Saved qualification verdict lacks its qualification evidence")
+    if split or "source_mutation_checks" in record or "source_qualifications" in record:
         qualifications = source_qualifications(record)
         checks = record.get("model_checks")
         if not isinstance(checks, list) or any(
@@ -226,7 +240,12 @@ def read_run_snapshot(state: Path, run_id: str) -> tuple[Path, dict, str]:
         ):
             raise ValueError("Invalid qualification formal context")
         executed = [check for case in record["cases"] for check in case["checks"]]
-        if record["status"] != status(
+        if split:
+            if record["status"] != status(checks + executed, incomplete_first=True):
+                raise ValueError("Saved verdict contradicts product checks")
+            if record["source_qualification_status"] != qualification_status(qualifications):
+                raise ValueError("Saved qualification verdict contradicts qualification evidence")
+        elif record["status"] != status(
             checks + executed + [check for check in qualifications if check["status"] != "skipped"],
             incomplete_first=True,
         ):
@@ -593,11 +612,11 @@ def _checks_by_id(record: dict) -> dict[tuple[str, str], dict]:
 def _run_reference(path: Path, run: dict) -> dict:
     if run["status"] not in STATUSES or "report.md" not in run["artifacts"]:
         raise ValueError("Invalid saved run outcome or missing report")
-    return {
-        **{key: run[key] for key in ("run_id", "revision", "status", "behavior_skipped")},
-        "bundle": str(path),
-        "report": str(path / "report.md"),
-    }
+    reference = {key: run[key] for key in ("run_id", "revision", "status", "behavior_skipped")}
+    if "source_qualification_status" in run:
+        reference["source_qualification_status"] = run["source_qualification_status"]
+    reference.update(bundle=str(path), report=str(path / "report.md"))
+    return reference
 
 
 def _changed(before: str | None, after: str | None) -> str:

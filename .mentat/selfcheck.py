@@ -193,6 +193,42 @@ def outcomes(root):
         ]
 
 
+def qualification(root):
+    f = Fixture(root, (0,))
+    path = f.repo / ".mentat/contract.json"
+    manifest = json.loads(path.read_text())
+    manifest["source_mutations"] = "mutants.json"
+    manifest["behavior"][0].update(
+        artifacts=["cases.json"],
+        case_report={"artifact": "cases.json", "required_cases": ["observed"]},
+    )
+    path.write_text(json.dumps(manifest))
+    (f.repo / ".mentat/check0.py").write_text(
+        "import json, os\n"
+        "from pathlib import Path\n"
+        "file = Path(os.environ['MENTAT_ARTIFACTS_DIR']) / 'cases.json'\n"
+        "file.write_text(json.dumps({'schema_version': 1, 'cases': {'observed': 'pass'}}))\n"
+    )
+    mutant = {
+        "check": "behavior0",
+        "path": "candidate.txt",
+        "before": "base",
+        "after": "changed",
+        "expected_case": "observed",
+    }
+    (f.repo / ".mentat/mutants.json").write_text(
+        json.dumps({"version": 1, "mutants": {"unobserved": mutant}})
+    )
+    base = f.commit("qualify a surviving mutant")
+    f.approve(base)
+    result, run = f.verify(base, base)
+    assert result.exit_code == 0, result.output
+    assert (run["status"], run["source_qualification_status"]) == ("pass", "violation"), run
+    rejected = f.accept(run["run_id"], confirm=True)
+    assert rejected.exit_code == 2, rejected.output
+    assert not (f.state / "acceptances" / f"{run['run_id']}.json").exists()
+
+
 def acceptance(root):
     f = Fixture(root)
     f.approve()
@@ -897,6 +933,7 @@ SCENARIOS = {
     "runner.case-evidence": case_evidence,
     "verification.formal-gate": formal_gate,
     "verification.outcomes": outcomes,
+    "verification.qualification": qualification,
     "evidence.provenance": provenance,
     "evidence.integrity": integrity,
     "evidence.comparison": comparison,

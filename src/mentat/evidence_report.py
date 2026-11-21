@@ -5,7 +5,10 @@ from collections import Counter
 from urllib.parse import quote, urlsplit
 
 from .claims import _code_span, _inline_prose, provenance_lines
-from .evidence import source_qualifications, status
+from .evidence import acceptable, qualification_status, source_qualifications, status
+
+_PRODUCT_VERDICT = {"pass": "passed", "violation": "failed", "incomplete": "incomplete"}
+_QUALIFICATION_VERDICT = {**_PRODUCT_VERDICT, "skipped": "did not run"}
 
 
 def pr_summary(record, head, report_url, acceptance, ci_status="unavailable"):
@@ -24,10 +27,16 @@ def pr_summary(record, head, report_url, acceptance, ci_status="unavailable"):
     if ci_status not in {"pass", "fail", "incomplete", "unavailable"}:
         raise ValueError("Invalid lightweight CI result")
     link = quote(report_url, safe=":/?=&%#@+;,~!$*[]")
+    qualification = (
+        f"- Source qualification: **{record['source_qualification_status']}**.\n"
+        if "source_qualification_status" in record
+        else ""
+    )
     return (
         f"Mentat review for `{head}`\n\n"
         f"- Lightweight CI (host reported): **{ci_status}**.\n"
         f"- Full saved verification: **{record['status']}**, run `{record['run_id']}`.\n"
+        f"{qualification}"
         f"- Acceptance for this saved revision: **{acceptance}**.\n"
         f"- [Review the evidence report]({link}).\n\n"
         "Model proofs, tested correspondence and qualification remain separate evidence.\n"
@@ -43,6 +52,28 @@ def review_context(contract) -> dict:
         else [],
         "verification_limits": review.verification_limits if review else [],
     }
+
+
+def verdict_lines(record: dict) -> list[str]:
+    """Report product and qualification verdicts apart; legacy records have no split."""
+    if "source_qualification_status" not in record:
+        return []
+    product, qualification = record["status"], record["source_qualification_status"]
+    lines = [f"Product checks  {product}", f"Source qualification  {qualification}"]
+    if not acceptable(record):
+        lines.append(
+            f"Product checks {_PRODUCT_VERDICT[product]}; source qualification "
+            f"{_QUALIFICATION_VERDICT[qualification]}. This run cannot be accepted."
+        )
+    return lines
+
+
+def _verdict(checks: list[dict], skipped) -> str:
+    executed = [check for check in checks if check["status"] != "skipped"]
+    result = status(executed, incomplete_first=True) if executed else "skipped"
+    if skipped and result == "pass":
+        result = "skipped"
+    return result if checks or skipped else "incomplete"
 
 
 def claim_groups(record: dict) -> list[tuple[str, list[dict]]]:
@@ -63,13 +94,15 @@ def claim_groups(record: dict) -> list[tuple[str, list[dict]]]:
             claims[check["claim"]]["behavior"].append(
                 {**check, "status": "skipped", "detail": "Formal checks did not pass"}
             )
+    split = "source_qualification_status" in record
     for claim in claims.values():
-        checks = claim["formal"] + claim["behavior"] + claim["qualification"]
-        executed = [check for check in checks if check["status"] != "skipped"]
-        result = status(executed, incomplete_first=True) if executed else "skipped"
-        if skipped and result == "pass":
-            result = "skipped"
-        claim["status"] = result if checks or skipped else "incomplete"
+        if split:
+            claim["status"] = _verdict(claim["formal"] + claim["behavior"], skipped)
+            claim["qualification_status"] = qualification_status(claim["qualification"])
+        else:
+            claim["status"] = _verdict(
+                claim["formal"] + claim["behavior"] + claim["qualification"], skipped
+            )
     groups = record.get("claim_review", {}).get("groups") or [
         {"title": "Claims", "claim_ids": list(claims)}
     ]
@@ -89,7 +122,7 @@ def claim_summary(groups: list[tuple[str, list[dict]]]) -> str:
 def terminal_overview(record: dict) -> list[str]:
     groups = claim_groups(record)
     titles = record.get("claim_review", {}).get("titles", {})
-    lines = [f"Claims  {claim_summary(groups)}"]
+    lines = [*verdict_lines(record), f"Claims  {claim_summary(groups)}"]
     for group, claims in groups:
         lines.append(group)
         for claim in claims:
@@ -179,6 +212,7 @@ def project_report(record: dict) -> list[str]:
         f"- Contract base `{record['base']}`",
         f"- Runner `{record['runner']}`",
         f"- Claim outcomes · {claim_summary(groups)}",
+        *(f"- {line}" for line in verdict_lines(record)),
     ]
     checks = [
         (claim, check)
@@ -212,6 +246,8 @@ def project_report(record: dict) -> list[str]:
             if claim_id in titles:
                 lines.extend((f"Claim {_code_span(claim_id)}", ""))
             lines.append(_inline_prose(claim["statement"]))
+            if "qualification_status" in claim:
+                lines.append(f"- Source qualification · {claim['qualification_status']}")
             if provenance := claim.get("provenance"):
                 lines.extend(("", *provenance_lines(provenance)))
             lines.extend(
