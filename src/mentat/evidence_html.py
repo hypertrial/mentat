@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 
 from . import evidence
-from .evidence_report import claim_groups
+from .evidence_report import claim_groups, verdict_lines
 
 _STATUSES = {"pass", "violation", "incomplete", "skipped"}
 _CASE_STATUSES = {"pass", "fail", "skip", "error"}
@@ -306,7 +306,7 @@ def _accepted(state, record, digest):
                     "manifest_digest": digest,
                 }.items()
             )
-            or record["status"] != "pass"
+            or not evidence.acceptable(record)
         ):
             raise ValueError
         accepted = datetime.fromisoformat(_string(receipt.get("accepted_at")))
@@ -572,6 +572,8 @@ def _render(record, groups, manifest_digest, acceptance):
         ("Verified manifest SHA-256", manifest_digest),
         ("Local operator acceptance", acceptance),
     ]
+    if "source_qualification_status" in record:
+        rows.insert(1, ("Source qualification", record["source_qualification_status"]))
     overview = "".join(
         f'<div><dt>{_text(label)}</dt><dd class="{"hash" if label in {"Candidate", "Contract base", "Contract digest", "Run ID", "Verified manifest SHA-256"} else ""}">{_text(value)}</dd></div>'
         for label, value in rows
@@ -609,6 +611,10 @@ def _render(record, groups, manifest_digest, acceptance):
             )
             if "source_mutation_checks" not in record:
                 parts.append("<p>Source mutation qualification: Unavailable</p>")
+            elif "source_qualification_status" in record:
+                parts.append(
+                    f"<p>Source mutation qualification: {_text(claim['qualification_status'])}</p>"
+                )
             parts.append("</details>")
         parts.append("</section>")
         areas.append("".join(parts))
@@ -623,6 +629,7 @@ def _render(record, groups, manifest_digest, acceptance):
         if record["behavior_skipped"]
         else ""
     )
+    verdict = "".join(f"<p>{_text(line)}</p>" for line in verdict_lines(record))
     findings_html = (
         "<ul>" + "".join(findings) + "</ul>"
         if findings
@@ -642,7 +649,7 @@ dl {{ display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: .9rem
 <p>Claims and diagnostic filenames may contain sensitive information. Review this report before sharing.</p>
 <nav><a href="#overview">Overview</a> · <a href="#findings">Findings</a> · <a href="#claims">Claims</a> · <a href="#limits">Limits</a></nav>
 <section class="panel" id="overview"><h2>Overview</h2><dl>{overview}</dl><p>Acceptance records a local decision for the saved revision. It does not establish identity or current approval.</p>
-<p>Primary checks: {counts["formal"]} formal, {behavior_count}; {case_count} required cases. Negative controls are excluded.</p>{gate}</section>
+<p>Primary checks: {counts["formal"]} formal, {behavior_count}; {case_count} required cases. Negative controls are excluded.</p>{gate}{verdict}</section>
 <section class="panel" id="findings"><h2>Primary findings</h2>{findings_html}</section>
 <section class="panel" id="limits"><h2>Verification limits</h2>{limit_html}</section>
 <section id="claims"><h2>Claims</h2>{metadata_html}<div class="controls" id="controls" hidden><label>Search title or ID<input id="search" type="search"></label><label>Status<select id="filter"><option value="">All</option><option value="pass">Pass</option><option value="violation">Violation</option><option value="incomplete">Incomplete</option><option value="skipped">Skipped</option></select></label></div><p id="count" hidden></p><p id="empty" hidden>No matching claims.</p>{"".join(areas)}</section>
@@ -716,6 +723,10 @@ def render_comparison(
                 ("Manifest SHA-256", manifest),
                 ("Operator acceptance", _accepted(state, record, manifest)),
             ]
+            if "source_qualification_status" in record:
+                fields.insert(
+                    1, ("Source qualification", record["source_qualification_status"])
+                )
             overviews.append(
                 f'<section class="panel"><h2>{label} · {_status(record["status"])}</h2><dl>'
                 + "".join(f"<dt>{key}</dt><dd>{_text(value)}</dd>" for key, value in fields)

@@ -121,7 +121,7 @@
     {
       "id": "verification.outcomes",
       "title": "Distinguish pass, violation, and incomplete",
-      "statement": "Core verification exits 0 for pass, 1 for a confirmed violation, and 2 for an incomplete run or invalid input. Incomplete takes precedence in mixed results. Saved runs retain the individual outcomes."
+      "statement": "Core verification exits 0 for pass, 1 for a confirmed violation, and 2 for an incomplete run or invalid input. The status and exit code come only from formal and behavior checks; incomplete takes precedence in mixed results. Source qualification is recorded separately and does not change the status or exit code. Saved runs retain the individual outcomes."
     },
     {
       "id": "evidence.provenance",
@@ -146,9 +146,9 @@
     {
       "id": "acceptance.complete-pass",
       "title": "Accept only a complete pass",
-      "statement": "Acceptance requires an intact passing run under the current approval and a separate decision, confirmed in a terminal by default or supplied by an explicitly trusted, unverified agent relay.",
+      "statement": "Acceptance requires an intact run whose product checks pass and whose recorded source qualification passes, under the current approval, and a separate decision, confirmed in a terminal by default or supplied by an explicitly trusted, unverified agent relay.",
       "assumptions": [
-        "The bounded model represents status, current approval, evidence integrity, and a declared decision as independent eligibility gates; it does not verify the source of a relayed decision."
+        "The bounded model represents product status, source qualification, current approval, evidence integrity, and a declared decision as independent eligibility gates; it does not verify the source of a relayed decision."
       ]
     },
     {
@@ -289,6 +289,17 @@
         "-I",
         "{checks}/selfcheck.py",
         "verification.outcomes"
+      ],
+      "timeout_seconds": 120
+    },
+    {
+      "id": "check.qualification",
+      "claim": "verification.outcomes",
+      "argv": [
+        "python3",
+        "-I",
+        "{checks}/selfcheck.py",
+        "verification.qualification"
       ],
       "timeout_seconds": 120
     },

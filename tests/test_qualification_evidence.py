@@ -48,6 +48,8 @@ def campaign(tmp_path, monkeypatch, request):
     }}
     if getattr(request, "param", None) == "kill-only":
         mutants["mutants"] = {"kill": mutants["mutants"]["kill"]}
+    if getattr(request, "param", None) == "survive-only":
+        mutants["mutants"] = {"survive": mutants["mutants"]["survive"]}
     if getattr(request, "param", None) == "apply-error":
         mutants["mutants"] = {"missing": {**mutants["mutants"]["kill"], "before": "ABSENT_MARKER"}}
     (checks / "contract.json").write_text(json.dumps(config))
@@ -87,14 +89,15 @@ def campaign(tmp_path, monkeypatch, request):
 def qualified_run(campaign):
     _, _, state, _, _, _, verify = campaign
     result, payload = verify()
-    assert result.exit_code == 2, payload
+    assert result.exit_code == 0, payload
     _, record = evidence.read_run(state, payload["run_id"])
+    assert (record["status"], record["source_qualification_status"]) == ("pass", "incomplete")
     return campaign, record
 
 
 def test_cli_saves_real_mutants_bindings_and_acceptance_rejects_incomplete(qualified_run):
     (repo, checks, state, base, scope, invoke, _), record = qualified_run
-    assert record["status"] == "incomplete"
+    assert (record["status"], record["source_qualification_status"]) == ("pass", "incomplete")
     declarations = {item["id"]: item for item in record["source_mutation_checks"]}
     assert set(declarations) == {"kill", "survive", "error"}
     for declaration in declarations.values():
@@ -226,7 +229,9 @@ def test_reports_and_compare_preserve_source_qualification_attribution(qualified
     assert mutations["error"]["after"]["status"] == "incomplete"
     assert mutations["kill"]["after"]["case_results"]["target <case>"] == "fail"
     terminal = invoke("verify", "--rev", base, *scope)
-    assert terminal.exit_code == 2, terminal.output
+    assert terminal.exit_code == 0, terminal.output
+    assert "Product checks  pass" in terminal.output
+    assert "Source qualification  incomplete" in terminal.output
     for token in ("kill", "survive", "error"):
         assert token in terminal.output
 
@@ -238,6 +243,7 @@ def test_real_formal_gate_records_qualification_inventory_without_running(campai
     assert result.exit_code != 0
     _, record = evidence.read_run(state, payload["run_id"])
     assert record["behavior_skipped"] is True and record["source_qualifications"] == []
+    assert record["source_qualification_status"] == "skipped"
     assert {item["id"] for item in record["source_mutation_checks"]} == {"kill", "survive", "error"}
     assert all(item["status"] == "skipped" for item in evidence.source_qualifications(record))
     report = (state / "runs" / payload["run_id"] / "report.md").read_text().lower()
@@ -292,6 +298,7 @@ def test_passing_killed_mutant_can_be_accepted_with_real_approval(campaign, tmp_
     assert result.exit_code == 0, payload
     assert payload["status"] == "pass"
     _, record = evidence.read_run(state, payload["run_id"])
+    assert record["source_qualification_status"] == "pass"
     assert [(check["status"], check["outcome"]) for check in evidence.source_qualifications(record)] == [("pass", "killed")]
     accepted = invoke("accept", record["run_id"], *scope)
     assert accepted.exit_code == 0, accepted.output
@@ -303,13 +310,85 @@ def test_passing_killed_mutant_can_be_accepted_with_real_approval(campaign, tmp_
     assert "recorded at" in output.read_text().lower()
 
 
-@pytest.mark.parametrize("campaign", ["apply-error"], indirect=True)
-def test_unapplied_mutation_is_incomplete_even_with_passing_baseline(campaign):
-    _, _, state, _, scope, invoke, verify = campaign
+@pytest.mark.parametrize("campaign", ["survive-only"], indirect=True)
+def test_surviving_mutant_is_a_qualification_violation_not_a_product_defect(campaign, tmp_path):
+    _, _, state, base, scope, invoke, verify = campaign
     result, payload = verify()
-    assert result.exit_code == 2 and payload["status"] == "incomplete"
+    assert result.exit_code == 0, payload
+    assert payload["status"] == "pass"
     _, record = evidence.read_run(state, payload["run_id"])
     assert record["cases"][0]["status"] == "pass"
+    assert record["source_qualification_status"] == "violation"
+    assert invoke("accept", record["run_id"], *scope).exit_code == 2
+    assert not (state / "acceptances" / f"{record['run_id']}.json").exists()
+    verdict = "Product checks passed; source qualification failed. This run cannot be accepted."
+    report = (state / "runs" / payload["run_id"] / "report.md").read_text()
+    assert verdict in report and "- Source qualification · violation" in report
+    output = tmp_path / "survived.html"
+    assert invoke("evidence", "render", payload["run_id"], "--out", str(output)).exit_code == 0
+    assert verdict in output.read_text()
+    terminal = invoke("verify", "--rev", base, *scope)
+    assert terminal.exit_code == 0 and verdict in terminal.output, terminal.output
+
+
+@pytest.mark.parametrize("campaign", ["kill-only"], indirect=True)
+def test_real_product_violation_with_qualifications_exits_violation(campaign):
+    repo, _, state, _, _, _, verify = campaign
+    (repo / "source.py").write_text("VALUE=BAD\nCOMMENT=one\n")
+    git(repo, "add", "source.py")
+    git(repo, "commit", "-qm", "violating candidate")
+    result, payload = verify(git(repo, "rev-parse", "HEAD"))
+    assert result.exit_code == 1, payload
+    assert payload["status"] == "violation"
+    _, record = evidence.read_run(state, payload["run_id"])
+    assert record["status"] == "violation"
+    assert record["cases"][0]["status"] == "violation"
+    assert record["source_qualification_status"] == "incomplete"
+
+
+def _save_manifest(state, record):
+    raw = evidence.json_bytes(record)
+    (state / "runs" / record["run_id"] / "manifest.json").write_bytes(raw)
+    (state / "receipts" / record["run_id"]).write_text(evidence.digest(raw))
+
+
+@pytest.mark.parametrize("damage", ["product-verdict", "qualification-verdict", "qualification-evidence"])
+def test_saved_split_verdict_must_match_its_evidence(qualified_run, damage):
+    (_, _, state, _, _, _, _), original = qualified_run
+    record = copy.deepcopy(original)
+    if damage == "product-verdict":
+        record["status"] = "violation"
+    elif damage == "qualification-verdict":
+        record["source_qualification_status"] = "pass"
+    else:
+        record.pop("source_mutation_checks")
+        record.pop("source_qualifications")
+    _save_manifest(state, record)
+    with pytest.raises(ValueError):
+        evidence.read_run_snapshot(state, record["run_id"])
+
+
+def test_legacy_combined_verdict_still_reads_without_the_split_key(qualified_run):
+    (_, _, state, _, _, _, _), original = qualified_run
+    record = copy.deepcopy(original)
+    record.pop("source_qualification_status")
+    record["status"] = "incomplete"
+    _save_manifest(state, record)
+    assert evidence.read_run_snapshot(state, record["run_id"])[1]["status"] == "incomplete"
+    record["status"] = "pass"
+    _save_manifest(state, record)
+    with pytest.raises(ValueError, match="contradicts qualification evidence"):
+        evidence.read_run_snapshot(state, record["run_id"])
+
+
+@pytest.mark.parametrize("campaign", ["apply-error"], indirect=True)
+def test_unapplied_mutation_is_incomplete_qualification_with_passing_product(campaign):
+    _, _, state, _, scope, invoke, verify = campaign
+    result, payload = verify()
+    assert result.exit_code == 0 and payload["status"] == "pass"
+    _, record = evidence.read_run(state, payload["run_id"])
+    assert record["cases"][0]["status"] == "pass"
+    assert record["source_qualification_status"] == "incomplete"
     [qualification] = evidence.source_qualifications(record)
     assert qualification["id"] == "missing"
     assert qualification["status"] == "incomplete" and qualification["outcome"] == "error"
@@ -341,5 +420,5 @@ def test_cli_shares_output_budget_between_baseline_and_mutation(campaign, monkey
         assert "stdout" in mutation["check_result"]["log_omissions"]
         assert "stdout" not in mutation["check_result"]
     else:
-        assert result.exit_code == 2 and (mutation["status"], mutation["outcome"]) == ("incomplete", "error")
+        assert result.exit_code == 0 and (mutation["status"], mutation["outcome"]) == ("incomplete", "error")
         assert "cases.json" in mutation["check_result"]["artifact_omissions"]

@@ -491,7 +491,7 @@ def verify(
             "run_id": run_id,
             "recorded_at": evidence.now(),
             **_scope(project),
-            "status": evidence.status([*models, *cases, *qualifications], incomplete_first=True),
+            "status": evidence.status([*models, *cases], incomplete_first=True),
             "revision": candidate.revision,
             "snapshot_digest": candidate.digest,
             "approval": approved,
@@ -532,6 +532,7 @@ def verify(
                 for mutation in approved_mutations(project.contract, project.files)
             ]
             record["source_qualifications"] = qualifications
+            record["source_qualification_status"] = evidence.qualification_status(qualifications)
             record["source_mutation_manifest_sha256"] = evidence.digest(
                 project.files[project.contract.source_mutations]
             )
@@ -561,15 +562,15 @@ def export_evidence(
         bundle, record = evidence.read_run(state, run_id)
         if output is not None:
             bundle = Path(shutil.copytree(bundle, output))
-        emit(
-            {
-                "status": "pass",
-                "run_status": record["status"],
-                "run_id": run_id,
-                "bundle": str(bundle.resolve()),
-            },
-            output_json,
-        )
+        result = {
+            "status": "pass",
+            "run_status": record["status"],
+            "run_id": run_id,
+            "bundle": str(bundle.resolve()),
+        }
+        if "source_qualification_status" in record:
+            result["source_qualification_status"] = record["source_qualification_status"]
+        emit(result, output_json)
     except (*_USER_ERRORS, KeyError) as exc:
         _error(exc, output_json)
 
@@ -634,6 +635,8 @@ def compare_evidence(
         for side in ("before", "after"):
             run = result[side]
             typer.echo(f"{side.title()}  {run['revision']}  {run['status']}  (run {run['run_id']})")
+            if "source_qualification_status" in run:
+                typer.echo(f"  Source qualification  {run['source_qualification_status']}")
             if across_contracts:
                 typer.echo(f"  Base {run['base']}  Approval {run['contract_digest']}")
             typer.echo(f"  Report  {run['report']}")
@@ -713,12 +716,13 @@ def accept(
         _, record = evidence.read_run(state, run_id)
         if (
             record.get("kind") != "project-verification"
-            or record["status"] != "pass"
+            or not evidence.acceptable(record)
             or any(record.get(key) != value for key, value in _scope(project).items())
             or record.get("approval") != approved
         ):
             raise ValueError(
-                "Only a complete passing run under the current approval can be accepted"
+                "Only a complete passing run under the current approval can be accepted; "
+                "any source qualification must also pass"
             )
         receipt = (state / "receipts" / run_id).read_text()
         if not trusted_chat_approval:

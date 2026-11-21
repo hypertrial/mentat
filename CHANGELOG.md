@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Separate the product verdict from source-mutation qualification. The run
+  `status` and the `verify` exit code (`0` pass, `1` violation, `2` incomplete)
+  now come only from formal and behavior checks, so a surviving mutant exits `0`
+  and a real violation is no longer reported as incomplete because of a
+  qualification. Records of contracts with `source_mutations` carry
+  `source_qualification_status` (`pass`, `violation`, `incomplete`, or `skipped`
+  when no qualification ran). `accept` requires a passing product verdict and a
+  passing qualification, and reports and terminal output state both verdicts.
+  Scripts or CI that relied on exit `1` for a qualification failure must check
+  `source_qualification_status` or use `accept`. Mentat's own contract changed,
+  so its approvals must be renewed.
 - Pin the proof checker's Lean toolchain. The checker refuses a toolchain whose
   files or links differ from the official 4.35.0 x86_64 or aarch64 archive, and the
   expected digests are part of the verifier source, so approvals and proof

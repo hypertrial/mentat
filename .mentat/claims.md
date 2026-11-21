@@ -77,9 +77,9 @@ Claim `verification.formal-gate` · Behavior `check.verification.formal-gate`
 
 ### 10. Distinguish pass, violation, and incomplete
 
-Core verification exits 0 for pass, 1 for a confirmed violation, and 2 for an incomplete run or invalid input. Incomplete takes precedence in mixed results. Saved runs retain the individual outcomes.
+Core verification exits 0 for pass, 1 for a confirmed violation, and 2 for an incomplete run or invalid input. The status and exit code come only from formal and behavior checks; incomplete takes precedence in mixed results. Source qualification is recorded separately and does not change the status or exit code. Saved runs retain the individual outcomes.
 
-Claim `verification.outcomes` · Behavior `check.outcomes`
+Claim `verification.outcomes` · Behavior `check.outcomes`, `check.qualification`
 
 ## Inspecting evidence and accepting a run
 
@@ -109,7 +109,7 @@ Claim `evidence.comparison` · Behavior `check.evidence.comparison`
 
 ### 15. Accept only a complete pass
 
-Acceptance requires an intact passing run under the current approval and a separate decision, confirmed in a terminal by default or supplied by an explicitly trusted, unverified agent relay.
+Acceptance requires an intact run whose product checks pass and whose recorded source qualification passes, under the current approval, and a separate decision, confirmed in a terminal by default or supplied by an explicitly trusted, unverified agent relay.
 
 Claim `acceptance.complete-pass` · Behavior `check.acceptance` · Formal `acceptance.eligibility`
 
@@ -161,6 +161,8 @@ Check `check.verification.formal-gate` · Claim `verification.formal-gate` · St
 
 Check `check.outcomes` · Claim `verification.outcomes` · Standalone check
 
+Check `check.qualification` · Claim `verification.outcomes` · Standalone check
+
 Check `check.evidence.provenance` · Claim `evidence.provenance`
 
 - Selector `evidence.provenance`
@@ -181,6 +183,6 @@ Check `check.claims.openspec-draft` · Claim `claims.openspec-draft` · Standalo
 
 Formal check `acceptance.eligibility` · Claim `acceptance.complete-pass` · Z3
 
-- Assumption The bounded model represents status, current approval, evidence integrity, and a declared decision as independent eligibility gates; it does not verify the source of a relayed decision.
+- Assumption The bounded model represents product status, source qualification, current approval, evidence integrity, and a declared decision as independent eligibility gates; it does not verify the source of a relayed decision.
 
-Inventory · 17 behavior checks · 1 formal check · 4 declared selectors
+Inventory · 18 behavior checks · 1 formal check · 4 declared selectors
