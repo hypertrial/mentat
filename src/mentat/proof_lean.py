@@ -3,8 +3,10 @@
 Parser: SOURCE POLICY_JSON approved|submission; exporter: MODULE (NDJSON stdout).
 Audit: APPROVED_EXPORT SOLUTION_EXPORT POLICY_JSON [approved]. The optional final
 argument checks approved placeholders only. All verdicts are data-only JSON.
-The exporter must run inside the isolated build boundary with the selected module
-as its sole untrusted search path. The parser uses a trusted, sanitized search path.
+The exporter's only search path is a fresh folder holding the selected compiled module,
+staged by the driver; the writable build directory is never on a search path. The parser
+uses a trusted, sanitized search path. Submission sources may use only allowlisted command
+kinds and screened forms; the environment audit decides axioms and holes.
 """
 
 PARSER_SOURCE = r"""import Lean
@@ -51,6 +53,48 @@ partial def atoms (s : Syntax) : List String :=
   | .node _ _ xs => xs.toList.flatMap atoms
   | .missing => []
 
+-- Submission policy: allowed top-level command kinds; `in` and `mutual` members are checked recursively.
+def submissionKinds : Array String := #["Lean.Parser.Command.declaration", "Lean.Parser.Command.namespace", "Lean.Parser.Command.section", "Lean.Parser.Command.end", "Lean.Parser.Command.open", "Lean.Parser.Command.universe", "Lean.Parser.Command.variable", "Lean.Parser.Command.mutual", "Lean.Parser.Command.set_option"]
+def screenedAtoms : Array String := #["unsafe", "run_tac", "by_elab"]
+def submissionOptions : Array String := #["maxHeartbeats", "maxRecDepth"]
+def submissionAttributes : Array String := #["simp", "reducible", "irreducible"]
+
+def isAtomText (s : Syntax) (text : String) : Bool :=
+  match s with
+  | .atom _ a => a == text
+  | _ => false
+
+-- First atom or identifier below a node, such as the attribute name in `@[local simp]`.
+partial def headText (s : Syntax) : String :=
+  match s with
+  | .atom _ a => a
+  | .ident _ _ n _ => n.toString
+  | .node _ _ args => if args.isEmpty then "" else headText args[0]!
+  | .missing => ""
+
+partial def commandAllowed (s : Syntax) : Bool :=
+  match s with
+  | .node _ k args =>
+    let kind := k.toString false
+    if kind == "Lean.Parser.Command.in" then args.size == 3 && commandAllowed args[0]! && commandAllowed args[2]!
+    else if kind == "Lean.Parser.Command.mutual" then args.size == 3 && args[1]!.getArgs.all commandAllowed
+    else submissionKinds.contains kind
+  | _ => false
+
+-- Screens every node below an allowed command; doc comment bodies are atoms, so they are skipped.
+partial def submissionSafe (s : Syntax) : Bool :=
+  match s with
+  | .atom _ a => !screenedAtoms.contains a
+  | .ident .. | .missing => true
+  | .node _ k args => Id.run do
+    let kind := k.toString false
+    if kind == "Lean.Parser.Command.docComment" then return true
+    if kind == "Lean.Parser.Term.attrInstance" && (args.size != 2 || !submissionAttributes.contains (headText args[1]!)) then return false
+    if args.size >= 2 && isAtomText args[0]! "set_option" && !(args[1]!.isIdent && submissionOptions.contains args[1]!.getId.toString) then return false
+    for arg in args do
+      if !submissionSafe arg then return false
+    return true
+
 unsafe def main (args : List String) : IO UInt32 := do
   try
     let [path, policyPath, mode] := args | throw (IO.userError "args")
@@ -76,7 +120,14 @@ unsafe def main (args : List String) : IO UInt32 := do
       let a := imp.getArgs
       if a.size != 6 || hasTokens a[0]! || hasTokens a[1]! || hasTokens a[3]! || hasTokens a[5]! || !a[4]!.isIdent || !imports.contains a[4]!.getId.toString then
         output "rejected"; return 1
-    if mode == "submission" then output "accepted"; return 0
+    if mode == "submission" then
+      repeat
+        let (cmd, next, messages) := Parser.parseCommand ctx {env := env, options := {}} ps msgs
+        ps := next; msgs := messages
+        if msgs.hasErrors then output "rejected"; return 1
+        if cmd.isOfKind ``Parser.Command.eoi then break
+        if !(commandAllowed cmd && submissionSafe cmd) then output "rejected"; return 1
+      output "accepted"; return 0
     let mut ns : List String := []
     let mut found : Array String := #[]
     repeat

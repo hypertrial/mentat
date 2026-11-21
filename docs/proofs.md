@@ -107,11 +107,19 @@ manifests have local receipts; ledgers, submissions and logs are only hash-linke
 and can be rewritten together. Receipts are not signatures and cannot protect
 state, including approval records, from an actor controlling the account.
 
-The checker uses fresh, separate approved and submission caches. Only internally
-generated data exports cross into the verdict process; it never imports submitted
-compiled code. The builtin comparator and kernel are the acceptance authority.
-Proof-source hashing identifies submitted input; it does not certify how arbitrary
-Lean metaprogramming constructed an equivalent exported proof.
+The checker uses fresh, separate approved and submission caches. A submission may
+contain declarations of any kind, `namespace`, `section`, `end`, `open`, `universe`,
+`variable`, `mutual` blocks, and `set_option` for `maxHeartbeats` or `maxRecDepth`,
+optionally combined with `in`. Any other command is rejected, including evaluation,
+printing, macros, custom syntax, notation, initializers and attribute commands. Commands
+that run code while compiling are therefore rejected before compilation. Inside a
+submission, `unsafe`, `run_tac`, `by_elab`, attributes other than `simp`, `reducible`
+and `irreducible`, and `set_option` for other options are also rejected. This in-proof
+screen is a list of known code-running forms, not a full allowlist. The exporter reads
+only the single compiled module from a fresh folder, never the writable build directory.
+The builtin comparator and kernel remain the acceptance authority, and the environment
+audit decides axioms and holes. Proof-source hashing identifies submitted input; it does
+not certify how the exported proof was constructed.
 
 ## Host coordination and resumption
 

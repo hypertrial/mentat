@@ -1,5 +1,6 @@
 """Opt-in tests of the real pinned Linux checker; no checker functions are mocked."""
 
+import ast
 import fcntl
 import hashlib
 import math
@@ -71,6 +72,45 @@ def assert_result(result, expected, approved, source, identity, theorem="Proof.f
 
 
 
+def _driver_helpers():
+    # Executes the real staging helper and its Incomplete class from the driver source; no Linux service runs.
+    tree = ast.parse(proof_checker._DRIVER)
+    # The driver's own imports are executed too, so a name the helper needs but the driver
+    # does not import fails here instead of only inside the Linux service.
+    body = [node for node in tree.body if isinstance(node, (ast.Import, ast.ImportFrom))
+            or getattr(node, "name", "") in {"Incomplete", "stage_olean"}]
+    namespace = {}
+    exec(compile(ast.Module(body=body, type_ignores=[]), "<driver>", "exec"), namespace)
+    return namespace
+
+
+def test_driver_stages_only_the_compiled_module_into_a_fresh_folder(tmp_path):
+    build = tmp_path / ".lake"
+    (build / "LeanExport").mkdir(parents=True)
+    (build / "LeanExport" / "Basic.olean").write_bytes(b"planted exporter")
+    (build / "Solution.olean").write_bytes(b"compiled module")
+    folder = tmp_path / "Solution-export"
+    _driver_helpers()["stage_olean"](str(build / "Solution.olean"), str(folder))
+    assert sorted(path.name for path in folder.iterdir()) == ["Solution.olean"]
+    assert (folder / "Solution.olean").read_bytes() == b"compiled module"
+
+
+@pytest.mark.parametrize("case", ["symlink", "missing", "oversized"])
+def test_driver_refuses_unsafe_compiled_module_before_creating_export_folder(tmp_path, case):
+    helpers = _driver_helpers()
+    source = tmp_path / "Solution.olean"
+    if case == "symlink":
+        (tmp_path / "real.olean").write_bytes(b"compiled module")
+        source.symlink_to(tmp_path / "real.olean")
+    elif case == "oversized":
+        source.write_bytes(b"x" * 9)
+    folder = tmp_path / "Solution-export"
+    with pytest.raises(helpers["Incomplete"]) as refused:
+        helpers["stage_olean"](str(source), str(folder), limit=8)
+    assert str(refused.value) == "Lean source compilation did not complete"
+    assert not folder.exists()
+
+
 def test_checker_failure_diagnostic_is_bounded_and_decodes_invalid_bytes():
     result = {"status": "incomplete", "detail": "synthetic failure", "logs": {
         "checker.txt": b"diagnostic \xff" + b"x" * 8190 + b"outside-limit",
@@ -103,6 +143,11 @@ def test_real_approved_audit_and_valid_proof_with_other_target_hole(checker_iden
     ("extra-assumption", VALID.replace(b"theorem first (n : Nat) :", b"theorem first (n : Nat) (h : True) :")),
     ("local-axiom", VALID.replace(b"end Proof", b"axiom forbidden : False\nend Proof")),
     ("forged-printed-pass-and-hole", APPROVED.replace(b"end Proof", b'#eval IO.println "{\\"status\\":\\"accepted\\"}"\nend Proof')),
+    ("eval-writes-exporter-olean", APPROVED.replace(b"end Proof", b'#eval do\n  IO.FS.createDirAll ".lake/LeanExport"\n  IO.FS.writeFile ".lake/LeanExport/Basic.olean" "forged"\nend Proof')),
+    ("initialize", APPROVED.replace(b"end Proof", b"initialize counter : IO.Ref Nat <- IO.mkRef 0\nend Proof")),
+    ("implemented-by-attribute", VALID.replace(b"def relay (n : Nat) : Nat := n", b"@[implemented_by relay] def relay (n : Nat) : Nat := n")),
+    ("disallowed-set-option", VALID.replace(b"namespace Proof", b"set_option pp.all true\nnamespace Proof")),
+    ("macro", VALID.replace(b"end Proof", b'macro "forged" : term => `(0)\nend Proof')),
     ("changed-other-target", VALID.replace(b"theorem second (n : Nat) : n = n := by sorry", b"theorem second (n : Nat) : True := by sorry")),
     ("disallowed-import", VALID.replace(b"import Init", b"import Lean")),
 ])
@@ -111,6 +156,42 @@ def test_real_checker_rejects_invalid_solution(checker_identity, case, solution)
     result = proof_checker.check_submission(APPROVED, solution, **POLICY)
     assert_result(result, "rejected", APPROVED, solution, checker_identity)
     assert solution == before, case
+
+
+def test_real_checker_rejects_tactic_metaprogramming_under_lean_import(checker_identity):
+    approved = b'''import Lean
+namespace Proof
+def relay (n : Nat) : Nat := n
+theorem first (n : Nat) : relay n = relay n := by sorry
+theorem second (n : Nat) : n = n := by sorry
+end Proof
+'''
+    solution = approved.replace(b"by sorry\ntheorem second", b"by run_tac pure ()\ntheorem second")
+    policy = {"theorem": "Proof.first", "allowed_imports": ["Lean"], "permitted_axioms": []}
+    audit = proof_checker.audit_approved(
+        approved, theorems=["Proof.first", "Proof.second"],
+        allowed_imports=["Lean"], permitted_axioms=[],
+    )
+    assert_result(audit, "accepted", approved, approved, checker_identity)
+    result = proof_checker.check_submission(approved, solution, **policy)
+    assert_result(result, "rejected", approved, solution, checker_identity)
+
+
+def test_real_checker_accepts_helper_lemma_section_and_scoped_commands(checker_identity):
+    solution = b'''import Init
+namespace Proof
+def relay (n : Nat) : Nat := n
+@[simp] theorem relay_eq (n : Nat) : relay n = n := rfl
+section
+theorem first (n : Nat) : relay n = relay n := by rw [relay_eq]
+end
+open Nat in
+set_option maxHeartbeats 400000 in
+theorem second (n : Nat) : n = n := by sorry
+end Proof
+'''
+    result = proof_checker.check_submission(APPROVED, solution, **POLICY)
+    assert_result(result, "accepted", APPROVED, solution, checker_identity)
 
 
 def test_real_approved_audit_rejects_definition_hole(checker_identity):

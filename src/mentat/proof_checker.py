@@ -377,7 +377,7 @@ def check_submission(
 
 # Executed by the fixed system Python inside the resource-bounded service.
 _DRIVER = r"""
-import base64, json, os, selectors, signal, subprocess, time
+import base64, json, os, selectors, signal, stat, subprocess, time
 from pathlib import Path
 
 LEAN = '/opt/lean-4.35.0/bin/lean'
@@ -443,6 +443,23 @@ def parse(source, mode):
     if code == 1 and result.get('status') == 'rejected': raise Rejected('Lean source does not satisfy the approved source policy')
     if code != 0 or result.get('status') != 'accepted': raise Incomplete('Lean source policy could not be established')
 
+def stage_olean(source, folder, limit=128 * 1024 * 1024):
+    # Only the one compiled module crosses from the writable build into a fresh folder.
+    message = 'Lean source compilation did not complete'
+    try:
+        fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        raise Incomplete(message)
+    with os.fdopen(fd, 'rb') as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_size > limit: raise Incomplete(message)
+        data = stream.read(limit + 1)
+    if len(data) > limit: raise Incomplete(message)
+    os.mkdir(folder, 0o755)
+    fd = os.open(os.path.join(folder, os.path.basename(source)), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o444)
+    with os.fdopen(fd, 'wb') as out: out.write(data)
+    os.chmod(folder, 0o555)
+
 def build(module):
     project = '/work/' + module
     Path(project+'/.lake').mkdir(parents=True)
@@ -450,7 +467,10 @@ def build(module):
     code, _ = sandbox([LEAN, '-o', project+'/.lake/'+module+'.olean', project+'/'+module+'.lean'], project, writable=True)
     if code: raise Incomplete('Lean source compilation did not complete')
     export = '/work/'+module+'.ndjson'
-    env = {**ENV, 'LEAN_PATH': project+'/.lake'}
+    # The writable .lake is never a search path; the exporter sees only the staged module.
+    folder = '/work/'+module+'-export'
+    stage_olean(project+'/.lake/'+module+'.olean', folder)
+    env = {**ENV, 'LEAN_PATH': folder}
     code, _ = sandbox([LEAN, '--run', '/input/Exporter.lean', module], project, env=env, export=export)
     if code: raise Incomplete('Lean source export did not complete')
     # A valid exported environment is required before a semantic rejection is reported.
