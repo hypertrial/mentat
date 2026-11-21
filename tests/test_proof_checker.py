@@ -73,12 +73,18 @@ def assert_result(result, expected, approved, source, identity, theorem="Proof.f
 
 
 def _driver_helpers():
-    # Executes the real staging helper and its Incomplete class from the driver source; no Linux service runs.
+    # Executes the real staging and build helpers from the driver source; no Linux service runs.
     tree = ast.parse(proof_checker._DRIVER)
-    # The driver's own imports are executed too, so a name the helper needs but the driver
+    names = {"Incomplete", "stage_olean", "build", "LEAN", "ENV", "WORK", "INPUT"}
+
+    def wanted(node):
+        if isinstance(node, ast.Assign):
+            return any(isinstance(name, ast.Name) and name.id in names
+                       for target in node.targets for name in ast.walk(target))
+        return isinstance(node, (ast.Import, ast.ImportFrom)) or getattr(node, "name", "") in names
+    # The driver's own imports are executed too, so a name the helpers need but the driver
     # does not import fails here instead of only inside the Linux service.
-    body = [node for node in tree.body if isinstance(node, (ast.Import, ast.ImportFrom))
-            or getattr(node, "name", "") in {"Incomplete", "stage_olean"}]
+    body = [node for node in tree.body if wanted(node)]
     namespace = {}
     exec(compile(ast.Module(body=body, type_ignores=[]), "<driver>", "exec"), namespace)
     return namespace
@@ -95,7 +101,36 @@ def test_driver_stages_only_the_compiled_module_into_a_fresh_folder(tmp_path):
     assert (folder / "Solution.olean").read_bytes() == b"compiled module"
 
 
-@pytest.mark.parametrize("case", ["symlink", "missing", "oversized"])
+def test_driver_build_exports_only_the_staged_module(tmp_path):
+    helpers = _driver_helpers()
+    work, inputs = tmp_path / "work", tmp_path / "input"
+    work.mkdir()
+    inputs.mkdir()
+    (inputs / "Solution.lean").write_text("import Init\n")
+    calls = []
+
+    def sandbox(args, project, *, writable=False, env=None, export=None):
+        calls.append((args, env))
+        if writable:
+            # The compile step writes its module and a planted exporter library into .lake.
+            (Path(project) / ".lake" / "LeanExport").mkdir(parents=True)
+            (Path(project) / ".lake" / "Solution.olean").write_bytes(b"compiled module")
+            (Path(project) / ".lake" / "LeanExport" / "Basic.olean").write_bytes(b"planted exporter")
+        return 0, b""
+
+    helpers.update(WORK=str(work), INPUT=str(inputs), sandbox=sandbox)
+    helpers["build"]("Solution")
+    assert len(calls) == 3
+    exporter_args, exporter_env = calls[1]
+    assert exporter_args[1] == "--run"
+    folder = work / "Solution-export"
+    assert exporter_env["LEAN_PATH"] == str(folder)
+    assert sorted(path.name for path in folder.iterdir()) == ["Solution.olean"]
+    assert (folder / "Solution.olean").read_bytes() == b"compiled module"
+    assert all(".lake" not in value for _, env in calls[1:] for value in (env or {}).values())
+
+
+@pytest.mark.parametrize("case", ["symlink", "missing", "oversized", "directory", "fifo"])
 def test_driver_refuses_unsafe_compiled_module_before_creating_export_folder(tmp_path, case):
     helpers = _driver_helpers()
     source = tmp_path / "Solution.olean"
@@ -104,6 +139,10 @@ def test_driver_refuses_unsafe_compiled_module_before_creating_export_folder(tmp
         source.symlink_to(tmp_path / "real.olean")
     elif case == "oversized":
         source.write_bytes(b"x" * 9)
+    elif case == "directory":
+        source.mkdir()
+    elif case == "fifo":
+        os.mkfifo(source)
     folder = tmp_path / "Solution-export"
     with pytest.raises(helpers["Incomplete"]) as refused:
         helpers["stage_olean"](str(source), str(folder), limit=8)
@@ -143,7 +182,12 @@ def test_real_approved_audit_and_valid_proof_with_other_target_hole(checker_iden
     ("extra-assumption", VALID.replace(b"theorem first (n : Nat) :", b"theorem first (n : Nat) (h : True) :")),
     ("local-axiom", VALID.replace(b"end Proof", b"axiom forbidden : False\nend Proof")),
     ("forged-printed-pass-and-hole", APPROVED.replace(b"end Proof", b'#eval IO.println "{\\"status\\":\\"accepted\\"}"\nend Proof')),
-    ("eval-writes-exporter-olean", APPROVED.replace(b"end Proof", b'#eval do\n  IO.FS.createDirAll ".lake/LeanExport"\n  IO.FS.writeFile ".lake/LeanExport/Basic.olean" "forged"\nend Proof')),
+    ("eval-file-write", APPROVED.replace(b"end Proof", b'#eval do\n  IO.FS.createDirAll ".lake/LeanExport"\n  IO.FS.writeFile ".lake/LeanExport/Basic.olean" "forged"\nend Proof')),
+    ("include-str-host-file", APPROVED.replace(b"end Proof", b'example : Nat := include_str "/etc/hostname"\nend Proof')),
+    ("native-decide", APPROVED.replace(b"end Proof", b"example : True := by native_decide\nend Proof")),
+    ("by-elab-term", APPROVED.replace(b"end Proof", b"example : True := by_elab pure (Lean.mkConst ``True.intro)\nend Proof")),
+    ("unsafe-term", APPROVED.replace(b"end Proof", b"example : Nat := unsafe 1\nend Proof")),
+    ("tactic-set-option-pp", APPROVED.replace(b"end Proof", b"example : True := by\n  set_option pp.all true in trivial\nend Proof")),
     ("initialize", APPROVED.replace(b"end Proof", b"initialize counter : IO.Ref Nat <- IO.mkRef 0\nend Proof")),
     ("implemented-by-attribute", VALID.replace(b"def relay (n : Nat) : Nat := n", b"@[implemented_by relay] def relay (n : Nat) : Nat := n")),
     ("disallowed-set-option", VALID.replace(b"namespace Proof", b"set_option pp.all true\nnamespace Proof")),
