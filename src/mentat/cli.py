@@ -571,6 +571,8 @@ def export_evidence(
         if "source_qualification_status" in record:
             result["source_qualification_status"] = record["source_qualification_status"]
         emit(result, output_json)
+        if not output_json and "source_qualification_status" in record:
+            typer.echo(f"Source qualification  {record['source_qualification_status']}")
     except (*_USER_ERRORS, KeyError) as exc:
         _error(exc, output_json)
 
@@ -701,6 +703,27 @@ def summarize_pr(
         _error(exc, False)
 
 
+def _acceptable(project: Project, approved: dict, record: dict) -> bool:
+    # A contract with source mutations must carry its qualification evidence, not just a verdict.
+    return (
+        record.get("kind") == "project-verification"
+        and evidence.acceptable(record)
+        and not (
+            project.contract.source_mutations is not None
+            and "source_qualifications" not in record
+        )
+        and not any(record.get(key) != value for key, value in _scope(project).items())
+        and record.get("approval") == approved
+    )
+
+
+def _refusal(record: dict) -> ValueError:
+    message = "Only a complete passing run under the current approval can be accepted"
+    if "source_qualification_status" in record:
+        message += "; any source qualification must also pass"
+    return ValueError(message)
+
+
 @app.command()
 def accept(
     ctx: typer.Context, run_id: str, repo: Repo, base: Base, runner: Runner = "docker",
@@ -714,22 +737,16 @@ def accept(
         state = _state(ctx, project)
         approved = _approval(state, project)
         _, record = evidence.read_run(state, run_id)
-        if (
-            record.get("kind") != "project-verification"
-            or not evidence.acceptable(record)
-            or any(record.get(key) != value for key, value in _scope(project).items())
-            or record.get("approval") != approved
-        ):
-            raise ValueError(
-                "Only a complete passing run under the current approval can be accepted; "
-                "any source qualification must also pass"
-            )
+        if not _acceptable(project, approved, record):
+            raise _refusal(record)
         receipt = (state / "receipts" / run_id).read_text()
         if not trusted_chat_approval:
             operator_confirm(f"Accept candidate {record['revision']} from run {run_id}?")
         if load_project(repo, base, runner).fingerprint != project.fingerprint:
             raise ValueError("Contract changed during acceptance")
-        evidence.read_run(state, run_id)
+        _, record = evidence.read_run(state, run_id)
+        if not _acceptable(project, approved, record):
+            raise _refusal(record)
         if (state / "receipts" / run_id).read_text() != receipt or _approval(
             state, project
         ) != approved:
