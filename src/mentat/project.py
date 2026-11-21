@@ -31,6 +31,7 @@ VERIFIER_MODULES = (
     "command",
     "evidence",
     "evidence_report",
+    "process",
     "project",
     "project_formal",
     "proof",

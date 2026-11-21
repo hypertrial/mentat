@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Run formal, runner, Polaris Docker and Colima child processes through one bounded
+  runner, `mentat.process`. Colima validation no longer inherits the operator's stdin,
+  its timeouts kill the whole process group, and its output is capped at 1 MiB. Clean
+  formal runs and Lean probes use a fresh private 0700 directory as `HOME` and working
+  directory, not the shared temporary folder or the operator's working directory; a Lean
+  toolchain launcher still gets the operator's `HOME` to find its toolchain. The
+  verifier modules changed (`process` is new; `colima`, `project_formal` and `runner`
+  changed), and the Polaris pack digest changes, so approvals, proof campaigns, and
+  pending acceptances must be renewed.
 - Extend the developer runtime profiler to time the runner's process, staging,
   and Docker CLI helpers (`runner.process`, `runner.stage`, and
   `runner.docker.<operation>`), and add a **Profile Docker runner**

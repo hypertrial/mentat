@@ -19,7 +19,7 @@ def pack_digest(spec: Spec) -> str:
             and not any(part.startswith(".") or part == "__pycache__" for part in relative.parts)
         ):
             files[relative.as_posix()] = file_digest(path)
-    for name in ("colima.py", "command.py", "evidence.py", "project_formal.py"):
+    for name in ("colima.py", "command.py", "evidence.py", "process.py", "project_formal.py"):
         files[f"mentat/{name}"] = file_digest(root.parents[1] / name)
     return digest(json_bytes(inputs))
 

@@ -347,8 +347,10 @@ def test_lean_resolution_survives_formal_staging_cwd(trial, tmp_path, monkeypatc
     tools = tmp_path / "relative tools"
     tools.mkdir()
     lean = tools / "lean"
+    # Real Lean reports a libdir independent of its cwd; a formal probe's cwd is removed after it runs.
     lean.write_text(
-        "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'Lean (version 4.31.0)'; else pwd; fi\n"
+        "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'Lean (version 4.31.0)'; "
+        f"else echo {tools}; fi\n"
     )
     lean.chmod(0o755)
     monkeypatch.setenv("PATH", "relative tools:" + original_path)
