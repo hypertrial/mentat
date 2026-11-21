@@ -5,10 +5,20 @@ from collections import Counter
 from urllib.parse import quote, urlsplit
 
 from .claims import _code_span, _inline_prose, provenance_lines
+from .command import visible_text
 from .evidence import acceptable, qualification_status, source_qualifications, status
 
 _PRODUCT_VERDICT = {"pass": "passed", "violation": "failed", "incomplete": "incomplete"}
 _QUALIFICATION_VERDICT = {**_PRODUCT_VERDICT, "skipped": "did not run"}
+_DECISION_SOURCES = {"unverified_agent_relay": "unverified agent relay"}
+
+
+def decision_source(approval) -> str | None:
+    """Label how an approval was decided; an unrecognized recorded source is shown as stored."""
+    source = approval.get("decision_source") if isinstance(approval, dict) else None
+    if not isinstance(source, str) or not source:
+        return None
+    return _DECISION_SOURCES.get(source, source)
 
 
 def pr_summary(record, head, report_url, acceptance, ci_status="unavailable"):
@@ -37,7 +47,7 @@ def pr_summary(record, head, report_url, acceptance, ci_status="unavailable"):
         f"- Lightweight CI (host reported): **{ci_status}**.\n"
         f"- Full saved verification: **{record['status']}**, run `{record['run_id']}`.\n"
         f"{qualification}"
-        f"- Acceptance for this saved revision: **{acceptance}**.\n"
+        f"- Acceptance for this saved revision: **{_inline_prose(visible_text(acceptance))}**.\n"
         f"- [Review the evidence report]({link}).\n\n"
         "Model proofs, tested correspondence and qualification remain separate evidence.\n"
     )
@@ -123,7 +133,12 @@ def claim_summary(groups: list[tuple[str, list[dict]]]) -> str:
 def terminal_overview(record: dict) -> list[str]:
     groups = claim_groups(record)
     titles = record.get("claim_review", {}).get("titles", {})
-    lines = [*verdict_lines(record), f"Claims  {claim_summary(groups)}"]
+    source = decision_source(record.get("approval"))
+    lines = [
+        *verdict_lines(record),
+        *([f"Approval source  {source}"] if source else []),
+        f"Claims  {claim_summary(groups)}",
+    ]
     for group, claims in groups:
         lines.append(group)
         for claim in claims:
@@ -209,9 +224,11 @@ def project_report(record: dict) -> list[str]:
     groups = claim_groups(record)
     review = record.get("claim_review", {})
     titles = review.get("titles", {})
+    source = decision_source(record.get("approval"))
     lines = [
         f"- Contract base `{record['base']}`",
         f"- Runner `{record['runner']}`",
+        *([f"- Approval source · {_inline_prose(visible_text(source))}"] if source else []),
         f"- Claim outcomes · {claim_summary(groups)}",
         *(f"- {line}" for line in verdict_lines(record)),
     ]

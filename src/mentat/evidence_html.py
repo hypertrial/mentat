@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 
 from . import evidence
-from .evidence_report import claim_groups, verdict_lines
+from .evidence_report import claim_groups, decision_source, verdict_lines
 
 _STATUSES = {"pass", "violation", "incomplete", "skipped"}
 _CASE_STATUSES = {"pass", "fail", "skip", "error"}
@@ -312,12 +312,8 @@ def _accepted(state, record, digest):
         accepted = datetime.fromisoformat(_string(receipt.get("accepted_at")))
         if accepted.tzinfo is None:
             raise ValueError
-        source = (
-            " (unverified agent relay)"
-            if receipt.get("decision_source") == "unverified_agent_relay"
-            else ""
-        )
-        return "Recorded at " + receipt["accepted_at"] + source
+        source = decision_source(receipt)
+        return "Recorded at " + receipt["accepted_at"] + (f" ({source})" if source else "")
     except (OSError, ValueError, TypeError, KeyError):
         return "Invalid or mismatched receipt"
 
@@ -561,11 +557,13 @@ def _render(record, groups, manifest_digest, acceptance):
         )
     elif record["behavior_skipped"] and not behaviors:
         case_count = "Unavailable"
+    source = decision_source(record.get("approval"))
     rows = [
         ("Original verdict", record["status"]),
         ("Candidate", record["revision"]),
         ("Contract base", record["base"]),
         ("Contract digest", record["contract_digest"]),
+        *([("Approval source", source)] if source else []),
         ("Run ID", record["run_id"]),
         ("Runner", record["runner"]),
         ("Recorded at", record.get("recorded_at", "Unavailable")),

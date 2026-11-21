@@ -26,10 +26,14 @@ SOURCE_SHA = {
 RENDERABLE = {label: {("project-verification", 2)} for label in SOURCE_SHA}
 # (label, run) pairs the renderer refuses, with the exit code and message it prints.
 UNRENDERABLE: dict[tuple[str, str], tuple[int, str]] = {}
-# Whether the current writer rebuilds report.md byte for byte. The report text is
-# presentation, not part of the compatibility guarantee, so v0.1.2 is pinned to what
-# the current writer does, not to what it should do.
-REPORT_IDENTICAL = {"main-pre-split": True, "v0.1.2": True}
+# Runs whose report.md the current writer rebuilds with exactly one extra line: the saved
+# approval was relayed, so the report labels its source. The report text is presentation,
+# not part of the compatibility guarantee, so these are pinned to what the writer does.
+RELAY_LINE = "- Approval source · unverified agent relay"
+RELAY_REPORT_RUNS = {
+    "main-pre-split": {"4d71e2a16ed9410ba1aeb99dea985b9b"},  # qualified-all-killed, relayed
+    "v0.1.2": set(),
+}
 UNLISTED_FILE = "unlisted.txt"
 PLACEHOLDER = "<STATE>"
 UPDATE_GOLDENS = os.environ.get("MENTAT_UPDATE_GOLDENS") == "1"
@@ -305,12 +309,17 @@ def test_writer_rebuilds_saved_run_byte_for_byte(label, run_id, tmp_path):
 def test_report_text_matches_expectation(label, tmp_path):
     runs = _run_ids(label)
     assert runs, f"fixture corpus is missing or has no runs: {label}"
-    different = []
+    different = {}
     for run_id in runs:
         rebuilt, original = _rebuild(tmp_path / "state", label, run_id)
-        if (rebuilt / "report.md").read_bytes() != (original / "report.md").read_bytes():
-            different.append(run_id)
-    assert (not different) is REPORT_IDENTICAL[label], different
+        new = (rebuilt / "report.md").read_text(encoding="utf-8").splitlines()
+        old = (original / "report.md").read_text(encoding="utf-8").splitlines()
+        if new != old:
+            different[run_id] = (new, old)
+    assert set(different) == RELAY_REPORT_RUNS[label], sorted(different)
+    for new, old in different.values():
+        assert new.count(RELAY_LINE) == 1
+        assert [line for line in new if line != RELAY_LINE] == old
 
 
 @pytest.mark.parametrize(("label", "run_id", "target"), TAMPER)

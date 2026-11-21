@@ -63,6 +63,11 @@
 - Add `--trusted-chat-approval` to `spec approve` and `accept` for an agent
   relaying the user's explicit decision. Mentat cannot verify the relay and
   records its source as `unverified_agent_relay`.
+- Show a relayed approval as an unverified agent relay in `report.md`, the HTML
+  overview, `spec check` (terminal and `--json`), and `verify` output. The label
+  is display only: stored approval, acceptance, and run records are unchanged and
+  no verdict depends on it. Verifier modules changed, so all approvals and pending
+  acceptances must be renewed.
 - Install the proof checker with a restrictive bubblewrap policy on hosted CI
   runners (`scripts/install-proof-checker --ci-profile`).
 - Batch OpenSpec blob reads while preserving valid neighboring specs, ordered
