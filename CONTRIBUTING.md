@@ -21,7 +21,7 @@ commit the Claims Spec with the contract.
 uv run --locked mentat claims render --repo .
 ```
 
-Classify each new top-level `src/mentat` module as a verifier or presentation module in `src/mentat/project.py`; packages other than `showcases/` are not supported by this classification, and the tests and runtime check fail until you classify the module.
+Classify each new top-level `src/mentat` module as a verifier or presentation module in `src/mentat/project.py`; Mentat refuses to run, and the tests fail, until you do. Packages other than `showcases/` are refused.
 
 ## Measure import and runtime costs
 

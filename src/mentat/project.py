@@ -792,8 +792,17 @@ def _digest(files: dict[str, tuple[int, bytes]]) -> str:
 
 def _verifier_files() -> dict[str, tuple[int, bytes]]:
     classified = {f"{name}.py" for name in (*VERIFIER_MODULES, *PRESENTATION_MODULES)}
-    if any(path.name not in classified for path in Path(__file__).parent.glob("*.py")):
-        raise ValueError("Unclassified module in the verifier package")
+    # Dot-named files cannot be imported; showcases/ is outside the verifier digest.
+    stray = sorted(
+        path.name
+        for path in Path(__file__).parent.iterdir()
+        if not path.name.startswith(".")
+        and path.name not in {"showcases", "__pycache__"}
+        and (any(path.rglob("*.py")) if path.is_dir() else path.suffix == ".py")
+        and path.name not in classified
+    )
+    if stray:
+        raise ValueError("Unclassified module in the verifier package: " + ", ".join(stray))
     files = {}
     for name in VERIFIER_MODULES:
         try:
