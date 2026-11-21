@@ -2,13 +2,14 @@
 
 import ast
 import json
+import re
 import sys
 from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
-from mentat import records
+from mentat import evidence, records
 from mentat.canonical import json_bytes
 
 ROOT = Path(__file__).parent / "fixtures" / "records"
@@ -130,7 +131,6 @@ def test_missing_required_key_is_rejected(model, raw, key):
         (records.Approval, APPROVAL, "base", ["x"]),
         (records.Acceptance, ACCEPTANCE, "run_id", 1),
         (records.Acceptance, ACCEPTANCE, "accepted_at", None),
-        (records.SourceMutationCheck, DECLARATION, "id", ""),
         (records.SourceMutationCheck, DECLARATION, "required_cases", "target"),
         (records.SourceMutationCheck, DECLARATION, "required_cases", []),
         (records.SourceMutationCheck, DECLARATION, "violation_exit_codes", []),
@@ -182,7 +182,8 @@ def test_decision_source_is_emitted_only_when_set(model):
 @pytest.mark.parametrize("model", [records.Approval, records.Acceptance])
 @pytest.mark.parametrize("source", [None, 5, ["x"], "<img src=x>*_`"])
 def test_decision_source_keeps_any_json_value(model, source):
-    # Saved records accept any decision_source and render it escaped, so it is not typed.
+    # Saved records accept any decision_source. Only a non-empty string is labelled, so it
+    # is not typed as a string.
     raw = APPROVAL if model is records.Approval else ACCEPTANCE
     assert model.model_validate({**raw, "decision_source": source}).decision_source == source
 
@@ -197,6 +198,47 @@ def test_qualification_optional_assertion_is_absent_or_null_or_bool():
     assert "assertion_failed" not in records.SourceQualification.model_validate(absent).model_dump(
         exclude_unset=True
     )
+
+
+@pytest.mark.parametrize("value", ["", "\ud800", "a" * 5000])
+def test_declaration_id_has_no_string_constraint(value):
+    # Any str is accepted, as the hand check accepted it; emptiness is refused by the caller.
+    assert records.SourceMutationCheck.model_validate({**DECLARATION, "id": value}).id == value
+    assert records.SourceQualification.model_validate({**QUALIFICATION, "id": value}).id == value
+
+
+def _qualified_manifest() -> dict:
+    for path in sorted(ROOT.glob("*/state/runs/*/manifest.json")):
+        manifest = json.loads(path.read_bytes())
+        if manifest.get("source_mutation_checks") and manifest.get("source_qualifications"):
+            return manifest
+    raise AssertionError("fixture corpus has no qualified run")
+
+
+DECLARATION_MESSAGE = "Invalid source qualification declaration"
+BINDINGS_MESSAGE = "Source qualification bindings or outcome are invalid"
+
+
+@pytest.mark.parametrize(
+    ("path", "value", "message"),
+    [
+        (("source_mutation_checks", 0, "violation_exit_codes"), [True], DECLARATION_MESSAGE),
+        (("source_mutation_checks", 0, "violation_exit_codes"), [1.0], DECLARATION_MESSAGE),
+        (("source_mutation_checks", 0, "required_cases"), [1], DECLARATION_MESSAGE),
+        (("source_mutation_checks", 0, "id"), "", DECLARATION_MESSAGE),
+        (("source_qualifications", 0, "schema_version"), True, BINDINGS_MESSAGE),
+        (("source_qualifications", 0, "schema_version"), 1.0, BINDINGS_MESSAGE),
+    ],
+)
+def test_source_qualification_boundary_refuses_with_the_fixed_message(path, value, message):
+    manifest = _qualified_manifest()
+    evidence.source_qualifications(manifest)
+    target = manifest
+    for part in path[:-1]:
+        target = target[part]
+    target[path[-1]] = value
+    with pytest.raises(ValueError, match=f"^{re.escape(message)}$"):
+        evidence.source_qualifications(manifest)
 
 
 def test_error_messages_do_not_echo_the_record():

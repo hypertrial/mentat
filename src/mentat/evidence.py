@@ -369,7 +369,8 @@ def source_qualifications(record: dict) -> list[dict]:
         except ValidationError as exc:
             raise ValueError("Invalid source qualification declaration") from exc
         if (
-            item["id"] in declared
+            not item["id"]
+            or item["id"] in declared
             or item["claim"] not in claims
             or len(set(item["required_cases"])) != len(item["required_cases"])
             or item["expected_case"] not in item["required_cases"]

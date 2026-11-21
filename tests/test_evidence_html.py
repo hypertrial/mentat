@@ -329,7 +329,7 @@ def test_non_string_acceptance_binding_is_invalid(saved, field):
     state, save, render = saved
     save()
     receipt(state, **{field: 1})
-    assert "invalid" in acceptance(read(*render()))
+    assert acceptance(read(*render())) == "invalid or mismatched receipt"
 
 
 @pytest.mark.parametrize("case", ["missing", "malformed", "directory", "symlink", "nonpassing"])
