@@ -16,7 +16,7 @@ from . import evidence, spec_review
 from .claims import checked_claims, provenance_lines, write_claims
 from .claims_notion import notion_claims
 from .command import emit, finish, operator_confirm, visible_text
-from .evidence_report import review_context
+from .evidence_report import decision_source, review_context
 from .project import Project, load_project, snapshot
 from .project_formal import run_formal, tool_info
 from .runner import host_diagnostics, host_path, run_behavior, runner_info
@@ -102,6 +102,15 @@ def _approval(state: Path, project: Project) -> dict:
     ):
         raise ValueError("Approval record is invalid. Check and approve the current contract")
     return record
+
+
+def _displayed_approval(ctx: typer.Context, project: Project) -> dict:
+    """The current approval for display only; a missing or invalid record shows nothing."""
+    try:
+        state = evidence.state_directory(ctx.obj["state"], create=False, candidate_root=project.root)
+        return _approval(state, project)
+    except _USER_ERRORS:
+        return {}
 
 
 def _error(exc: Exception, output_json: bool) -> None:
@@ -215,6 +224,7 @@ def doctor(
 
 @spec_app.command("check")
 def check_spec(
+    ctx: typer.Context,
     repo: Repo,
     base: Base,
     runner: Runner = "docker",
@@ -223,9 +233,15 @@ def check_spec(
 ) -> None:
     """Show the committed contract and the digest to approve."""
     try:
-        result = _summary(load_project(repo, base, runner), against)
+        project = load_project(repo, base, runner)
+        result = _summary(project, against)
+        source = decision_source(_displayed_approval(ctx, project))
+        if source:
+            result["approval_decision_source"] = source
         if not output_json:
             spec_review.show(result)
+            if source:
+                typer.echo(visible_text(f"Approval source  {source}"))
         finish(result, output_json)
     except _USER_ERRORS as exc:
         _error(exc, output_json)
