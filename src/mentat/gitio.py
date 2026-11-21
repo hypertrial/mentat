@@ -48,7 +48,7 @@ def run(
     command = argv(root, *args)
     with (tempfile.TemporaryFile() if data is not None else nullcontext()) as source:
         if source is not None:
-            source.write(data)  # type: ignore[reportArgumentType]  # data is not None whenever source is opened
+            source.write(data)  # pyright: ignore[reportArgumentType]  # data is not None whenever source is opened
             source.seek(0)
         try:
             code, output, _ = process.run(

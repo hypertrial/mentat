@@ -55,15 +55,13 @@ select = ["B", "E4", "E7", "E9", "F", "I", "UP"]
 "src/mentat/showcases/polaris/cli.py" = ["B008"]
 # The %r template is a Python source literal, not a plain format string; an f-string rewrite would need brace escaping. Editing this file would change the Polaris pack digest.
 "src/mentat/showcases/polaris/regression.py" = ["UP031"]
-# Verbatim copies of the old code, kept as oracles.
-"tests/saved_record_oracle.py" = ["B", "UP"]
-"tests/proof_record_oracle.py" = ["B", "UP"]
 # Approved base file: not edited. Its loop closures are called within the same iteration.
-".mentat/selfcheck.py" = ["B", "UP"]
+".mentat/selfcheck.py" = ["B023"]
 
 [tool.pyright]
 # Basic mode on the core package. showcases is excluded: it has 43 basic-mode errors, mostly z3 Ref attribute access.
 typeCheckingMode = "basic"
+reportUnnecessaryTypeIgnoreComment = "error"
 pythonVersion = "3.12"
 include = ["src/mentat"]
 exclude = ["src/mentat/showcases", "**/__pycache__"]

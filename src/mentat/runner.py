@@ -371,7 +371,7 @@ def _docker_artifact(context, name, artifact):
             or members[0].size > _MAX_ARTIFACT
         ):
             raise ValueError("invalid artifact archive")
-        return tar.extractfile(members[0]).read(_MAX_ARTIFACT + 1)  # type: ignore[reportOptionalMemberAccess]  # isfile() is checked above, so extractfile returns a file
+        return tar.extractfile(members[0]).read(_MAX_ARTIFACT + 1)  # pyright: ignore[reportOptionalMemberAccess]  # isfile() is checked above, so extractfile returns a file
 
 
 _PHASE_ERRORS = (

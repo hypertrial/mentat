@@ -190,7 +190,7 @@ def compare(project: Project, current: dict, previous: Project) -> dict:
         "approved_files": _changes(previous_review["approved_files"], current["approved_files"]),
         "base_files": _changes(old_files, new_files),
         "git_diff": shlex.join(
-            gitio.argv(  # type: ignore[reportArgumentType]  # every argument here is a str
+            gitio.argv(  # pyright: ignore[reportArgumentType]  # gitio.argv is typed list[str | bytes]; shlex.join needs str, and no bytes are passed here
                 project.root,
                 "diff",
                 "--no-ext-diff",
