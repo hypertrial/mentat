@@ -4,6 +4,7 @@ import shlex
 
 import typer
 
+from . import gitio
 from .evidence import digest, json_bytes
 from .project import CHECKS_PREFIX, Project
 
@@ -189,11 +190,8 @@ def compare(project: Project, current: dict, previous: Project) -> dict:
         "approved_files": _changes(previous_review["approved_files"], current["approved_files"]),
         "base_files": _changes(old_files, new_files),
         "git_diff": shlex.join(
-            [
-                "git",
-                "--no-replace-objects",
-                "-C",
-                str(project.root),
+            gitio.argv(
+                project.root,
                 "diff",
                 "--no-ext-diff",
                 "--no-textconv",
@@ -202,7 +200,7 @@ def compare(project: Project, current: dict, previous: Project) -> dict:
                 "--",
                 ".mentat",
                 *(f":(literal){path}" for path in sorted(old_files.keys() | new_files.keys())),
-            ]
+            )
         ),
     }
 

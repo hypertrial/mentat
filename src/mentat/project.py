@@ -1,10 +1,7 @@
 """Validated project contracts and immutable Git input snapshots."""
 
 import hashlib
-import os
 import re
-import selectors
-import subprocess
 import time
 import unicodedata
 from collections.abc import Iterable, Iterator
@@ -17,7 +14,9 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from .evidence import decode_json
+from .canonical import decode_json
+from .gitio import _MAX_FILES, _MAX_PATH, _MAX_TOTAL, _ls_tree, _read_blobs, _revision, _root
+from .project_formal import _NAME as lean_name
 
 CHECKS_PREFIX = "{checks}/"
 # Presentation modules stay out of the verifier digest, and only cli may import them.
@@ -25,12 +24,14 @@ PRESENTATION_MODULES = ("evidence_html", "claims_notion", "openspec")
 # Every other module directly under src/mentat must be listed here; tests enforce this.
 VERIFIER_MODULES = (
     "__init__",
+    "canonical",
     "claims",
     "cli",
     "colima",
     "command",
     "evidence",
     "evidence_report",
+    "gitio",
     "process",
     "project",
     "project_formal",
@@ -41,10 +42,6 @@ VERIFIER_MODULES = (
     "runner",
     "spec_review",
 )
-_MAX_FILE = 1_000_000
-_MAX_TOTAL = 32_000_000
-_MAX_FILES = 4096
-_MAX_PATH = 512
 _NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}\Z")
 _IMAGE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/:-]*@sha256:[0-9a-f]{64}\Z")
 
@@ -277,8 +274,6 @@ class Formal(_Model):
         if self.engine != "lean-comparator" and policy & self.model_fields_set:
             raise ValueError("Lean comparator policy is only valid for lean-comparator")
         if self.engine == "lean-comparator":
-            from .project_formal import _NAME as lean_name
-
             if (
                 {"expected", "counterexample"} & self.model_fields_set
                 or not self.theorem
@@ -572,82 +567,6 @@ class Project:
     verifier_digest: str
 
 
-def _git_env() -> dict[str, str]:
-    # Ignore caller-provided Git environment that can redirect the repository or inject config.
-    return {
-        **{k: v for k, v in os.environ.items() if not k.startswith("GIT_")},
-        "GIT_NO_REPLACE_OBJECTS": "1",
-        "GIT_NO_LAZY_FETCH": "1",
-        "GIT_ALLOW_PROTOCOL": "",
-        "GIT_TERMINAL_PROMPT": "0",
-        "GIT_OPTIONAL_LOCKS": "0",
-    }
-
-
-def _git(root: Path, *args: str, data: bytes | None = None) -> bytes:
-    try:
-        result = subprocess.run(
-            ["git", "-C", str(root), *args],
-            input=data,
-            capture_output=True,
-            env=_git_env(),
-            timeout=60,
-            check=True,
-        )
-    except (OSError, subprocess.SubprocessError) as exc:
-        raise ValueError(f"git command failed: {args[0]}") from exc
-    return result.stdout
-
-
-def _ls_tree(
-    root: Path, revision: str, flags: str, scope: list[bytes], deadline: float
-) -> Iterator[bytes]:
-    # Match the stored path bytes even on filesystems where Git normally precomposes Unicode.
-    try:
-        with (
-            subprocess.Popen(
-                [
-                    "git",
-                    "-C",
-                    str(root),
-                    "-c",
-                    "core.precomposeUnicode=false",
-                    "ls-tree",
-                    flags,
-                    "--full-tree",
-                    revision,
-                    "--",
-                    *scope,
-                ],
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                env=_git_env(),
-            ) as process,
-            selectors.DefaultSelector() as selector,
-        ):
-            assert process.stdout is not None
-            selector.register(process.stdout, selectors.EVENT_READ)
-            pending = b""
-            try:
-                while (remaining := deadline - time.monotonic()) > 0 and selector.select(remaining):
-                    chunk = os.read(process.stdout.fileno(), 65536)
-                    if not chunk:
-                        if pending or process.wait(timeout=max(0, deadline - time.monotonic())):
-                            raise ValueError("git command failed: ls-tree")
-                        return
-                    *records, pending = (pending + chunk).split(b"\0")
-                    yield from records
-                    if len(pending) > 4 * _MAX_PATH + 100:
-                        raise ValueError("Git tree path exceeds size limit")
-                raise ValueError("git command timed out: ls-tree")
-            finally:
-                if process.poll() is None:
-                    process.kill()
-    except (OSError, subprocess.SubprocessError) as exc:
-        raise ValueError("git command failed: ls-tree") from exc
-
-
 def _tree_records(root: Path, revision: str, *, approved: bool) -> Iterator[bytes]:
     deadline = time.monotonic() + 60
     if approved:
@@ -682,27 +601,6 @@ def _git_path(raw_path: bytes) -> str:
         return _path(raw_path.decode("utf-8"))
     except UnicodeError as exc:
         raise ValueError("non-UTF-8 tree path") from exc
-
-
-def _root(repo: Path) -> Path:
-    return Path(
-        os.fsdecode(_git(repo, "rev-parse", "--show-toplevel").removesuffix(b"\n"))
-    ).resolve()
-
-
-def _revision(root: Path, rev: str) -> str:
-    fmt = _git(root, "rev-parse", "--show-object-format").strip()
-    length = {b"sha1": 40, b"sha256": 64}.get(fmt)
-    if length is None or not re.fullmatch(rf"[0-9a-f]{{{length}}}", rev):
-        raise ValueError("revision must be a full commit ID")
-    result = (
-        _git(root, "rev-parse", "--verify", "--end-of-options", rev + "^{commit}")
-        .strip()
-        .decode("ascii")
-    )
-    if result != rev:
-        raise ValueError("invalid commit ID")
-    return result
 
 
 def _tree_entries(
@@ -742,44 +640,6 @@ def _tree(root: Path, revision: str, *, approved: bool) -> dict[str, tuple[int, 
     with closing(_tree_records(root, revision, approved=approved)) as listing:
         entries = _tree_entries(listing, allow_links=not approved)
     return _read_blobs(root, entries)
-
-
-def _read_blobs(root: Path, entries: dict[str, tuple[int, bytes]]) -> dict[str, tuple[int, bytes]]:
-    if not entries:
-        return {}
-    ids = b"".join(oid + b"\n" for _, oid in entries.values())
-    headers = _git(
-        root, "cat-file", "--batch-check=%(objectname) %(objecttype) %(objectsize)", data=ids
-    ).splitlines()
-    if len(headers) != len(entries):
-        raise ValueError("incomplete Git objects")
-    sizes = []
-    for (_, oid), header in zip(entries.values(), headers, strict=True):
-        parts = header.split()
-        if len(parts) != 3 or parts[0] != oid or parts[1] != b"blob" or not parts[2].isdigit():
-            raise ValueError("invalid Git object")
-        sizes.append(int(parts[2]))
-    if any(size > _MAX_FILE for size in sizes) or sum(sizes) > _MAX_TOTAL:
-        raise ValueError("Git blobs exceed size limit")
-    content = _git(root, "cat-file", "--batch", data=ids)
-    offset = 0
-    files = {}
-    for (path, (mode, oid)), size in zip(entries.items(), sizes, strict=True):
-        header = oid + b" blob " + str(size).encode() + b"\n"
-        if content[offset : offset + len(header)] != header:
-            raise ValueError("invalid Git batch output")
-        offset += len(header)
-        blob = content[offset : offset + size]
-        offset += size
-        if len(blob) != size or content[offset : offset + 1] != b"\n":
-            raise ValueError("truncated Git blob")
-        offset += 1
-        if blob.startswith(b"version https://git-lfs.github.com/spec/v1\n"):
-            raise ValueError(f"unresolved Git LFS pointer: {path}")
-        files[path] = (mode, blob)
-    if offset != len(content):
-        raise ValueError("unexpected Git batch output")
-    return files
 
 
 def _digest(files: dict[str, tuple[int, bytes]]) -> str:

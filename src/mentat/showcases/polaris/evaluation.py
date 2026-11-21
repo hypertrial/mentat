@@ -1,16 +1,15 @@
 """Founder-run evaluation against frozen fixtures and known controls."""
 
 import shlex
-import subprocess
 from dataclasses import replace
 from pathlib import Path
 from time import monotonic
 
-from mentat import evidence
+from mentat import evidence, gitio
 
 from . import docker_runtime
 from .regression import render_regression
-from .replay import Snapshot, _git_env, run_case, snapshot
+from .replay import _MAX_FILE, Snapshot, run_case, snapshot
 
 BEFORE = "7bb319e281225b2b63c78f1cbc87726a1c9a7ece"
 FIXED = "ba152c04f7f985bbaeb487a55ef442df52321afe"
@@ -86,20 +85,14 @@ SetupCommand._export_namespaces_for_catalog = _mentat_control
 
 
 def _upstream_test(repo: Path, name: str) -> str:
-    return subprocess.run(
-        [
-            "git",
-            "--no-replace-objects",
-            "-C",
-            str(repo),
-            "show",
-            f"{BEFORE}:client/python/tests/{name}",
-        ],
-        env=_git_env(),
-        capture_output=True,
-        check=True,
+    return gitio.run(
+        repo,
+        "show",
+        "--no-textconv",
+        f"{BEFORE}:client/python/tests/{name}",
+        limit=_MAX_FILE,
         timeout=10,
-    ).stdout.decode()
+    ).decode()
 
 
 def _hypothesis(public, keys: tuple[str, ...]) -> str:

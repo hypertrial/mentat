@@ -8,8 +8,9 @@ from pathlib import Path
 from urllib.parse import quote
 from uuid import uuid4
 
-from .evidence import decode_json
-from .project import _MAX_FILE, Claim, Contract, Review, _root, contract_inputs
+from .canonical import decode_json
+from .gitio import _MAX_FILE, _root
+from .project import Claim, Contract, Review, contract_inputs
 
 _FILENAME = "claims.md"
 _MARKUP = re.compile(r"([\\`*_\[\]<>~$&|])")

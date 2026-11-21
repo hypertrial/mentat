@@ -9,7 +9,8 @@ from pathlib import Path
 
 from markdown_it import MarkdownIt
 
-from .project import _MAX_FILES, _MAX_TOTAL, _git_path, _ls_tree, _read_blobs, _revision, _root
+from .gitio import _MAX_FILES, _MAX_TOTAL, _ls_tree, _read_blobs, _revision, _root
+from .project import _git_path
 
 
 def _read_failure(exc: Exception) -> str:

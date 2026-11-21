@@ -14,6 +14,8 @@ import time
 from pathlib import Path
 from uuid import uuid4
 
+from .canonical import decode_json
+
 LEAN_VERSION = "4.35.0"
 _ROOT = Path(f"/opt/lean-{LEAN_VERSION}")
 # Tree digests of the official Lean archives installed by scripts/install-proof-checker,
@@ -185,8 +187,6 @@ def _read_result(path):
             raw = stream.read(_OUTPUT_LIMIT + 1)
         if len(raw) > _OUTPUT_LIMIT:
             raise ValueError("Proof checker result exceeded the output limit")
-        from .evidence import decode_json
-
         return decode_json(raw)
     finally:
         os.close(fd)
