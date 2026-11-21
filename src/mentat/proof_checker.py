@@ -269,7 +269,6 @@ def _service(files, timeout_seconds):
                 "detail": "Protected checker timed out or could not complete",
                 "logs": {},
             }
-        result = _read_result(outputs / "result.json")
         # Acceptance is withheld until every process in the service has stopped.
         stopped = _privileged(["/usr/bin/systemctl", "stop", unit])
         if stopped.returncode:
@@ -289,6 +288,8 @@ def _service(files, timeout_seconds):
                     "detail": "Protected checker descendants did not stop",
                     "logs": {},
                 }
+        # No process can still write the result once the stop and empty control group are confirmed.
+        result = _read_result(outputs / "result.json")
         if not isinstance(result, dict) or result.get("status") not in {
             "accepted",
             "rejected",
@@ -297,10 +298,15 @@ def _service(files, timeout_seconds):
             raise ValueError("Invalid protected checker response")
         if not isinstance(result.get("detail"), str) or not isinstance(result.get("logs"), dict):
             raise ValueError("Invalid protected checker response")
-        result["logs"] = {
-            name: base64.b64decode(data, validate=True) for name, data in result["logs"].items()
+        # Only validated fields leave the service; extra keys must not override the caller's evidence.
+        return {
+            "status": result["status"],
+            "detail": result["detail"],
+            "logs": {
+                name: base64.b64decode(data, validate=True)
+                for name, data in result["logs"].items()
+            },
         }
-        return result
     finally:
         if started:
             _privileged(["/usr/bin/systemctl", "stop", unit])

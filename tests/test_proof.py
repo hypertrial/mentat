@@ -361,6 +361,209 @@ def test_round_limit_persists_when_campaign_is_reopened(campaign):
     assert proof.recheck(c.state, c.project, c.candidate, c.approval, [ident])[0][0]["status"] == "incomplete"
 
 
+def test_rounds_used_in_one_campaign_are_not_reset_by_preparing_another(campaign):
+    c = campaign
+    first, _ = c.prepare("task-first", targets=["first"])
+    submission = c.submission("submission", "first")
+    c.outcomes.extend(["rejected"] * 3)
+    assert [proof.check(c.state, first, submission)["status"] for _ in range(3)] == ["violation"] * 3
+    second, _ = c.prepare("task-second", targets=["first"])
+    count = len(c.calls)
+    checked = proof.check(c.state, second, c.submission("again", "first"))
+    assert checked["status"] == "incomplete" and len(c.calls) == count
+
+
+def test_seconds_used_in_one_campaign_are_not_reset_by_preparing_another(campaign, monkeypatch):
+    c = campaign
+    first, _ = c.prepare("task-first", targets=["first"])
+    # Three rejected proof attempts of 600 seconds each use the whole shared time budget.
+    ticks = iter(range(0, 100000, 600))
+    monkeypatch.setattr(proof, "time", SimpleNamespace(monotonic=lambda: next(ticks)))
+    c.outcomes.extend(["rejected"] * 3)
+    submission = c.submission("submission", "first")
+    assert [proof.check(c.state, first, submission)["status"] for _ in range(3)] == ["violation"] * 3
+    assert proof._usage(proof._ledger(c.state / "proof-campaigns" / first))[2] == 1800
+    second, _ = c.prepare("task-second", targets=["second"])
+    count = len(c.calls)
+    assert proof.check(c.state, second, c.submission("again", "second"))["status"] == "incomplete"
+    assert len(c.calls) == count
+
+
+def _changed_inputs(c, change):
+    """Approved inputs for a new candidate snapshot or a new contract in the same repository."""
+    if change == "snapshot":
+        (c.repo / "source.txt").write_text("candidate two\n")
+        git(c.repo, "commit", "-qam", "candidate two")
+        return c.project, snapshot(c.repo, git(c.repo, "rev-parse", "HEAD")), c.approval
+    contract = json.loads((c.repo / ".mentat" / "contract.json").read_text())
+    contract["claims"][0]["statement"] = "Synthetic claim, revised"
+    (c.repo / ".mentat" / "contract.json").write_text(json.dumps(contract))
+    git(c.repo, "commit", "-qam", "revise contract")
+    base = git(c.repo, "rev-parse", "HEAD")
+    scope = ["--repo", str(c.repo), "--base", base, "--runner", "host"]
+    digest = json.loads(c.invoke("spec", "check", *scope, "--json").output)["contract_digest"]
+    assert c.invoke("spec", "approve", digest, *scope).exit_code == 0
+    approval = evidence.read_json(c.state / "approvals" / f"{digest}.json")
+    return load_project(c.repo, base, "host"), snapshot(c.repo, base), approval
+
+
+@pytest.mark.parametrize("change", ["target", "snapshot", "contract"])
+def test_exhausted_rounds_do_not_affect_other_targets_snapshots_or_contracts(campaign, tmp_path, change):
+    c = campaign
+    first, _ = c.prepare("task-first", targets=["first"])
+    submission = c.submission("submission", "first")
+    c.outcomes.extend(["rejected"] * 3)
+    assert [proof.check(c.state, first, submission)["status"] for _ in range(3)] == ["violation"] * 3
+    targets = ["second"] if change == "target" else ["first"]
+    project, candidate, approval = (c.project, c.candidate, c.approval)
+    if change != "target":
+        project, candidate, approval = _changed_inputs(c, change)
+    other = proof.prepare(c.state, project, candidate, approval, tmp_path / "other-task", targets=targets)
+    checked = proof.check(c.state, other["campaign_id"], c.submission("other", *targets))
+    assert checked["status"] == "pass"
+
+
+@pytest.mark.parametrize("change", ["snapshot", "contract"])
+def test_exhausted_seconds_do_not_leak_across_snapshot_or_contract(campaign, tmp_path, monkeypatch, change):
+    c = campaign
+    first, _ = c.prepare("task-first", targets=["first"])
+    ticks = iter(range(0, 10000, 120))
+    monkeypatch.setattr(proof, "time", SimpleNamespace(monotonic=lambda: next(ticks)))
+    assert proof.check(c.state, first, c.submission("submission", "first"))["status"] == "pass"
+    for _ in range(14):
+        assert proof.recheck(c.state, c.project, c.candidate, c.approval, [first])[0][0]["status"] == "pass"
+    project, candidate, approval = _changed_inputs(c, change)
+    other = proof.prepare(c.state, project, candidate, approval, tmp_path / "other-task", targets=["first"])
+    count = len(c.calls)
+    assert proof.check(c.state, other["campaign_id"], c.submission("other", "first"))["status"] == "pass"
+    assert len(c.calls) == count + 1
+
+
+@pytest.mark.parametrize("damage, refusal", [
+    ("entry", "Proof campaign {id} in this state is invalid, so budgets cannot be established"),
+    ("stray", "Another proof campaign in this state is invalid, so budgets cannot be established"),
+])
+def test_invalid_sibling_campaign_refuses_checks(campaign, damage, refusal):
+    c = campaign
+    first, _ = c.prepare("task-first", targets=["first"])
+    c.outcomes.extend(["rejected"] * 3)
+    submission = c.submission("submission", "first")
+    assert [proof.check(c.state, first, submission)["status"] for _ in range(3)] == ["violation"] * 3
+    if damage == "entry":
+        next((c.state / "proof-campaigns" / first / "entries").iterdir()).write_bytes(b"tampered")
+    else:
+        (c.state / "proof-campaigns" / "stray").write_text("not a campaign")
+    second, _ = c.prepare("task-second", targets=["first"])
+    count = len(c.calls)
+    with pytest.raises(ValueError, match=refusal.format(id=first)):
+        proof.check(c.state, second, c.submission("again", "first"))
+    assert len(c.calls) == count
+
+
+def test_dot_named_campaign_is_not_dropped_from_accounting(campaign):
+    c = campaign
+    first, _ = c.prepare("task-first", targets=["first"])
+    c.outcomes.extend(["rejected"] * 3)
+    submission = c.submission("submission", "first")
+    assert [proof.check(c.state, first, submission)["status"] for _ in range(3)] == ["violation"] * 3
+    campaigns = c.state / "proof-campaigns"
+    (campaigns / first).rename(campaigns / ".renamed")
+    second, _ = c.prepare("task-second", targets=["first"])
+    count = len(c.calls)
+    with pytest.raises(ValueError, match="Another proof campaign"):
+        proof.check(c.state, second, c.submission("again", "first"))
+    assert len(c.calls) == count
+
+
+def test_prepare_staging_and_finder_metadata_are_not_campaigns(campaign):
+    c = campaign
+    first, _ = c.prepare("task-first", targets=["first"])
+    c.outcomes.extend(["rejected"] * 3)
+    submission = c.submission("submission", "first")
+    assert [proof.check(c.state, first, submission)["status"] for _ in range(3)] == ["violation"] * 3
+    (c.state / "proof-campaigns" / ".prepare-stale").mkdir()
+    (c.state / "proof-campaigns" / ".DS_Store").write_bytes(b"")
+    (c.state / "proof-campaigns" / f"._{first}").write_bytes(b"AppleDouble")
+    second, _ = c.prepare("task-second", targets=["first"])
+    assert proof.check(c.state, second, c.submission("again", "first"))["status"] == "incomplete"
+
+
+def test_recheck_is_charged_only_its_own_campaign_time(campaign, monkeypatch):
+    c = campaign
+    accepted, _ = c.prepare("task-first", targets=["first"])
+    ticks = iter(range(0, 100000, 120))
+    monkeypatch.setattr(proof, "time", SimpleNamespace(monotonic=lambda: next(ticks)))
+    assert proof.check(c.state, accepted, c.submission("submission", "first"))["status"] == "pass"
+    spender, _ = c.prepare("task-second", targets=["second"])
+    spent = c.submission("spent", "second")
+    assert proof.check(c.state, spender, spent)["status"] == "pass"
+    for _ in range(14):
+        assert proof.recheck(c.state, c.project, c.candidate, c.approval, [spender])[0][0]["status"] == "pass"
+    assert proof._usage(proof._ledger(c.state / "proof-campaigns" / spender))[2] == 1800
+    results, _ = proof.recheck(c.state, c.project, c.candidate, c.approval, [accepted])
+    assert results[0]["status"] == "pass"
+    # Verification rechecks in sibling campaigns do not use up a new campaign's budget.
+    third, _ = c.prepare("task-third", targets=["first"])
+    assert proof.check(c.state, third, c.submission("third", "first"))["status"] == "pass"
+
+
+def test_reserve_without_target_is_refused_as_invalid_ledger(campaign):
+    c = campaign
+    first, _ = c.prepare("task-first", targets=["first"])
+    other, _ = c.prepare("task-second", targets=["first"])
+    path = c.state / "proof-campaigns" / other
+    source = b"-- malformed reserve\n"
+    attempt = "e" * 32
+    evidence.write_record(path / "submissions" / f"{attempt}.lean", source)
+    proof._append(path, proof._ledger(path), {"kind": "reserve", "attempt": attempt,
+                  "source_sha256": hashlib.sha256(source).hexdigest(), "recheck": False, "denied": False})
+    with pytest.raises(ValueError, match="Invalid proof campaign ledger entry"):
+        proof._ledger(path)
+    with pytest.raises(ValueError, match=f"Proof campaign {other} in this state is invalid"):
+        proof.check(c.state, first, c.submission("submission", "first"))
+    assert not c.calls
+
+
+def test_recheck_is_exempt_from_the_round_limit_after_last_round(campaign):
+    c = campaign
+    ident, _ = c.prepare("task-first", targets=["first"])
+    submission = c.submission("submission", "first")
+    c.outcomes.extend(["rejected", "rejected"])
+    assert [proof.check(c.state, ident, submission)["status"] for _ in range(3)] == ["violation", "violation", "pass"]
+    second, _ = c.prepare("task-second", targets=["first"])
+    assert proof.check(c.state, second, c.submission("again", "first"))["status"] == "incomplete"
+    count = len(c.calls)
+    results, _ = proof.recheck(c.state, c.project, c.candidate, c.approval, [ident])
+    assert results[0]["status"] == "pass" and len(c.calls) == count + 1
+
+
+MALFORMED_MANIFESTS = {
+    "non-dict": lambda m: [],
+    "repo": lambda m: {**m, "repo": 1},
+    "targets": lambda m: {**m, "targets": "first"},
+    "all_targets": lambda m: {**m, "all_targets": [{"id": "first"}]},
+    "missing-revision": lambda m: {k: v for k, v in m.items() if k != "revision"},
+}
+
+
+@pytest.mark.parametrize("damage", list(MALFORMED_MANIFESTS))
+def test_malformed_manifest_shapes_are_user_errors(campaign, damage):
+    c = campaign
+    ident, _ = c.prepare(targets=["first"])
+    path = c.state / "proof-campaigns" / ident
+    raw = evidence.json_bytes(MALFORMED_MANIFESTS[damage](evidence.read_json(path / "manifest.json")))
+    evidence.write_record(path / "manifest.json", raw)
+    evidence.write_record(c.state / "proof-campaign-receipts" / ident, hashlib.sha256(raw).hexdigest().encode())
+    submission = c.submission("malformed", "first")
+    with pytest.raises(ValueError):
+        proof.check(c.state, ident, submission)
+    with pytest.raises(ValueError):
+        proof.recheck(c.state, c.project, c.candidate, c.approval, [ident])
+    checked = c.invoke("proof", "check", ident, "--submission", str(submission), "--json")
+    assert checked.exit_code == 2, (checked.output, checked.exception)
+    assert not c.calls
+
+
 def test_interrupted_reservation_charges_120_seconds_and_cannot_pass(campaign):
     c = campaign
     ident, _ = c.prepare(targets=["first"])
