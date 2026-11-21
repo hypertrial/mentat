@@ -270,6 +270,34 @@ def test_real_checker_timeout_is_incomplete(checker_identity):
     assert_result(result, "incomplete", APPROVED, VALID, checker_identity)
 
 
+@pytest.mark.parametrize("machine,digest,accepted", [
+    ("x86_64", "pinned", True),
+    ("aarch64", "pinned", True),
+    ("x86_64", "f" * 64, False),
+    ("aarch64", proof_checker.TOOLCHAIN_SHA256["x86_64"], False),
+    ("riscv64", proof_checker.TOOLCHAIN_SHA256["x86_64"], False),
+])
+def test_only_the_pinned_toolchain_for_this_architecture_is_accepted(
+    monkeypatch, machine, digest, accepted
+):
+    digest = proof_checker.TOOLCHAIN_SHA256[machine] if digest == "pinned" else digest
+    monkeypatch.setattr(proof_checker.platform, "machine", lambda: machine)
+    monkeypatch.setattr(proof_checker, "_toolchain_digest", lambda: digest)
+    if accepted:
+        assert proof_checker._pinned_toolchain_digest() == digest
+    else:
+        with pytest.raises(ValueError, match="does not match the pinned official distribution$"):
+            proof_checker._pinned_toolchain_digest()
+
+
+def test_toolchain_pins_cover_the_installer_architectures():
+    installer = (Path(__file__).parents[1] / "scripts/install-proof-checker").read_text()
+    architectures = set(re.findall(r"^  (\w+)\)\n    proof_archive=", installer, re.MULTILINE))
+    assert architectures == set(proof_checker.TOOLCHAIN_SHA256) == {"x86_64", "aarch64"}
+    assert all(re.fullmatch(r"[0-9a-f]{64}", value) for value in proof_checker.TOOLCHAIN_SHA256.values())
+    assert len(set(proof_checker.TOOLCHAIN_SHA256.values())) == 2
+
+
 def test_pinned_lean_versions_are_explicit():
     # A version bump must be a reviewed change to these literals.
     assert project_formal.LEAN_VERSION == "4.31.0"

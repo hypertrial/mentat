@@ -16,6 +16,13 @@ from uuid import uuid4
 
 LEAN_VERSION = "4.35.0"
 _ROOT = Path(f"/opt/lean-{LEAN_VERSION}")
+# Tree digests of the official Lean archives installed by scripts/install-proof-checker,
+# keyed by platform.machine(). Regenerate them with the "Checker toolchain digest"
+# workflow when LEAN_VERSION changes.
+TOOLCHAIN_SHA256 = {
+    "x86_64": "9096fe09c207318a12327ee4e080abb96d29d3d2e08af58d0244c8b5ff7a8b50",
+    "aarch64": "12748abcd7b210a881f257827b29665d82626dd07d9f817057edafff3eb8fd5e",
+}
 _SOURCE_LIMIT = 1_000_000
 _OUTPUT_LIMIT = 1_000_000
 _LIBRARY_CACHE = {}
@@ -68,6 +75,15 @@ def _toolchain_digest():
     return _hash(json.dumps(entries, separators=(",", ":")).encode())
 
 
+def _pinned_toolchain_digest():
+    digest = _toolchain_digest()
+    if TOOLCHAIN_SHA256.get(platform.machine()) != digest:
+        raise ValueError(
+            f"The Lean {LEAN_VERSION} toolchain does not match the pinned official distribution"
+        )
+    return digest
+
+
 def checker_identity():
     if sys.platform != "linux":
         raise ValueError("lean-comparator requires native Linux; use the dedicated Linux VM")
@@ -108,7 +124,7 @@ def checker_identity():
     return {
         "engine": "lean-comparator",
         "version": LEAN_VERSION,
-        "toolchain_sha256": _toolchain_digest(),
+        "toolchain_sha256": _pinned_toolchain_digest(),
         "bwrap_sha256": _hash(Path("/usr/bin/bwrap").read_bytes()),
         "python_sha256": _hash(Path("/usr/bin/python3").read_bytes()),
         "systemd_run_sha256": _hash(Path("/usr/bin/systemd-run").read_bytes()),
