@@ -8,8 +8,8 @@
   that lived in `evidence_html`. The saved dicts, hashes and comparisons are unchanged, and the
   existing error messages are kept. There is no stored-format change. Two intended changes for
   saved run manifests: a manifest that repeats a JSON key is refused with `duplicate JSON key`,
-  and a manifest with a `NaN` or `Infinity` constant, or nesting too deep for the parser, is
-  refused as an error instead of crashing. Large valid manifests still load. `SourceQualification`
+  and a manifest with a `NaN` or `Infinity` constant is now refused (it loaded before), while
+  nesting too deep for the parser is reported as an error instead of crashing. Large valid manifests still load. `SourceQualification`
   bindings no longer constrain their key types, so keys that JSON can carry, such as lone
   surrogates, are accepted as they were before the models. The verifier modules `canonical`,
   `cli`, `evidence` and `records` changed, and the Polaris pack digest changes, so approvals,
