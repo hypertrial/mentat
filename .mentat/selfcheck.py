@@ -224,8 +224,9 @@ def qualification(root):
     result, run = f.verify(base, base)
     assert result.exit_code == 0, result.output
     assert (run["status"], run["source_qualification_status"]) == ("pass", "violation"), run
-    rejected = f.accept(run["run_id"], confirm=True)
+    rejected = f.accept(run["run_id"], base=base, confirm=True)
     assert rejected.exit_code == 2, rejected.output
+    assert "any source qualification must also pass" in rejected.output, rejected.output
     assert not (f.state / "acceptances" / f"{run['run_id']}.json").exists()
 
 

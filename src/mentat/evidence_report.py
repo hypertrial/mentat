@@ -98,7 +98,8 @@ def claim_groups(record: dict) -> list[tuple[str, list[dict]]]:
     for claim in claims.values():
         if split:
             claim["status"] = _verdict(claim["formal"] + claim["behavior"], skipped)
-            claim["qualification_status"] = qualification_status(claim["qualification"])
+            if claim["qualification"]:
+                claim["qualification_status"] = qualification_status(claim["qualification"])
         else:
             claim["status"] = _verdict(
                 claim["formal"] + claim["behavior"] + claim["qualification"], skipped
@@ -220,16 +221,32 @@ def project_report(record: dict) -> list[str]:
         for claim in claims
         for check in claim["formal"] + claim["behavior"] + claim["qualification"]
     ]
-    for outcome, heading in (("violation", "Counterexample"), ("incomplete", "Evidence gap")):
-        finding = next(
-            ((claim, check) for claim, check in checks if check["status"] == outcome), None
-        )
-        if finding:
-            claim, check = finding
-            if check in claim["qualification"]:
-                heading = "Qualification failure" if outcome == "violation" else "Qualification gap"
-            lines.extend(("", f"## {heading}", "", f"Claim {_code_span(claim['id'])}"))
-            lines.extend(_check_lines(check, "Check"))
+    sections = [checks]
+    if "source_qualification_status" in record:
+        # Product findings lead across all claims, so a qualification cannot hide a counterexample.
+        product = [
+            (claim, check)
+            for _, claims in groups
+            for claim in claims
+            for check in claim["formal"] + claim["behavior"]
+        ]
+        qualification = [
+            (claim, check) for _, claims in groups for claim in claims for check in claim["qualification"]
+        ]
+        sections = [product, qualification]
+    for section in sections:
+        for outcome, heading in (("violation", "Counterexample"), ("incomplete", "Evidence gap")):
+            finding = next(
+                ((claim, check) for claim, check in section if check["status"] == outcome), None
+            )
+            if finding:
+                claim, check = finding
+                if check in claim["qualification"]:
+                    heading = (
+                        "Qualification failure" if outcome == "violation" else "Qualification gap"
+                    )
+                lines.extend(("", f"## {heading}", "", f"Claim {_code_span(claim['id'])}"))
+                lines.extend(_check_lines(check, "Check"))
     if record.get("behavior_skipped"):
         lines.extend(("", "Behavior checks were skipped because formal checks did not pass."))
     if limits := review.get("verification_limits"):

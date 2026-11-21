@@ -611,7 +611,7 @@ def _render(record, groups, manifest_digest, acceptance):
             )
             if "source_mutation_checks" not in record:
                 parts.append("<p>Source mutation qualification: Unavailable</p>")
-            elif "source_qualification_status" in record:
+            elif "qualification_status" in claim:
                 parts.append(
                     f"<p>Source mutation qualification: {_text(claim['qualification_status'])}</p>"
                 )

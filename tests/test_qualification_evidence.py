@@ -248,6 +248,10 @@ def test_real_formal_gate_records_qualification_inventory_without_running(campai
     assert all(item["status"] == "skipped" for item in evidence.source_qualifications(record))
     report = (state / "runs" / payload["run_id"] / "report.md").read_text().lower()
     assert "skipped" in report and all(name in report for name in ("kill", "survive", "error"))
+    text = (state / "runs" / payload["run_id"] / "report.md").read_text()
+    assert "Product checks failed; source qualification did not run. This run cannot be accepted." in text
+    assert "- Source qualification · skipped" in text
+    assert "source qualification failed" not in text.lower()
     output = state.parent / "gate.html"
     rendered = invoke("evidence", "render", payload["run_id"], "--out", str(output))
     assert rendered.exit_code == 0, rendered.output
@@ -352,20 +356,40 @@ def _save_manifest(state, record):
     (state / "receipts" / record["run_id"]).write_text(evidence.digest(raw))
 
 
-@pytest.mark.parametrize("damage", ["product-verdict", "qualification-verdict", "qualification-evidence"])
-def test_saved_split_verdict_must_match_its_evidence(qualified_run, damage):
+@pytest.mark.parametrize(("damage", "message"), [
+    ("product-verdict", "Saved verdict contradicts product checks"),
+    ("qualification-verdict", "Saved qualification verdict contradicts qualification evidence"),
+    ("qualification-type", "Saved qualification verdict contradicts qualification evidence"),
+    ("qualification-evidence", "lacks its qualification evidence"),
+])
+def test_saved_split_verdict_must_match_its_evidence(qualified_run, damage, message):
     (_, _, state, _, _, _, _), original = qualified_run
     record = copy.deepcopy(original)
     if damage == "product-verdict":
         record["status"] = "violation"
     elif damage == "qualification-verdict":
         record["source_qualification_status"] = "pass"
+    elif damage == "qualification-type":
+        record["source_qualification_status"] = 1
     else:
         record.pop("source_mutation_checks")
         record.pop("source_qualifications")
     _save_manifest(state, record)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=message):
         evidence.read_run_snapshot(state, record["run_id"])
+
+
+@pytest.mark.parametrize(("record", "expected"), [
+    ({"status": "pass"}, True),
+    ({"status": "pass", "source_qualification_status": "pass"}, True),
+    ({"status": "pass", "source_qualification_status": "skipped"}, False),
+    ({"status": "pass", "source_qualification_status": "pass "}, False),
+    ({"status": "pass", "source_qualification_status": 1}, False),
+    ({"status": "pass", "source_qualification_status": None}, False),
+    ({"status": "violation", "source_qualification_status": "pass"}, False),
+])
+def test_acceptable_requires_product_pass_and_a_passing_recorded_qualification(record, expected):
+    assert evidence.acceptable(record) is expected
 
 
 def test_legacy_combined_verdict_still_reads_without_the_split_key(qualified_run):
@@ -379,6 +403,121 @@ def test_legacy_combined_verdict_still_reads_without_the_split_key(qualified_run
     _save_manifest(state, record)
     with pytest.raises(ValueError, match="contradicts qualification evidence"):
         evidence.read_run_snapshot(state, record["run_id"])
+
+
+@pytest.mark.parametrize("campaign", ["survive-only"], indirect=True)
+def test_surviving_mutant_is_visible_on_every_surface(campaign, tmp_path):
+    _, _, state, base, scope, invoke, verify = campaign
+    _, payload = verify()
+    run_id, revision = payload["run_id"], payload["revision"]
+    refused = "Product checks passed; source qualification failed. This run cannot be accepted."
+    exported = invoke("evidence", "export", run_id, "--json")
+    assert exported.exit_code == 0, exported.output
+    assert json.loads(exported.output)["source_qualification_status"] == "violation"
+    text = invoke("evidence", "export", run_id)
+    assert "Source qualification  violation" in text.output, text.output
+    compared = invoke("evidence", "compare", run_id, run_id)
+    assert compared.exit_code == 0, compared.output
+    assert "  Source qualification  violation" in compared.output
+    summary = invoke("evidence", "pr-summary", run_id, "--head", revision,
+                     "--report-url", "https://example.test/report")
+    assert summary.exit_code == 0, summary.output
+    assert "- Source qualification: **violation**." in summary.output
+    output = tmp_path / "surfaces.html"
+    assert invoke("evidence", "render", run_id, "--out", str(output)).exit_code == 0
+    html = output.read_text()
+    assert "<dt>Source qualification</dt><dd class=\"\">violation</dd>" in html
+    assert "<dt>Local operator acceptance</dt><dd class=\"\">Not recorded</dd>" in html
+    assert refused in html
+
+
+@pytest.mark.parametrize("campaign", ["kill-only"], indirect=True)
+def test_accept_refuses_a_contract_with_source_mutations_stripped_of_qualification_evidence(campaign):
+    _, _, state, _, scope, invoke, verify = campaign
+    _, payload = verify()
+    _, record = evidence.read_run(state, payload["run_id"])
+    for key in ("source_mutation_checks", "source_qualifications",
+                "source_mutation_manifest_sha256", "source_qualification_status"):
+        record.pop(key)
+    _save_manifest(state, record)
+    accepted = invoke("accept", record["run_id"], *scope)
+    assert accepted.exit_code == 2, accepted.output
+    assert "Only a complete passing run under the current approval can be accepted" in accepted.output
+    assert not (state / "acceptances" / f"{record['run_id']}.json").exists()
+
+
+@pytest.mark.parametrize("campaign", ["kill-only"], indirect=True)
+def test_legacy_pre_split_pass_with_qualifications_stays_acceptable(campaign):
+    _, _, state, _, scope, invoke, verify = campaign
+    _, payload = verify()
+    _, record = evidence.read_run(state, payload["run_id"])
+    record.pop("source_qualification_status")
+    _save_manifest(state, record)
+    accepted = invoke("accept", record["run_id"], *scope)
+    assert accepted.exit_code == 0, accepted.output
+
+
+@pytest.mark.parametrize("campaign", ["gate"], indirect=True)
+def test_legacy_refusal_keeps_the_existing_message(campaign):
+    _, _, state, _, scope, invoke, verify = campaign
+    _, payload = verify()
+    _, record = evidence.read_run(state, payload["run_id"])
+    record.pop("source_qualification_status")
+    _save_manifest(state, record)
+    refused = invoke("accept", record["run_id"], *scope)
+    assert refused.exit_code == 2
+    assert "detail  Only a complete passing run under the current approval can be accepted\n" in refused.output
+    assert "source qualification" not in refused.output
+
+
+@pytest.mark.parametrize("campaign", ["kill-only"], indirect=True)
+def test_acceptance_rechecks_the_run_read_after_confirmation(campaign, monkeypatch):
+    _, _, state, _, scope, invoke, verify = campaign
+    _, payload = verify()
+    original = evidence.read_run
+    reads = []
+
+    def qualification_fails_after_confirmation(state_path, run_id):
+        bundle, record = original(state_path, run_id)
+        reads.append(run_id)
+        if len(reads) > 1:
+            record = {**record, "source_qualification_status": "violation"}
+        return bundle, record
+
+    monkeypatch.setattr(evidence, "read_run", qualification_fails_after_confirmation)
+    refused = invoke("accept", payload["run_id"], *scope)
+    assert len(reads) == 2
+    assert refused.exit_code == 2 and "any source qualification must also pass" in refused.output
+    assert not (state / "acceptances" / f"{payload['run_id']}.json").exists()
+
+
+def test_split_report_leads_with_product_counterexample_across_claims(monkeypatch):
+    from mentat import evidence_report
+
+    def case(check_id, claim, status, outcome):
+        check = {"id": check_id, "claim": claim, "status": status, "detail": f"{check_id} {status}",
+                 "case_results": {"target": outcome}, "required_cases": ["target"],
+                 "command_status": status, "exit_code": 0 if status == "pass" else 10}
+        return {"case_id": check_id, "status": status, "checks": [check]}
+
+    mutant = {"id": "mutant", "claim": "first", "check": "first-check", "expected_case": "target",
+              "outcome": "survived", "status": "violation", "detail": "Mutation survived",
+              "required_cases": ["target"], "case_results": {"target": "pass"}}
+    record = {
+        "kind": "project-verification", "base": "a" * 40, "runner": "host", "run_id": "b" * 32,
+        "status": "violation", "source_qualification_status": "violation", "behavior_skipped": False,
+        "claims": [{"id": "first", "statement": "First"}, {"id": "second", "statement": "Second"}],
+        "model_checks": [],
+        "cases": [case("first-check", "first", "pass", "pass"),
+                  case("second-check", "second", "violation", "fail")],
+    }
+    monkeypatch.setattr(evidence_report, "source_qualifications", lambda _: [mutant])
+    text = "\n".join(evidence_report.project_report(record))
+    assert text.index("## Counterexample\n\nClaim `second`") < text.index("## Qualification failure")
+    assert "Qualification failure" in text and "Claim `first`" in text
+    assert "Product checks failed; source qualification failed. This run cannot be accepted." in text
+    assert text.count("- Source qualification ·") == 1
+    assert "- Source qualification · violation" in text
 
 
 @pytest.mark.parametrize("campaign", ["apply-error"], indirect=True)
