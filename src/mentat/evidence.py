@@ -11,7 +11,8 @@ from pathlib import Path
 
 RUN_ID = re.compile(r"[a-f0-9]{32}\Z")
 STATUSES = {"pass", "violation", "incomplete"}
-# Historical checker versions whose saved proofs still load; the live checker may move on.
+# Every checker version that has ever written saved proofs, including the current one.
+# A checker bump must add the new version here.
 _SAVED_CHECKER_VERSIONS = frozenset({"4.35.0"})
 
 

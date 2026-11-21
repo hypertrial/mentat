@@ -791,6 +791,9 @@ def _digest(files: dict[str, tuple[int, bytes]]) -> str:
 
 
 def _verifier_files() -> dict[str, tuple[int, bytes]]:
+    classified = {f"{name}.py" for name in (*VERIFIER_MODULES, *PRESENTATION_MODULES)}
+    if any(path.name not in classified for path in Path(__file__).parent.glob("*.py")):
+        raise ValueError("Unclassified module in the verifier package")
     files = {}
     for name in VERIFIER_MODULES:
         try:

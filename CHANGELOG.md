@@ -7,6 +7,10 @@
   OpenSpec import no longer invalidate approvals; code under `showcases/` remains
   outside the verifier digest. This is a one-time invalidation of approvals, proof
   campaigns, and pending acceptances, and `evidence compare` across the upgrade
+  needs `--across-contracts`. The Polaris pack digest also changes, because it
+  covers the edited files, so Polaris approvals must be renewed. Saved proofs
+  from Lean 4.35.0 keep loading; a checker bump must add its version to the
+  saved-version set.
   needs `--across-contracts`. The Polaris pack digest now also covers
   `project_formal.py`, so Polaris approvals change too. Saved proofs from Lean
   4.35.0 keep loading after a future checker bump.

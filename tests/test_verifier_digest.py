@@ -61,8 +61,10 @@ def test_every_source_module_is_classified_exactly_once():
 
 @pytest.mark.parametrize("name", [name for name in VERIFIER_MODULES if name != "cli"])
 def test_verifier_modules_do_not_import_presentation_modules(name):
-    presentation = {f"mentat.{module}" for module in PRESENTATION_MODULES}
-    assert not _imported_modules(MENTAT / f"{name}.py") & presentation
+    forbidden = {f"mentat.{module}" for module in PRESENTATION_MODULES} | {"mentat.cli"}
+    imported = _imported_modules(MENTAT / f"{name}.py")
+    assert not imported & forbidden
+    assert not any(n.startswith("mentat.showcases") for n in imported)
 
 
 @pytest.fixture
@@ -119,6 +121,12 @@ def test_verifier_edit_changes_verifier_digest_and_fingerprint(checked_repo, ver
 def test_missing_verifier_module_is_refused(checked_repo, verifier):
     (verifier / "runner.py").unlink()
     with pytest.raises(ValueError, match="^Verifier source file is missing$"):
+        _load(checked_repo)
+
+
+def test_unclassified_module_in_verifier_package_is_refused(checked_repo, verifier):
+    (verifier / "extra.py").write_text("VALUE = 1\n")
+    with pytest.raises(ValueError, match="^Unclassified module in the verifier package$"):
         _load(checked_repo)
 
 
