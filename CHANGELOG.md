@@ -4,7 +4,8 @@
 
 - Isolate the Lean proof checker's submission sources and exporter: submissions
   pass a command allowlist and screen for code-running forms (`unsafe`, `run_tac`,
-  `by_elab`, non-allowlisted attributes and `set_option`), and the exporter reads only
+  `by_elab`, `include_str`, `bv_check`, `bv_decide`, `bv_decide?`, `native_decide`, non-allowlisted
+  attributes and `set_option`), and the exporter reads only
   the compiled module from a fresh folder. The checker policy digest and verifier
   fingerprint change, so approvals and proof campaigns must be renewed; submissions
   using macros, custom syntax, evaluation commands or other attributes are now rejected.

@@ -383,6 +383,7 @@ from pathlib import Path
 LEAN = '/opt/lean-4.35.0/bin/lean'
 LAKE = '/opt/lean-4.35.0/bin/lake'
 ENV = {'PATH': '/opt/lean-4.35.0/bin:/usr/bin:/bin', 'HOME': '/tmp', 'LANG': 'C.UTF-8'}
+WORK, INPUT = '/work', '/input'
 policy = json.loads(Path('/input/policy.json').read_bytes())
 logs = bytearray()
 diagnostic_bytes = 0
@@ -450,9 +451,11 @@ def stage_olean(source, folder, limit=128 * 1024 * 1024):
         fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except OSError:
         raise Incomplete(message)
+    info = os.fstat(fd)
+    if not stat.S_ISREG(info.st_mode) or info.st_size > limit:
+        os.close(fd)
+        raise Incomplete(message)
     with os.fdopen(fd, 'rb') as stream:
-        info = os.fstat(stream.fileno())
-        if not stat.S_ISREG(info.st_mode) or info.st_size > limit: raise Incomplete(message)
         data = stream.read(limit + 1)
     if len(data) > limit: raise Incomplete(message)
     os.mkdir(folder, 0o755)
@@ -461,17 +464,17 @@ def stage_olean(source, folder, limit=128 * 1024 * 1024):
     os.chmod(folder, 0o555)
 
 def build(module):
-    project = '/work/' + module
+    project = WORK + '/' + module
     Path(project+'/.lake').mkdir(parents=True)
-    Path(project+'/'+module+'.lean').write_bytes(Path('/input/'+module+'.lean').read_bytes())
+    Path(project+'/'+module+'.lean').write_bytes(Path(INPUT+'/'+module+'.lean').read_bytes())
     code, _ = sandbox([LEAN, '-o', project+'/.lake/'+module+'.olean', project+'/'+module+'.lean'], project, writable=True)
     if code: raise Incomplete('Lean source compilation did not complete')
-    export = '/work/'+module+'.ndjson'
+    export = WORK+'/'+module+'.ndjson'
     # The writable .lake is never a search path; the exporter sees only the staged module.
-    folder = '/work/'+module+'-export'
+    folder = WORK+'/'+module+'-export'
     stage_olean(project+'/.lake/'+module+'.olean', folder)
     env = {**ENV, 'LEAN_PATH': folder}
-    code, _ = sandbox([LEAN, '--run', '/input/Exporter.lean', module], project, env=env, export=export)
+    code, _ = sandbox([LEAN, '--run', INPUT+'/Exporter.lean', module], project, env=env, export=export)
     if code: raise Incomplete('Lean source export did not complete')
     # A valid exported environment is required before a semantic rejection is reported.
     code, _ = sandbox(['/opt/lean-4.35.0/bin/leanchecker', '--silent', '--from-export', export], project)

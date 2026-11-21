@@ -55,7 +55,7 @@ partial def atoms (s : Syntax) : List String :=
 
 -- Submission policy: allowed top-level command kinds; `in` and `mutual` members are checked recursively.
 def submissionKinds : Array String := #["Lean.Parser.Command.declaration", "Lean.Parser.Command.namespace", "Lean.Parser.Command.section", "Lean.Parser.Command.end", "Lean.Parser.Command.open", "Lean.Parser.Command.universe", "Lean.Parser.Command.variable", "Lean.Parser.Command.mutual", "Lean.Parser.Command.set_option"]
-def screenedAtoms : Array String := #["unsafe", "run_tac", "by_elab"]
+def screenedAtoms : Array String := #["unsafe", "run_tac", "by_elab", "include_str", "bv_check", "native_decide", "bv_decide", "bv_decide?"]
 def submissionOptions : Array String := #["maxHeartbeats", "maxRecDepth"]
 def submissionAttributes : Array String := #["simp", "reducible", "irreducible"]
 
@@ -81,7 +81,8 @@ partial def commandAllowed (s : Syntax) : Bool :=
     else submissionKinds.contains kind
   | _ => false
 
--- Screens every node below an allowed command; doc comment bodies are atoms, so they are skipped.
+-- Screens every node below an allowed command. A doc comment body is one atom, so a one-word
+-- comment such as `/-- unsafe -/` would otherwise match a screened atom; comments are skipped.
 partial def submissionSafe (s : Syntax) : Bool :=
   match s with
   | .atom _ a => !screenedAtoms.contains a

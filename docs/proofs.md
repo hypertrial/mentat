@@ -113,13 +113,19 @@ contain declarations of any kind, `namespace`, `section`, `end`, `open`, `univer
 optionally combined with `in`. Any other command is rejected, including evaluation,
 printing, macros, custom syntax, notation, initializers and attribute commands. Commands
 that run code while compiling are therefore rejected before compilation. Inside a
-submission, `unsafe`, `run_tac`, `by_elab`, attributes other than `simp`, `reducible`
-and `irreducible`, and `set_option` for other options are also rejected. This in-proof
-screen is a list of known code-running forms, not a full allowlist. The exporter reads
-only the single compiled module from a fresh folder, never the writable build directory.
-The builtin comparator and kernel remain the acceptance authority, and the environment
-audit decides axioms and holes. Proof-source hashing identifies submitted input; it does
-not certify how the exported proof was constructed.
+submission, `unsafe`, `run_tac`, `by_elab`, `include_str`, `bv_check`, `bv_decide`,
+`bv_decide?` and `native_decide`, attributes other than `simp`, `reducible` and
+`irreducible`, and `set_option` for other options are also rejected. This in-proof
+screen is a list of known code-running forms, not a full allowlist. `decide +native`
+and kernel `Lean.reduceBool` evaluation are not screened; they run only safe code
+reachable from the submission, and the audit rejects their axiom unless it is permitted.
+The screen parses with the full `Lean` syntax whatever the submission's imports. The
+exporter reads only the single compiled module from a fresh folder, never the writable
+build directory; that boundary relies on safe compile-time code having no file-write or
+process-spawn primitive once the rejected forms are excluded. The builtin comparator and
+kernel remain the acceptance authority, and the environment audit decides axioms and
+holes. Proof-source hashing identifies submitted input; it does not certify how the
+exported proof was constructed.
 
 ## Host coordination and resumption
 
