@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Add typed validation for check results and the run record. `mentat.records` now models
+  formal and behavior check results, negative controls, case inventories and the saved
+  `project-verification` run, and `evidence.validate_run_record` replaces the hand validator
+  that lived in `evidence_html`; the saved dicts, hashes and comparisons are unchanged and
+  the existing error messages are kept. There is no stored-format change. A saved run whose
+  manifest repeats a JSON key is now refused with `duplicate JSON key`; large valid manifests
+  still load. The verifier modules `canonical`, `cli`, `evidence`, `proof` and `records` changed, so
+  approvals, proof campaigns and pending acceptances must be renewed.
 - Add typed validation for approval, acceptance and source-qualification records. A new
   verifier module, `mentat.records`, holds pydantic models that check these records at each
   boundary; the raw saved dicts stay what is stored, hashed and compared, and the existing
@@ -14,7 +22,7 @@
   `safe_relative_path`, `safe_git_path`, `tree_digest` and `validate_staged`;
   `project_formal` exports `LEAN_NAME_PATTERN`; `claims` exports `code_span`,
   `inline_prose` and `escape_prose`; `runner` exports `MAX_RUN_OUTPUT`; `evidence_html`
-  exports `validate_record` and `acceptance_status`; and the Polaris `replay` module
+  exports `acceptance_status`; and the Polaris `replay` module
   exports `MAX_CANDIDATE_FILE`. The old underscore names are removed without aliases. A boundary
   test now fails when code under `src/mentat` imports another module's private name or
   reads one through an import alias.

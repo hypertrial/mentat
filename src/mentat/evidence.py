@@ -190,7 +190,8 @@ def read_run_snapshot(state: Path, run_id: str) -> tuple[Path, dict, str]:
     raw = manifest.read_bytes()
     if digest(raw) != (state / "receipts" / run_id).read_text():
         raise ValueError("Evidence manifest failed its local integrity check")
-    record = json.loads(raw)
+    # Saved manifests have no size cap, but duplicate keys are refused.
+    record = decode_json(raw, limit=None)
     if record["run_id"] != run_id or set(path.name for path in bundle.iterdir()) != {
         "manifest.json",
         *record["artifacts"],
@@ -329,29 +330,16 @@ def source_qualifications(record: dict) -> list[dict]:
     """Validate source qualification bindings and project their evidence references."""
     if not ({"source_mutation_checks", "source_qualifications"} & record.keys()):
         return []
-    if (
-        not {"claims", "behavior_skipped", "cases"} <= record.keys()
-        or not isinstance(record["claims"], list)
-        or type(record["behavior_skipped"]) is not bool
-        or not isinstance(record["cases"], list)
-        or any(
-            not isinstance(case, dict)
-            or not isinstance(case.get("checks"), list)
-            or any(
-                not isinstance(check, dict)
-                or not isinstance(check.get("id"), str)
-                or not isinstance(check.get("status"), str)
-                or check["status"] not in STATUSES
-                for check in case["checks"]
-            )
-            for case in record["cases"]
-        )
-        or any(
-            not isinstance(claim, dict) or not isinstance(claim.get("id"), str)
-            for claim in record["claims"]
-        )
-    ):
-        raise ValueError("Invalid source qualification context")
+    message = "Invalid source qualification context"
+    _model(records.QualificationContext, record, message)
+    for claim in record["claims"]:
+        _model(records.ClaimId, claim, message)
+    for case in record["cases"]:
+        _model(records.CaseChecks, case, message)
+        for check in case["checks"]:
+            _model(records.CheckStatus, check, message)
+            if check["status"] not in STATUSES:
+                raise ValueError(message)
     inventory = record.get("source_mutation_checks")
     results = record.get("source_qualifications")
     if (
@@ -387,24 +375,8 @@ def source_qualifications(record: dict) -> list[dict]:
     baseline = {check["id"]: check for case in record["cases"] for check in case["checks"]}
     if len(baseline) != sum(len(case["checks"]) for case in record["cases"]):
         raise ValueError("Duplicate source qualification baseline check")
-    if (
-        not {
-            "run_id",
-            "revision",
-            "snapshot_digest",
-            "base",
-            "contract_digest",
-            "runner",
-            "runtime",
-            "comparison_inputs",
-            "source_mutation_manifest_sha256",
-        }
-        <= record.keys()
-        or not isinstance(record["runtime"], dict)
-        or not isinstance(record["comparison_inputs"], dict)
-        or not isinstance(record["comparison_inputs"].get("verifier"), str)
-        or not isinstance(record["source_mutation_manifest_sha256"], str)
-    ):
+    _model(records.QualificationRun, record, "Invalid source qualification context")
+    if not isinstance(record["comparison_inputs"].get("verifier"), str):
         raise ValueError("Invalid source qualification context")
     observed_ids = set()
     projected = []
@@ -534,6 +506,276 @@ def source_qualifications(record: dict) -> list[dict]:
     if observed_ids != declared.keys():
         raise ValueError("Missing source qualification result")
     return projected
+
+
+_RECORD_INVALID = "Invalid saved verification record"
+_CASE_STATUSES = frozenset({"pass", "fail", "skip", "error"})
+_ENGINES = frozenset({"z3", "lean", "lean-comparator"})
+
+
+def _model(model, value: dict, message: str | dict[str, str]) -> None:
+    """Validate one saved section with its model; a defect raises that section's message."""
+    try:
+        records.check(model, value)
+    except ValidationError as exc:
+        location = exc.errors()[0]["loc"]
+        if isinstance(message, dict):
+            raise ValueError(message.get(location[0] if location else "", _RECORD_INVALID)) from exc
+        raise ValueError(message) from exc
+
+
+def _string(value) -> str:
+    if not isinstance(value, str) or not value:
+        raise ValueError(_RECORD_INVALID)
+    return value
+
+
+def _strings(value) -> list:
+    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+        raise ValueError(_RECORD_INVALID)
+    return value
+
+
+def _filename(name) -> str:
+    if not isinstance(name, str) or not name or name in {".", ".."} or "/" in name or "\\" in name:
+        raise ValueError("Invalid saved evidence filename")
+    return name
+
+
+def _reference_values(check: dict, artifacts: dict) -> None:
+    """Check that a result's artifact and log references name saved files."""
+    refs = check.get("artifacts", {})
+    if any(not isinstance(value, str) or value not in artifacts for value in refs.values()):
+        raise ValueError("Invalid saved artifact reference")
+    for name in (*refs.keys(), *refs.values()):
+        _filename(name)
+    for key in ("stdout", "stderr"):
+        if key in check and (not isinstance(check[key], str) or check[key] not in artifacts):
+            raise ValueError("Invalid saved log reference")
+
+
+def _omissions(check: dict) -> None:
+    for name in check.get("artifact_omissions", []):
+        _filename(name)
+    streams = check.get("log_omissions", [])
+    if len(set(streams)) != len(streams) or any(
+        name not in {"stdout", "stderr"} for name in streams
+    ):
+        raise ValueError("Invalid saved log omissions")
+
+
+def _cases(check: dict) -> None:
+    """Check a result's case inventory and case results; types are checked by records.Cases."""
+    if "required_cases" in check:
+        names = check["required_cases"]
+        if len(set(names)) != len(names) or any(not name for name in names):
+            raise ValueError("Invalid saved required cases")
+    if "case_results" in check:
+        results = check["case_results"]
+        if any(
+            not isinstance(name, str) or not name or result not in _CASE_STATUSES
+            for name, result in results.items()
+        ):
+            raise ValueError("Invalid saved case results")
+        if "required_cases" in check and set(results) - set(check["required_cases"]):
+            raise ValueError("Unexpected saved case result")
+
+
+def _formal_check(check, claims: set, artifacts: dict) -> None:
+    if not isinstance(check, dict):
+        raise ValueError("Invalid saved check")
+    _string(check.get("id"))
+    if check.get("claim") not in claims or check.get("status") not in STATUSES:
+        raise ValueError("Invalid saved check reference or status")
+    if check.get("kind") not in _ENGINES:
+        raise ValueError("Invalid saved formal engine")
+    _model(
+        records.FormalCheck,
+        check,
+        {"detail": "Invalid saved check detail", "artifacts": "Invalid saved artifact reference"},
+    )
+    _reference_values(check, artifacts)
+    _model(records.Omissions, check, _RECORD_INVALID)
+    _omissions(check)
+    _model(records.FormalEvidence, check, "Invalid saved formal evidence")
+
+
+def _behavior_check(check, claims: set, artifacts: dict) -> None:
+    if not isinstance(check, dict):
+        raise ValueError("Invalid saved check")
+    _string(check.get("id"))
+    if check.get("claim") not in claims or check.get("status") not in STATUSES:
+        raise ValueError("Invalid saved check reference or status")
+    _model(
+        records.BehaviorCheck,
+        check,
+        {"detail": "Invalid saved check detail", "artifacts": "Invalid saved artifact reference"},
+    )
+    _reference_values(check, artifacts)
+    _model(records.Omissions, check, _RECORD_INVALID)
+    _omissions(check)
+    _model(
+        records.Cases,
+        check,
+        {"required_cases": _RECORD_INVALID, "case_results": "Invalid saved case results"},
+    )
+    _cases(check)
+    _model(records.ExitCode, check, "Invalid saved exit code")
+    if "command_status" in check and check["command_status"] not in STATUSES:
+        raise ValueError("Invalid saved command status")
+    if "negative_control" in check:
+        _negative_control(check["negative_control"], artifacts)
+
+
+def _negative_control(control, artifacts: dict) -> None:
+    if not isinstance(control, dict):
+        raise ValueError("Invalid saved negative control")
+    if control.get("status") not in STATUSES:
+        raise ValueError("Invalid saved negative control")
+    _model(
+        records.NegativeControl,
+        control,
+        {
+            "detail": "Invalid saved negative control detail",
+            "qualified": "Invalid saved control qualification",
+            "artifacts": "Invalid saved artifact reference",
+        },
+    )
+    _reference_values(control, artifacts)
+    _model(records.Omissions, control, _RECORD_INVALID)
+    _omissions(control)
+    _model(
+        records.Cases,
+        control,
+        {"required_cases": _RECORD_INVALID, "case_results": "Invalid saved case results"},
+    )
+    _cases(control)
+    _model(records.ExitCode, control, "Invalid saved control exit code")
+
+
+def validate_run_record(record) -> None:
+    """Check a saved project-verification record's sections and how they reference each other."""
+    if (
+        not isinstance(record, dict)
+        or record.get("kind") != "project-verification"
+        or (type(record.get("schema_version")) is not int or record["schema_version"] != 2)
+    ):
+        raise ValueError("Unsupported saved verification record")
+    for key in ("run_id", "revision", "base", "contract_digest", "runner"):
+        _string(record.get(key))
+    if any(
+        not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", record[key])
+        for key in ("revision", "base")
+    ) or not re.fullmatch(r"[0-9a-f]{64}", record["contract_digest"]):
+        raise ValueError("Invalid saved revision or contract digest")
+    if record.get("status") not in STATUSES or record["runner"] not in {"host", "docker"}:
+        raise ValueError("Invalid saved verification outcome")
+    if "recorded_at" in record:
+        timestamp = datetime.fromisoformat(_string(record["recorded_at"]))
+        if timestamp.tzinfo is None:
+            raise ValueError("Invalid saved timestamp")
+    _model(records.RunArtifacts, record, "Invalid saved artifact inventory")
+    artifacts = record["artifacts"]
+    if any(not isinstance(k, str) or not isinstance(v, str) for k, v in artifacts.items()):
+        raise ValueError("Invalid saved artifact inventory")
+    for name in artifacts:
+        _filename(name)
+    claims = record.get("claims")
+    if not isinstance(claims, list) or not claims:
+        raise ValueError("Invalid saved claims")
+    ids = set()
+    for claim in claims:
+        if not isinstance(claim, dict) or _string(claim.get("id")) in ids:
+            raise ValueError("Invalid saved claims")
+        ids.add(claim["id"])
+        _string(claim.get("statement"))
+        _model(records.Claim, claim, _RECORD_INVALID)
+        if claim.get("assurance") is not None:
+            # Not records.check: the contract shape rejects unknown keys, as it always has.
+            records.Assurance.model_validate(claim["assurance"])
+    review = record.get("claim_review", {})
+    if not isinstance(review, dict) or not isinstance(review.get("titles", {}), dict):
+        raise ValueError("Invalid saved claim review")
+    if any(
+        not isinstance(title, str) or key not in ids
+        for key, title in review.get("titles", {}).items()
+    ):
+        raise ValueError("Invalid saved claim titles")
+    _strings(review.get("verification_limits") or [])
+    groups = review.get("groups", [])
+    if not isinstance(groups, list):
+        raise ValueError("Invalid saved claim groups")
+    grouped = []
+    for group in groups:
+        if not isinstance(group, dict):
+            raise ValueError("Invalid saved claim groups")
+        _string(group.get("title"))
+        _model(records.ReviewGroup, group, _RECORD_INVALID)
+        grouped.extend(group["claim_ids"])
+    if groups and (len(grouped) != len(ids) or set(grouped) != ids):
+        raise ValueError("Invalid saved claim group references")
+    _model(records.RunInventory, record, "Invalid saved check inventory")
+    seen = set()
+    for check in record["model_checks"]:
+        _formal_check(check, ids, artifacts)
+        if check["id"] in seen:
+            raise ValueError("Duplicate saved check")
+        seen.add(check["id"])
+    checks = []
+    for case in record["cases"]:
+        if not isinstance(case, dict):
+            raise ValueError("Invalid saved behavior cases")
+        _model(records.BehaviorCase, case, "Invalid saved behavior cases")
+        if "case_id" in case:
+            _string(case["case_id"])
+        if "status" in case and case["status"] not in STATUSES:
+            raise ValueError("Invalid saved behavior case status")
+        if len(case["checks"]) == 1:
+            check = case["checks"][0]
+            if (
+                not isinstance(check, dict)
+                or ("case_id" in case and case["case_id"] != check.get("id"))
+                or ("status" in case and case["status"] != check.get("status"))
+            ):
+                raise ValueError("Invalid saved behavior case reference")
+        checks.extend(case["checks"])
+    if record["behavior_skipped"] and checks:
+        raise ValueError("Invalid formal gate evidence")
+    for check in checks:
+        _behavior_check(check, ids, artifacts)
+        if check["id"] in seen:
+            raise ValueError("Duplicate saved check")
+        seen.add(check["id"])
+    inventory = record.get("behavior_checks")
+    if inventory is not None:
+        if not isinstance(inventory, list):
+            raise ValueError("Invalid saved behavior inventory")
+        declared = {}
+        for item in inventory:
+            if (
+                not isinstance(item, dict)
+                or _string(item.get("id")) in declared
+                or item.get("claim") not in ids
+            ):
+                raise ValueError("Invalid saved behavior inventory")
+            declared[item["id"]] = item["claim"]
+        if len(set(declared) & {check["id"] for check in record["model_checks"]}):
+            raise ValueError("Duplicate saved check")
+        if not record["behavior_skipped"] and declared != {
+            check["id"]: check["claim"] for check in checks
+        }:
+            raise ValueError("Saved behavior inventory does not match results")
+    for check in source_qualifications(record):
+        _model(records.References, check, "Invalid saved artifact reference")
+        _reference_values(check, artifacts)
+        _model(records.Omissions, check, _RECORD_INVALID)
+        _omissions(check)
+        _model(
+            records.Cases,
+            check,
+            {"required_cases": _RECORD_INVALID, "case_results": "Invalid saved case results"},
+        )
+        _cases(check)
 
 
 def _checks_by_id(record: dict) -> dict[tuple[str, str], dict]:

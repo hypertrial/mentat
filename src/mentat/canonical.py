@@ -6,15 +6,15 @@ import json
 STATUSES = frozenset({"pass", "violation", "incomplete"})
 
 
-def decode_json(data: bytes):
-    if len(data) > 1_000_000:
+def decode_json(data: bytes, *, limit: int | None = 1_000_000):
+    if limit is not None and len(data) > limit:
         raise ValueError("JSON exceeds 1 MB")
 
     def unique(pairs):
         result = {}
         for key, value in pairs:
             if key in result:
-                raise ValueError(f"duplicate JSON key: {key}")
+                raise ValueError("duplicate JSON key")
             result[key] = value
         return result
 
