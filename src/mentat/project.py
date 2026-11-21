@@ -42,6 +42,7 @@ VERIFIER_MODULES = (
     "records",
     "runner",
     "spec_review",
+    "verification",
 )
 NAME_PATTERN = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}\Z")
 _IMAGE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/:-]*@sha256:[0-9a-f]{64}\Z")
