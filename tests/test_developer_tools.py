@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from mentat import project_formal
+from mentat import project_formal, runner
 from mentat.showcases.polaris import docker_runtime
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -29,6 +29,11 @@ def records(path):
     return [json.loads(line) for line in path.read_text().splitlines()]
 
 
+def patched():
+    return (project_formal._run, docker_runtime.doctor, docker_runtime._stage_cli,
+            docker_runtime._docker, runner._process, runner._docker, runner._stage)
+
+
 def test_wrappers_forward_restore_and_hide_inputs(tmp_path, monkeypatch):
     path = tmp_path / "trace"
     trace = profile.Trace(str(path))
@@ -40,15 +45,13 @@ def test_wrappers_forward_restore_and_hide_inputs(tmp_path, monkeypatch):
         return result
 
     monkeypatch.setattr(project_formal, "_run", original)
-    originals = (project_formal._run, docker_runtime.doctor, docker_runtime._stage_cli,
-                 docker_runtime._docker)
+    originals = patched()
     with pytest.raises(ValueError, match="private"):
         with profile.profiling(trace):
             assert project_formal._run(["secret"], input="private") is result
             raise ValueError("private")
     assert arguments == [((["secret"],), {"input": "private"})]
-    assert (project_formal._run, docker_runtime.doctor, docker_runtime._stage_cli,
-            docker_runtime._docker) == originals
+    assert patched() == originals
     event, = records(path)
     assert set(event) == {"schema_version", "invocation_id", "sequence", "phase",
                           "elapsed_seconds", "outcome"}
@@ -305,6 +308,57 @@ def test_docker_trace_uses_static_phase_names(tmp_path, monkeypatch, args, phase
     assert "secret-operation" not in (tmp_path / "trace").read_text()
 
 
+def test_runner_wrappers_forward_arguments_and_restore(tmp_path, monkeypatch):
+    trace = profile.Trace(str(tmp_path / "trace"))
+    calls = []
+    marker = object()
+    monkeypatch.setattr(runner, "_process", lambda *a, **k: calls.append((a, k)) or marker)
+    monkeypatch.setattr(runner, "_stage", lambda *a, **k: calls.append((a, k)))
+    monkeypatch.setattr(runner, "_docker", lambda *a, **k: calls.append((a, k)) or marker)
+    originals = patched()
+    with profile.profiling(trace):
+        assert runner._process(["secret"], timeout=5, input_file="private") is marker
+        assert runner._stage("private", ["secret"], trusted=True) is None
+        assert runner._docker("secret-context", "cp", "private", timeout=7) is marker
+    assert calls == [
+        ((["secret"],), {"timeout": 5, "input_file": "private"}),
+        (("private", ["secret"]), {"trusted": True}),
+        (("secret-context", "cp", "private"), {"timeout": 7}),
+    ]
+    assert patched() == originals
+    assert [e["phase"] for e in records(tmp_path / "trace")] == [
+        "runner.process", "runner.stage", "runner.docker.cp"]
+    assert "private" not in (tmp_path / "trace").read_text()
+
+
+@pytest.mark.parametrize(
+    "call,phase,outcome",
+    [
+        (lambda: runner._process(["secret"], cwd="private", env={"TOKEN": "private"}),
+         "runner.process", "failure"),
+        (lambda: runner._stage(Path("private"), [("secret", (0o644, b"private"))], trusted=True),
+         "runner.stage", "success"),
+        (lambda: runner._docker("secret-context", "create", "private"),
+         "runner.docker.create", "failure"),
+        (lambda: runner._docker("secret-context", "context", "inspect", "private"),
+         "runner.docker.context", "failure"),
+        (lambda: runner._docker("secret-context", "secret-operation", "private"),
+         "runner.docker.other", "failure"),
+    ],
+)
+def test_runner_trace_uses_static_phase_names(tmp_path, monkeypatch, call, phase, outcome):
+    trace = profile.Trace(str(tmp_path / "trace"))
+    monkeypatch.setattr(runner, "_process", lambda *a, **k: (1, b"private", b""))
+    monkeypatch.setattr(runner, "_stage", lambda *a, **k: None)
+    monkeypatch.setattr(runner, "_docker", lambda *a, **k: (1, b"private", b""))
+    with profile.profiling(trace):
+        call()
+    event, = records(tmp_path / "trace")
+    assert (event["phase"], event["outcome"]) == (phase, outcome)
+    assert "private" not in (tmp_path / "trace").read_text()
+    assert "secret" not in (tmp_path / "trace").read_text()
+
+
 @pytest.mark.parametrize("cancellation", [KeyboardInterrupt, SystemExit])
 @pytest.mark.parametrize("stage", ["calibration", "emission", "target"])
 def test_cancellation_propagates_and_restores_wrappers(tmp_path, monkeypatch, cancellation, stage):
@@ -325,8 +379,7 @@ def test_cancellation_propagates_and_restores_wrappers(tmp_path, monkeypatch, ca
     monkeypatch.setattr(project_formal, "_run", original)
     if stage == "emission":
         monkeypatch.setattr(trace, "emit", cancel)
-    originals = (project_formal._run, docker_runtime.doctor, docker_runtime._stage_cli,
-                 docker_runtime._docker)
+    originals = patched()
     with pytest.raises(cancellation) as caught:
         with profile.profiling(trace):
             project_formal._run(worker if stage == "calibration" else ["other"])
@@ -335,8 +388,7 @@ def test_cancellation_propagates_and_restores_wrappers(tmp_path, monkeypatch, ca
         assert calls == [[sys.executable, "-I", "-c", "pass"]]
     else:
         assert calls == [["other"]]
-    assert (project_formal._run, docker_runtime.doctor, docker_runtime._stage_cli,
-            docker_runtime._docker) == originals
+    assert patched() == originals
 
 
 @pytest.mark.parametrize("cancellation", [KeyboardInterrupt, SystemExit])
