@@ -315,7 +315,9 @@ def _run_lean(check, files, tools):
             "source_sha256": hashlib.sha256(source).hexdigest(),
             "theorem": check.theorem,
         }
-        with tempfile.TemporaryDirectory(prefix="mentat-project-lean-") as tmp:
+        with tempfile.TemporaryDirectory(
+            prefix="mentat-project-lean-", ignore_cleanup_errors=True
+        ) as tmp:
             root = Path(tmp)
             (root / "Model.lean").write_bytes(source)
             home = root / "home"

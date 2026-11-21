@@ -98,5 +98,8 @@ def _kill(process):
         os.killpg(process.pid, signal.SIGKILL)
     except ProcessLookupError:
         pass
-    finally:
-        process.wait()
+    except OSError:
+        # The group could not be signalled, so waiting could block forever on a live child.
+        process.poll()
+        raise
+    process.wait()
