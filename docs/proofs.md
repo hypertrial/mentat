@@ -117,8 +117,8 @@ submission, `unsafe`, `run_tac`, `by_elab`, `include_str`, `bv_check`, `bv_decid
 `bv_decide?` and `native_decide`, attributes other than `simp`, `reducible` and
 `irreducible`, and `set_option` for other options are also rejected. This in-proof
 screen is a list of known code-running forms, not a full allowlist. `decide +native`
-and kernel `Lean.reduceBool` evaluation are not screened; they run only safe code
-reachable from the submission, and the audit rejects their axiom unless it is permitted.
+is not screened; it runs only safe code reachable from the submission, and the audit
+rejects the local axiom it adds.
 The screen parses with the full `Lean` syntax whatever the submission's imports. The
 exporter reads only the single compiled module from a fresh folder, never the writable
 build directory; that boundary relies on safe compile-time code having no file-write or
