@@ -270,7 +270,7 @@ def run_pytest(
         )
         return result
     name = None
-    create_attempted = False
+    create_attempted = create_refused = False
     phase = "validation"
     details = {
         "validation": "Regression input validation failed",
@@ -352,6 +352,7 @@ def run_pytest(
                 _PYTEST_LAUNCHER,
             )
             if code:
+                create_refused = True
                 raise RuntimeError("container creation failed")
             phase = "source copy"
             if _docker(context, "cp", str(cli) + "/.", f"{name}:/opt/polaris/apache_polaris/cli/")[
@@ -392,8 +393,9 @@ def run_pytest(
         if create_attempted and name:
             try:
                 cleanup_ok = _docker(context, "rm", "-f", name, timeout=20)[0] == 0
-                if not cleanup_ok:
-                    # A failed create leaves nothing to remove; an absent container is clean.
+                if not cleanup_ok and create_refused:
+                    # Docker refused the create, so an unlisted container is clean. A create
+                    # that timed out may still complete, so that case stays a cleanup failure.
                     listed = _docker(context, "ps", "-aq", "--filter", f"name={name}", timeout=20)
                     cleanup_ok = listed == (0, b"")
             except (ValueError, RuntimeError, OSError):
