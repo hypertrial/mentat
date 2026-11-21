@@ -1,4 +1,8 @@
 import hashlib
+import os
+import selectors
+import signal
+import subprocess
 from unittest.mock import MagicMock
 
 import pytest
@@ -99,17 +103,17 @@ def test_snapshot_bounds_tree_metadata_even_for_empty_files(tmp_path, monkeypatc
 
 
 def test_git_kills_child_when_selector_registration_fails(tmp_path, monkeypatch):
-    process = MagicMock()
-    process.__enter__.return_value = process
-    process.poll.return_value = None
+    child = MagicMock(pid=4242)
     selector = MagicMock()
     selector.__enter__.return_value = selector
     selector.register.side_effect = OSError("cannot register output pipe")
-    monkeypatch.setattr(replay.subprocess, "Popen", lambda *args, **kwargs: process)
-    monkeypatch.setattr(replay.selectors, "DefaultSelector", lambda: selector)
+    killed = []
+    monkeypatch.setattr(subprocess, "Popen", lambda *args, **kwargs: child)
+    monkeypatch.setattr(selectors, "DefaultSelector", lambda: selector)
+    monkeypatch.setattr(os, "killpg", lambda pid, sig: killed.append((pid, sig)))
     with pytest.raises(OSError, match="cannot register"):
         replay._git(tmp_path, "ls-tree", "HEAD", limit=128)
-    process.kill.assert_called_once_with()
+    assert killed == [(4242, signal.SIGKILL)]
 
 
 def test_polaris_git_reads_use_selected_checkout(tmp_path, monkeypatch):

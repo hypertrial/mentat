@@ -327,13 +327,13 @@ def test_import_batches_git_objects_and_preserves_identity_and_provenance(
 ):
     import hashlib
 
-    from mentat import project
+    from mentat import process
 
     source = "### Requirement: Feature\nBody.\n#### Scenario: Works\nWorks.\n"
     for index in reversed(range(count)):
         write(repo, f"openspec/specs/{index:03}/spec.md", source)
     revision = commit(repo)
-    real_run = project.subprocess.run
+    real_run = process.run
     calls = []
 
     def counted(command, *args, **kwargs):
@@ -341,7 +341,7 @@ def test_import_batches_git_objects_and_preserves_identity_and_provenance(
             calls.append(command)
         return real_run(command, *args, **kwargs)
 
-    monkeypatch.setattr(project.subprocess, "run", counted)
+    monkeypatch.setattr(process, "run", counted)
     draft = openspec.import_spec(repo, revision)
     assert draft["status"] == "pass"
     assert len(calls) == expected_calls
@@ -359,7 +359,7 @@ def test_import_batches_git_objects_and_preserves_identity_and_provenance(
 
 
 def test_import_isolates_bad_blobs_across_chunk_boundary(repo, monkeypatch):
-    from mentat import project
+    from mentat import gitio
 
     for index in range(35):
         path = f"openspec/specs/{index:03}/spec.md"
@@ -372,7 +372,7 @@ def test_import_isolates_bad_blobs_across_chunk_boundary(repo, monkeypatch):
         elif index == 32:
             file.write_bytes(b"\xff")
     revision = commit(repo)
-    monkeypatch.setattr(project, "_MAX_FILE", 128)
+    monkeypatch.setattr(gitio, "_MAX_FILE", 128)
     original = openspec._read_blobs
 
     def corrupt_one(root, entries):

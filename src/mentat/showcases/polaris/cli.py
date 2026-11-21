@@ -12,7 +12,7 @@ from uuid import uuid4
 
 import typer
 
-from mentat import evidence
+from mentat import evidence, gitio
 from mentat.command import emit, error, finish, operator_confirm
 
 from . import docker_runtime, model_evidence
@@ -20,7 +20,7 @@ from .evaluation import FIXED
 from .evaluation import evaluate as evaluate_candidates
 from .formal import run_formal
 from .regression import render_regression
-from .replay import _git_env, run_case, snapshot
+from .replay import run_case, snapshot
 from .spec import PACK, load_cases, load_spec
 
 app = typer.Typer(no_args_is_help=True, pretty_exceptions_enable=False)
@@ -136,14 +136,8 @@ def approve_spec(ctx: typer.Context, digest: str, trusted_chat_approval: bool = 
 
 
 def candidate_repo(path: Path, state: Path) -> Path:
-    git_root = subprocess.run(
-        ["git", "-C", str(path.resolve()), "rev-parse", "--show-toplevel"],
-        env=_git_env(),
-        capture_output=True,
-        check=True,
-        timeout=10,
-    )
-    repo = Path(os.fsdecode(git_root.stdout.rstrip(b"\n"))).resolve()
+    git_root = gitio.run(path.resolve(), "rev-parse", "--show-toplevel", limit=4096, timeout=10)
+    repo = Path(os.fsdecode(git_root.rstrip(b"\n"))).resolve()
     if (
         state.is_relative_to(repo)
         or repo.is_relative_to(state)

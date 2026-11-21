@@ -1,15 +1,11 @@
 """Capture committed CLI sources without executing code from the candidate tree."""
 
 import hashlib
-import os
 import re
-import selectors
-import subprocess
-import tempfile
-import time
-from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
+
+from mentat import gitio
 
 _PREFIX = "client/python/apache_polaris/cli/"
 _MAX_FILE = 2 * 1024 * 1024
@@ -25,54 +21,8 @@ class Snapshot:
     files: tuple[tuple[str, bytes], ...]
 
 
-def _git_env() -> dict[str, str]:
-    return {
-        **{key: value for key, value in os.environ.items() if not key.startswith("GIT_")},
-        "GIT_NO_LAZY_FETCH": "1",
-        "GIT_ALLOW_PROTOCOL": "",
-        "GIT_TERMINAL_PROMPT": "0",
-        "GIT_OPTIONAL_LOCKS": "0",
-    }
-
-
 def _git(repo: Path, *args: str, limit: int, data: bytes | None = None) -> bytes:
-    command = ["git", "--no-replace-objects", "-C", str(repo), *args]
-    with (
-        tempfile.TemporaryFile() if data is not None else nullcontext(subprocess.DEVNULL)
-    ) as source:
-        if data is not None:
-            source.write(data)
-            source.seek(0)
-        with (
-            selectors.DefaultSelector() as selector,
-            subprocess.Popen(
-                command,
-                stdin=source,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                env=_git_env(),
-            ) as process,
-        ):
-            try:
-                assert process.stdout is not None
-                selector.register(process.stdout, selectors.EVENT_READ)
-                output = bytearray()
-                deadline = time.monotonic() + 30
-                while True:
-                    remaining = deadline - time.monotonic()
-                    if remaining <= 0 or not selector.select(remaining):
-                        raise subprocess.TimeoutExpired(command, 30)
-                    chunk = os.read(process.stdout.fileno(), min(65536, limit + 1 - len(output)))
-                    if not chunk:
-                        if process.wait(timeout=max(0, deadline - time.monotonic())):
-                            raise subprocess.CalledProcessError(process.returncode, command)
-                        return bytes(output)
-                    output.extend(chunk)
-                    if len(output) > limit:
-                        raise ValueError(f"Git {args[0]} output exceeds size limit")
-            finally:
-                if process.poll() is None:
-                    process.kill()
+    return gitio.run(repo, *args, limit=limit, timeout=30, data=data)
 
 
 def snapshot(repo: Path, revision: str) -> Snapshot:

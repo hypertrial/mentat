@@ -2,7 +2,7 @@
 
 Each child runs in its own session with stdin closed unless given input. A timeout kills
 the whole process group, and so does the return from a call, so no group member survives it.
-Git reads in project.py, the proof checker and Polaris formal.py still call subprocess directly.
+The streamed git tree listing in gitio.py, the proof checker and Polaris formal.py still call subprocess directly.
 """
 
 import os

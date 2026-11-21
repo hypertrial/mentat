@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Move canonical JSON, digests and verdict status into a stdlib-only `mentat.canonical`
+  module, and move the verifier's Git reads into `mentat.gitio`. Core Git reads (snapshots,
+  OpenSpec import, claim checks) now run through the bounded process runner, with no
+  inherited stdin, in their own session, and with output caps sized from what each read
+  expects.
+  The streamed tree listing still starts `git` directly, with the same environment and
+  now also `--no-replace-objects`. Polaris Git calls now set both no-replace protections
+  (`GIT_NO_REPLACE_OBJECTS=1` and `--no-replace-objects`), and the Polaris upstream test
+  read is capped at 2 MiB and passes `--no-textconv`. Some function-local imports are now
+  module-level, and the others stay where they are. `canonical` and `gitio` are new
+  verifier modules. The Polaris pack digest now also covers `claims.py` and `project.py`,
+  so approvals, proof campaigns, and pending acceptances must be renewed. The
+  `mentat.evidence` helpers keep their names.
 - Run the formal runner, behavior runner, Polaris Docker and Colima helpers' child
   processes through one module, `mentat.process`. Each child runs in its own session
   with no controlling terminal, and any process left in its group is killed when the

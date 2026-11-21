@@ -33,11 +33,26 @@ def _is_module(name):
     return path.with_suffix(".py").is_file() or (path / "__init__.py").is_file()
 
 
-def _imported_modules(path):
+def _nodes(tree, *, top_level):
+    """Every node of a module, or only those that run when the module is loaded."""
+    if not top_level:
+        yield from ast.walk(tree)
+        return
+    pending = [tree]
+    while pending:
+        node = pending.pop()
+        yield node
+        pending.extend(
+            child for child in ast.iter_child_nodes(node)
+            if not isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
+        )
+
+
+def _imported_modules(path, *, top_level=False):
     """Absolute names of the modules a file imports, resolving relative imports."""
     package = path.relative_to(SRC).parent.parts
     names = set()
-    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+    for node in _nodes(ast.parse(path.read_text(encoding="utf-8")), top_level=top_level):
         if isinstance(node, ast.Import):
             names.update(alias.name for alias in node.names)
         elif isinstance(node, ast.ImportFrom):
@@ -46,6 +61,21 @@ def _imported_modules(path):
             names.add(module)
             names.update(f"{module}.{alias.name}" for alias in node.names)
     return {name for name in names if _is_module(name)}
+
+
+def _import_closure(names):
+    """Core modules loaded when these modules load, through their top-level imports."""
+    closure, pending = set(), set(names)
+    while pending:
+        name = pending.pop()
+        if name in closure or not name.startswith("mentat.") or name.startswith("mentat.showcases"):
+            continue
+        closure.add(name)
+        path = SRC.joinpath(*name.split("."))
+        module = path.with_suffix(".py")
+        source = module if module.is_file() else path / "__init__.py"
+        pending |= _imported_modules(source, top_level=True)
+    return closure
 
 
 def test_every_source_module_is_classified_exactly_once():
@@ -184,5 +214,6 @@ def test_pack_digest_hashes_every_mentat_module_polaris_imports(monkeypatch):
         for name in imported
         if name.startswith("mentat.") and not name.startswith("mentat.showcases")
     }
+    closure = _import_closure(outside)
     assert outside
-    assert outside <= hashed_modules
+    assert closure <= hashed_modules, sorted(closure - hashed_modules)

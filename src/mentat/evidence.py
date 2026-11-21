@@ -9,8 +9,13 @@ import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 
+# canonical's helpers are re-exported here: callers use evidence.json_bytes and friends.
+from .canonical import STATUSES, decode_json, digest, json_bytes, status
+from .claims import _code_span, _inline_prose
+from .command import visible_text
+from .project_formal import _NAME
+
 RUN_ID = re.compile(r"[a-f0-9]{32}\Z")
-STATUSES = {"pass", "violation", "incomplete"}
 # Every checker version that has ever written saved proofs, including the current one.
 # A checker bump must add the new version here.
 _SAVED_CHECKER_VERSIONS = frozenset({"4.35.0"})
@@ -21,54 +26,9 @@ def read_json(path: Path):
         return decode_json(stream.read(1_000_001))
 
 
-def decode_json(data: bytes):
-    if len(data) > 1_000_000:
-        raise ValueError("JSON exceeds 1 MB")
-
-    def unique(pairs):
-        result = {}
-        for key, value in pairs:
-            if key in result:
-                raise ValueError(f"duplicate JSON key: {key}")
-            result[key] = value
-        return result
-
-    try:
-        return json.loads(
-            data,
-            object_pairs_hook=unique,
-            parse_constant=lambda value: (_ for _ in ()).throw(
-                ValueError(f"invalid JSON constant: {value}")
-            ),
-        )
-    except RecursionError as exc:
-        raise ValueError("JSON nesting exceeds parser limit") from exc
-
-
-def json_bytes(value: object) -> bytes:
-    return (
-        json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":")) + "\n"
-    ).encode()
-
-
-def digest(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
-
-
 def file_digest(path: Path) -> str:
     with path.open("rb") as stream:
         return hashlib.file_digest(stream, "sha256").hexdigest()
-
-
-def status(checks: list[dict], *, incomplete_first: bool = False) -> str:
-    outcomes = {check.get("status") for check in checks}
-    if outcomes - STATUSES or not outcomes:
-        return "incomplete"
-    if incomplete_first and "incomplete" in outcomes:
-        return "incomplete"
-    if "violation" in outcomes:
-        return "violation"
-    return "incomplete" if "incomplete" in outcomes else "pass"
 
 
 def qualification_status(checks: list[dict]) -> str:
@@ -127,6 +87,7 @@ def report(record: dict) -> bytes:
         "",
     ]
     if record.get("kind") == "project-verification":
+        # evidence_report imports this module, so it cannot be a top-level import.
         from .evidence_report import project_report
 
         lines.extend(project_report(record))
@@ -145,9 +106,6 @@ def report(record: dict) -> bytes:
                 claim = f"`{check['claim']}` · " if "claim" in check else ""
                 lines.append(f"  - {claim}{check.get('status', 'incomplete')} · {detail}")
     for regression in record.get("regressions", []):
-        from .claims import _code_span, _inline_prose
-        from .command import visible_text
-
         case_id = _code_span(visible_text(regression["case_id"]))
         status = _inline_prose(visible_text(regression["status"]))
         label = (
@@ -273,8 +231,6 @@ def read_run(state: Path, run_id: str) -> tuple[Path, dict]:
 
 def proof_evidence(record: dict) -> None:
     """Check saved proof identities without rerunning an historical toolchain."""
-    from .project_formal import _NAME
-
     environments = []
     for check in record.get("model_checks", []):
         if not isinstance(check, dict) or check.get("kind") != "lean-comparator":

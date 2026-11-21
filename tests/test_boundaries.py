@@ -1,5 +1,7 @@
 import json
 import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -9,6 +11,7 @@ from typer.testing import CliRunner
 
 from mentat.cli import app
 from mentat.evidence import read_run, save_run
+from mentat.project import PRESENTATION_MODULES, VERIFIER_MODULES
 from mentat.showcases.polaris import docker_runtime
 from mentat.showcases.polaris.docker_runtime import _stage_cli
 from mentat.showcases.polaris.evaluation import BEFORE, FIXED, _control, evaluate
@@ -573,3 +576,17 @@ def test_comparison_detects_missing_empty_duplicate_and_path_collision(spec):
     entries = [{"name": "finance.us", "properties": {}}]
     projection = validate_export(export_yaml(entries), spec.selected_properties)
     assert compare(case, projection, spec.selected_properties, "export")[0]["status"] == "violation"
+
+
+CORE_MODULES = [
+    f"mentat.{name}" for name in (*PRESENTATION_MODULES, *VERIFIER_MODULES) if name != "__init__"
+]
+
+
+@pytest.mark.parametrize("module", CORE_MODULES)
+def test_core_module_imports_alone_in_a_fresh_interpreter(module):
+    # A cycle that a warm interpreter hides shows up when a module is the first import.
+    result = subprocess.run(
+        [sys.executable, "-c", f"import {module}"], capture_output=True, text=True, timeout=120
+    )
+    assert result.returncode == 0, result.stderr

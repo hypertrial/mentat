@@ -5,7 +5,7 @@ import sys
 
 import typer
 
-from . import evidence
+from .canonical import json_bytes
 
 
 def visible_text(value: str, *, multiline: bool = False) -> str:
@@ -17,7 +17,7 @@ def visible_text(value: str, *, multiline: bool = False) -> str:
 
 def emit(result: dict, output_json: bool) -> None:
     if output_json:
-        typer.echo(evidence.json_bytes({"schema_version": 1, **result}).decode().rstrip())
+        typer.echo(json_bytes({"schema_version": 1, **result}).decode().rstrip())
         return
     title = result.get("status", "pass" if result.get("ok") else "incomplete")
     typer.echo(f"Mentat {title}")
@@ -51,6 +51,7 @@ def emit(result: dict, output_json: bool) -> None:
             else:
                 typer.echo(visible_text(f"target  {target}"))
     if result.get("kind") == "project-verification":
+        # evidence_report imports this module, so it cannot be a top-level import.
         from .evidence_report import terminal_overview
 
         for line in terminal_overview(result):
