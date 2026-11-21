@@ -98,7 +98,7 @@ def _approval(state: Path, project: Project) -> dict:
             "Approve this repository, base commit, and runner with mentat spec approve"
         ) from exc
     try:
-        records.Approval.model_validate(record)
+        records.check(records.Approval, record)
     except ValidationError as exc:
         raise ValueError(
             "Approval record is invalid. Check and approve the current contract"

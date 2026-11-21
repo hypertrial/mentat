@@ -14,6 +14,17 @@ class _Record(BaseModel):
     model_config = ConfigDict(strict=True, extra="allow", hide_input_in_errors=True)
 
 
+def check(model: type[BaseModel], value: object) -> None:
+    """Validate the declared fields of `value` against `model`; raise pydantic.ValidationError.
+
+    Only declared keys are handed to pydantic. Records may carry any other JSON key, and
+    pydantic refuses some keys the old hand checks ignored (for example a lone surrogate).
+    """
+    if isinstance(value, dict):
+        value = {key: value[key] for key in model.model_fields if key in value}
+    model.model_validate(value)
+
+
 class Approval(_Record):
     """An operator's approval of one contract for one repository, base and runner."""
 

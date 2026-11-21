@@ -365,7 +365,7 @@ def source_qualifications(record: dict) -> list[dict]:
     declared = {}
     for item in inventory:
         try:
-            records.SourceMutationCheck.model_validate(item)
+            records.check(records.SourceMutationCheck, item)
         except ValidationError as exc:
             raise ValueError("Invalid source qualification declaration") from exc
         if (
@@ -419,7 +419,7 @@ def source_qualifications(record: dict) -> list[dict]:
         observed_ids.add(result["id"])
         item = declared[result["id"]]
         try:
-            records.SourceQualification.model_validate(result)
+            records.check(records.SourceQualification, result)
         except ValidationError as exc:
             raise ValueError("Source qualification bindings or outcome are invalid") from exc
         binding = result["bindings"]

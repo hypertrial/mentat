@@ -303,7 +303,7 @@ def acceptance_status(state, record, digest):
                 raise ValueError
             receipt = evidence.decode_json(stream.read(1_000_001))
         try:
-            records.Acceptance.model_validate(receipt)
+            records.check(records.Acceptance, receipt)
         except ValidationError as exc:
             raise ValueError("Invalid or mismatched receipt") from exc
         if any(

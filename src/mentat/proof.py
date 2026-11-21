@@ -119,7 +119,7 @@ def _fresh(state, project, candidate, approval):
         "contract_digest": current.fingerprint,
     }
     try:
-        records.Approval.model_validate(actual)
+        records.check(records.Approval, actual)
     except ValidationError as exc:
         raise ValueError("Contract approval changed; approve and prepare a new campaign") from exc
     if actual != approval or any(actual[key] != value for key, value in expected.items()):
