@@ -9,9 +9,10 @@ Existing `lean` checks still use Lean 4.31; Z3 behavior is unchanged.
 
 Use a dedicated Linux VM with cgroup v2, systemd, Python, bubblewrap and the official
 Lean 4.35.0 distribution at `/opt/lean-4.35.0`. The toolchain must be root-owned
-and not writable by proof authors. Mentat refuses a toolchain whose contents differ
-from the official x86_64 or aarch64 archive that `scripts/install-proof-checker`
-installs; the expected digests are part of the verifier source. The operator account runs `systemd-run`,
+and not writable by proof authors. Mentat refuses a toolchain whose files or links
+differ from the official x86_64 or aarch64 archive that
+`scripts/install-proof-checker` installs, before running any of its programs. The
+expected digests are part of the verifier source. The operator account runs `systemd-run`,
 `systemctl`, `chown` and `rm` through `sudo -n`. That grant is root-equivalent:
 `systemd-run` can start any command as root. Grant it only in a dedicated VM
 whose operator account you already trust with root. Do not mount host directories,

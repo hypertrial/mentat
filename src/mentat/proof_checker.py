@@ -105,6 +105,8 @@ def checker_identity():
             )
     if not Path("/sys/fs/cgroup/cgroup.controllers").is_file():
         raise ValueError("The Linux proof checker requires cgroup v2 resource controls")
+    # Checked before any toolchain binary runs, so an unpinned lean is never executed.
+    toolchain = _pinned_toolchain_digest()
     version = subprocess.run(
         [str(_ROOT / "bin/lean"), "--version"], capture_output=True, timeout=5, check=False
     )
@@ -124,7 +126,7 @@ def checker_identity():
     return {
         "engine": "lean-comparator",
         "version": LEAN_VERSION,
-        "toolchain_sha256": _pinned_toolchain_digest(),
+        "toolchain_sha256": toolchain,
         "bwrap_sha256": _hash(Path("/usr/bin/bwrap").read_bytes()),
         "python_sha256": _hash(Path("/usr/bin/python3").read_bytes()),
         "systemd_run_sha256": _hash(Path("/usr/bin/systemd-run").read_bytes()),

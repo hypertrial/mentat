@@ -1,14 +1,16 @@
 name: Checker toolchain digest
 
 # Prints the tree digest of the pinned Lean checker toolchain on each supported
-# architecture. Run it when the checker version changes, then copy the values
-# into TOOLCHAIN_SHA256 in src/mentat/proof_checker.py.
+# architecture and fails when it differs from TOOLCHAIN_SHA256 in
+# src/mentat/proof_checker.py. When the checker version changes, copy the printed
+# values into that table.
 on:
   workflow_dispatch:
   pull_request:
     paths:
       - .github/workflows/checker-toolchain-digest.yml
       - scripts/install-proof-checker
+      - src/mentat/proof_checker.py
 
 permissions:
   contents: read
@@ -25,7 +27,7 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
-      - name: Install the pinned toolchain and print its digest
+      - name: Install the pinned toolchain, print its digest and check the committed pin
         run: |
           bash scripts/install-proof-checker
-          PYTHONPATH=src python3 -I -c 'import platform, sys; sys.path.insert(0, "src"); from mentat import proof_checker; print(platform.machine(), proof_checker._toolchain_digest())'
+          python3 -I -c 'import platform, sys; sys.path.insert(0, "src"); from mentat import proof_checker; print(platform.machine(), proof_checker._toolchain_digest()); proof_checker._pinned_toolchain_digest()'
