@@ -461,12 +461,15 @@ def test_pytest_reports_bounded_stage_details_and_cleans_up(
         assert not removed
 
 
-@pytest.mark.parametrize("listing", ["absent", "present", "fails", "raises"])
+@pytest.mark.parametrize("listing", ["absent", "present", "fails", "raises", "create-raised"])
 def test_pytest_failed_create_with_no_container_reports_only_the_create(
     monkeypatch, runtime, candidate, listing
 ):
     def docker(_context, *args, **kwargs):
         if args[0] == "create":
+            if listing == "create-raised":
+                # The create may still complete in the daemon, so absence now proves nothing.
+                raise RuntimeError("Docker command timed out")
             return 1, b""
         if args[0] == "rm":
             return 1, b""
