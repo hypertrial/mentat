@@ -288,6 +288,30 @@ def test_process_cleanup_runs_when_killpg_fails(monkeypatch):
     assert child.stdout.closed and child.stderr.closed
 
 
+def test_process_does_not_wait_forever_when_a_live_child_cannot_be_killed(monkeypatch):
+    created = []
+    original = subprocess.Popen
+
+    def recording(*args, **kwargs):
+        created.append(original(*args, **kwargs))
+        return created[-1]
+
+    def fail(*args):
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(process.subprocess, "Popen", recording)
+    monkeypatch.setattr(process.os, "killpg", fail)
+    started = time.monotonic()
+    try:
+        with pytest.raises(PermissionError):
+            process.run([sys.executable, "-c", "import time; time.sleep(30)"], output_limit=100, timeout=0.5)
+        assert time.monotonic() - started < 10
+    finally:
+        for child in created:
+            child.kill()
+            child.wait()
+
+
 def test_process_missing_executable_raises_oserror(tmp_path):
     with pytest.raises(FileNotFoundError):
         runner._process([str(tmp_path / "missing-tool")])
