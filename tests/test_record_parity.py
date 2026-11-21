@@ -46,7 +46,12 @@ SAMPLES = [
     [1],
     [None],
     [True],
+    [0],
+    [124],
+    [125],
+    -1,
     ["x"],
+    ["\ud800"],
     {},
     {"a": 1},
 ]
@@ -213,13 +218,13 @@ def _qualification_mutations():
     """(label, mutated run record) for every declaration, result and binding field."""
     for number, manifest in enumerate(_qualified_manifests()):
         for index, item in enumerate(manifest["source_mutation_checks"]):
-            for key in item:
+            for key in [*item, "extra", "\ud800"]:
                 for value in SAMPLES:
                     record = copy.deepcopy(manifest)
                     record["source_mutation_checks"][index] = _with_value(item, key, value)
                     yield f"{number} decl[{index}].{key}={value!r:.40}", record
         for index, item in enumerate(manifest["source_qualifications"]):
-            for key in item:
+            for key in [*item, "extra", "\ud800"]:
                 for value in SAMPLES:
                     record = copy.deepcopy(manifest)
                     record["source_qualifications"][index] = _with_value(item, key, value)
@@ -258,7 +263,7 @@ def test_approval_boundary_matches_the_frozen_hand_rule(monkeypatch):
     project = SimpleNamespace(root=Path("/repo"), base=COMMIT, runner="host", fingerprint=DIGEST)
     scope = {"repo": "/repo", "base": COMMIT, "runner": "host", "contract_digest": DIGEST}
     cases = [APPROVAL_BASE, [], "x", None]
-    for key in {*APPROVAL_BASE, "decision_source"}:
+    for key in {*APPROVAL_BASE, "decision_source", "extra", "\ud800"}:
         cases += [_with_value(APPROVAL_BASE, key, value) for value in SAMPLES]
     checked = 0
     for value in cases:
@@ -279,7 +284,7 @@ def test_acceptance_boundary_matches_the_frozen_hand_rule(tmp_path):
     (state / "acceptances").mkdir(parents=True)
     path = state / "acceptances" / f"{RUN}.json"
     cases = [RECEIPT_BASE, [], "x"]
-    for key in {*RECEIPT_BASE, "decision_source", "accepted_at"}:
+    for key in {*RECEIPT_BASE, "decision_source", "accepted_at", "extra", "\ud800"}:
         cases += [_with_value(RECEIPT_BASE, key, value) for value in SAMPLES]
     checked = 0
     for value in cases:
