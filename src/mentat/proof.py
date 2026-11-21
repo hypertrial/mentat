@@ -16,6 +16,7 @@ from uuid import uuid4
 
 from . import evidence
 from .project import load_project, snapshot
+from .proof_checker import LEAN_VERSION
 
 _LIMIT = 1_000_000
 _ATTEMPT_SECONDS = 120
@@ -659,7 +660,7 @@ def recheck(state: Path, project, candidate, approval: dict, campaign_ids: list[
                         "kind": "lean-comparator",
                         "status": "pass" if outcome["status"] == "accepted" else "incomplete",
                         "detail": outcome["detail"],
-                        "version": "4.35.0",
+                        "version": LEAN_VERSION,
                         "evidence": {
                             "campaign_id": campaign_id,
                             "theorem": target["theorem"],

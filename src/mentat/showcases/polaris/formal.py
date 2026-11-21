@@ -6,6 +6,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from mentat.project_formal import LEAN_VERSION
+
 from .spec import Spec
 
 Z3_DOMAIN = ("finance", "us", "finance.us")
@@ -113,8 +115,9 @@ def run_lean(lean_dir: Path) -> list[dict]:
             shutil.copytree(
                 lean_dir, project, ignore=shutil.ignore_patterns("*.olean", "*.ilean", ".lake")
             )
-            if (project / "lean-toolchain").read_text().strip() != "leanprover/lean4:v4.31.0":
-                result["detail"] = "Lean toolchain is not pinned to 4.31.0"
+            toolchain = (project / "lean-toolchain").read_text().strip()
+            if toolchain != f"leanprover/lean4:v{LEAN_VERSION}":
+                result["detail"] = f"Lean toolchain is not pinned to {LEAN_VERSION}"
                 return [result]
             # Let the pinned Lake toolchain select its own compiler and libraries.
             env = {
@@ -131,8 +134,10 @@ def run_lean(lean_dir: Path) -> list[dict]:
                 timeout=10,
                 check=False,
             )
-            if version.returncode != 0 or not version.stdout.startswith("Lean (version 4.31.0,"):
-                result["detail"] = "Lake must select Lean 4.31.0"
+            if version.returncode != 0 or not version.stdout.startswith(
+                f"Lean (version {LEAN_VERSION},"
+            ):
+                result["detail"] = f"Lake must select Lean {LEAN_VERSION}"
                 return [result]
             build = subprocess.run(
                 ["lake", "build"],

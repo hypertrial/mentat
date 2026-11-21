@@ -14,7 +14,7 @@ from pathlib import Path
 
 _TIMEOUT = 15
 _OUTPUT_LIMIT = 16_384
-_LEAN_VERSION = "4.31.0"
+LEAN_VERSION = "4.31.0"
 # Match Lean 4.31's isIdFirst/isIdRest in Init.Meta.Defs before interpolating a name.
 _LEAN_FIRST = (
     r"A-Za-z_\u00c0-\u00d6\u00d8-\u00f6\u00f8-\u017f"
@@ -77,10 +77,10 @@ def _probe_lean(executable: str) -> tuple[dict, bool]:
     """
     p = _run([executable, "--version"], timeout=5)
     match = re.search(r"\bversion (\d+\.\d+\.\d+)\b", p.stdout)
-    if p.returncode or not match or match.group(1) != _LEAN_VERSION:
+    if p.returncode or not match or match.group(1) != LEAN_VERSION:
         return {
-            "error": "Lean 4.31.0 is required; check the Lean executable. "
-            "With elan, select it with ELAN_TOOLCHAIN=leanprover/lean4:v4.31.0."
+            "error": f"Lean {LEAN_VERSION} is required; check the Lean executable. "
+            f"With elan, select it with ELAN_TOOLCHAIN=leanprover/lean4:v{LEAN_VERSION}."
         }, not p.returncode
     lib = _run([executable, "--print-libdir"], timeout=5)
     if lib.returncode or not Path(lib.stdout.strip()).is_dir():
@@ -128,7 +128,9 @@ def tool_info(project) -> dict:
     if "lean" in engines:
         executable = shutil.which("lean")
         if not executable:
-            result["lean"] = {"error": "Install Lean 4.31.0 and put its bin directory on PATH."}
+            result["lean"] = {
+                "error": f"Install Lean {LEAN_VERSION} and put its bin directory on PATH."
+            }
         else:
             found, executable = executable, os.path.abspath(executable)
             try:
@@ -305,8 +307,8 @@ def _run_lean(check, files, tools):
         "version": tool.get("version"),
         "evidence": {},
     }
-    if "error" in tool or tool.get("version") != _LEAN_VERSION or not tool.get("executable"):
-        result["detail"] = tool.get("error", "Lean 4.31.0 tool information is missing")
+    if "error" in tool or tool.get("version") != LEAN_VERSION or not tool.get("executable"):
+        result["detail"] = tool.get("error", f"Lean {LEAN_VERSION} tool information is missing")
         return result
     if not _NAME.fullmatch(check.theorem):
         result["detail"] = "The theorem must be a plain qualified Lean identifier"

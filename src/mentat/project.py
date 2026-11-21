@@ -10,6 +10,7 @@ import unicodedata
 from collections.abc import Iterable, Iterator
 from contextlib import closing
 from dataclasses import dataclass
+from importlib import metadata
 from pathlib import Path, PurePosixPath
 from typing import Literal
 from urllib.parse import urlsplit
@@ -19,6 +20,26 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from .evidence import decode_json
 
 CHECKS_PREFIX = "{checks}/"
+# Presentation modules stay out of the verifier digest, and only cli may import them.
+PRESENTATION_MODULES = ("evidence_html", "claims_notion", "openspec")
+# Every other module directly under src/mentat must be listed here; tests enforce this.
+VERIFIER_MODULES = (
+    "__init__",
+    "claims",
+    "cli",
+    "colima",
+    "command",
+    "evidence",
+    "evidence_report",
+    "project",
+    "project_formal",
+    "proof",
+    "proof_checker",
+    "proof_lean",
+    "qualification",
+    "runner",
+    "spec_review",
+)
 _MAX_FILE = 1_000_000
 _MAX_TOTAL = 32_000_000
 _MAX_FILES = 4096
@@ -769,6 +790,20 @@ def _digest(files: dict[str, tuple[int, bytes]]) -> str:
     return digest.hexdigest()
 
 
+def _verifier_files() -> dict[str, tuple[int, bytes]]:
+    files = {}
+    for name in VERIFIER_MODULES:
+        try:
+            files[f"{name}.py"] = (0o644, (Path(__file__).parent / f"{name}.py").read_bytes())
+        except FileNotFoundError as exc:
+            raise ValueError("Verifier source file is missing") from exc
+    try:
+        files["z3-solver"] = (0o644, metadata.version("z3-solver").encode())
+    except metadata.PackageNotFoundError as exc:
+        raise ValueError("Install the project's z3-solver dependency.") from exc
+    return files
+
+
 def _validate_staged(files, *, trusted=False):
     entries = {}
     directories = {""}
@@ -929,8 +964,7 @@ def load_project(repo: Path, base: str, runner: str) -> Project:
         from .qualification import approved_mutations
 
         approved_mutations(contract, files)
-    verifier = {p.name: (0o644, p.read_bytes()) for p in Path(__file__).parent.glob("*.py")}
-    verifier_digest = _digest(verifier)
+    verifier_digest = _digest(_verifier_files())
     binding = hashlib.sha256()
     for value in (
         str(root),
