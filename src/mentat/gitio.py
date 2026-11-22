@@ -26,6 +26,8 @@ _INTEGRITY = "Git object failed integrity validation"
 _KINDS = (b"blob", b"tree", b"commit", b"tag")
 _HASHES = {40: "sha1", 64: "sha256"}
 _LFS_POINTER = b"version https://git-lfs.github.com/spec/v1\n"
+_MAX_COMMIT = 1_000_000
+_MODE = re.compile(rb"[0-7]{5,6}")
 
 
 def _git_env() -> dict[str, str]:
@@ -194,7 +196,7 @@ def _objects(
 
 
 def _commit_tree(root: Path, revision: str) -> bytes:
-    kind, body = _objects(root, [revision.encode()], MAX_FILE, MAX_FILE)[0]
+    kind, body = _objects(root, [revision.encode()], _MAX_COMMIT, _MAX_COMMIT)[0]
     match = re.match(rb"tree ([0-9a-f]{40}|[0-9a-f]{64})\n", body)
     if kind != b"commit" or match is None:
         raise ValueError("invalid commit ID")
@@ -274,6 +276,8 @@ def _parse_tree(raw: bytes, width: int) -> dict[bytes, tuple[bytes, bytes, bytes
             end = nul + 1 + width
             if end > len(raw):
                 raise ValueError("truncated tree entry")
+            if not _MODE.fullmatch(raw[offset:space]):
+                raise ValueError("invalid tree mode")
             mode = b"%06o" % int(raw[offset:space], 8)
             kind = {b"040000": b"tree", b"160000": b"commit"}.get(mode, b"blob")
             rows.append((raw[space + 1 : nul], (mode, kind, raw[nul + 1 : end].hex().encode())))
@@ -347,7 +351,8 @@ def verify_listing(
     exactly its verified entries when `top` is given. Raises ValueError on any mismatch.
     """
     items = []
-    covered = set()
+    # A scope is checked even when Git omits its own record, so omitted children cannot hide.
+    covered = set(scopes)
     listed = {}
     for record in records:
         meta, path = record.split(b"\t", 1)
@@ -382,6 +387,6 @@ def read_file(root: Path, revision: str, path: str) -> bytes:
     directory, _, name = path.rpartition("/")
     loaded = _load_trees(root, _commit_tree(root, revision), [directory.encode()], {})
     entry = loaded.get(directory.encode(), {}).get(name.encode())
-    if entry is None or entry[1] != b"blob":
+    if entry is None or entry[0] not in (b"100644", b"100755"):
         raise ValueError(f"missing Git file: {path}")
     return read_blobs(root, {path: (int(entry[0], 8) & 0o777, entry[2])})[path][1]

@@ -321,7 +321,8 @@ def test_import_reports_unreadable_capability_trees(repo, entry):
     assert draft["diagnostics"] == [{"path": path, "line": 1, "detail": "unsupported spec entry"}]
 
 
-@pytest.mark.parametrize("count,expected_calls", [(1, 2), (128, 8)])
+# Two cat-file batches per object batch, plus the verified commit and tree reads (four calls).
+@pytest.mark.parametrize("count,expected_calls", [(1, 6), (128, 12)])
 def test_import_batches_git_objects_and_preserves_identity_and_provenance(
     repo, monkeypatch, count, expected_calls
 ):
@@ -390,6 +391,31 @@ def test_import_isolates_bad_blobs_across_chunk_boundary(repo, monkeypatch):
     assert [item["path"] for item in draft["diagnostics"]] == [
         f"openspec/specs/{i:03}/spec.md" for i in sorted(bad)
     ]
+
+
+@pytest.mark.parametrize("edit", ["retarget", "omit-scope"])
+def test_import_refuses_listing_that_disagrees_with_committed_trees(repo, monkeypatch, edit):
+    path = "openspec/specs/feature/spec.md"
+    other = "openspec/specs/other/spec.md"
+    write(repo, path, "### Requirement: Feature\nBody.\n#### Scenario: Works\nWorks.\n")
+    write(repo, other, "### Requirement: Other\nBody.\n#### Scenario: Works\nWorks.\n")
+    revision = commit(repo)
+    blob = git(repo, "rev-parse", f"{revision}:{path}").encode()
+    replacement = git(repo, "rev-parse", f"{revision}:{other}").encode()
+    real_ls_tree = openspec.ls_tree
+
+    def altered(root, rev, flags, scope, deadline):
+        records = list(real_ls_tree(root, rev, flags, scope, deadline))
+        if edit == "retarget":
+            return [record.replace(blob, replacement) for record in records]
+        # Git omits the scope's own record and one capability tree; the remaining children
+        # must still be compared with the committed tree.
+        omitted = (b"\topenspec/specs", b"\topenspec/specs/feature")
+        return [record for record in records if not record.endswith(omitted)]
+
+    monkeypatch.setattr(openspec, "ls_tree", altered)
+    with pytest.raises(ValueError, match="integrity"):
+        openspec.import_spec(repo, revision)
 
 
 def fail_paths(monkeypatch, bad):

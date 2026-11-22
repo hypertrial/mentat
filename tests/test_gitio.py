@@ -19,6 +19,12 @@ CONTRACT = {
 }
 
 
+def _commit_all(root):
+    git(root, "add", ".")
+    git(root, "commit", "-qm", "base")
+    return git(root, "rev-parse", "HEAD")
+
+
 def _fixed_repo(root):
     """A tiny repository whose tree bytes, modes and paths are fixed, so digests can be pinned."""
     git(root, "init", "-q")
@@ -191,7 +197,7 @@ def test_snapshot_refuses_loose_object_whose_content_does_not_match_its_id(
             project.snapshot(root, revision)
 
 
-@pytest.mark.parametrize("edit", ["retarget", "omit"])
+@pytest.mark.parametrize("edit", ["retarget", "omit", "omit-scope"])
 def test_listing_that_disagrees_with_verified_trees_is_refused(tmp_path, monkeypatch, edit):
     revision = _fixed_repo(tmp_path)
     blob = git(tmp_path, "rev-parse", f"{revision}:dir/b.py")
@@ -204,11 +210,36 @@ def test_listing_that_disagrees_with_verified_trees_is_refused(tmp_path, monkeyp
             return records
         if edit == "omit":
             return [record for record in records if not record.endswith(b"\tdir/b.py")]
+        if edit == "omit-scope":
+            # Git omits the scope's own record and one child; the child list must still be checked.
+            return [
+                record
+                for record in records
+                if not record.endswith((b"\tdir", b"\tdir/b.py"))
+            ]
         return [record.replace(blob.encode(), other.encode()) for record in records]
 
     monkeypatch.setattr(project, "ls_tree", altered)
     with pytest.raises(ValueError, match="integrity"):
         project.snapshot(tmp_path, revision)
+
+
+@pytest.mark.parametrize("mode", [b"+100644", b"100_44", b"1006\t4", b"1006448", b""])
+def test_tree_modes_outside_octal_digits_fail_integrity(mode):
+    with pytest.raises(ValueError, match="integrity"):
+        gitio._parse_tree(mode + b" a.txt\0" + bytes(20), 20)
+
+
+def test_read_file_refuses_symlink(tmp_path):
+    git(tmp_path, "init", "-q")
+    git(tmp_path, "config", "user.name", "Test")
+    git(tmp_path, "config", "user.email", "test@example.test")
+    (tmp_path / "target.py").write_text("x = 1\n")
+    os.symlink("target.py", tmp_path / "link.py")
+    revision = _commit_all(tmp_path)
+    with pytest.raises(ValueError, match="missing Git file"):
+        gitio.read_file(tmp_path, revision, "link.py")
+    assert gitio.read_file(tmp_path, revision, "target.py") == b"x = 1\n"
 
 
 @pytest.mark.parametrize("object_format", ["sha1", "sha256"])
