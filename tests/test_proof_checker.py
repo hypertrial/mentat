@@ -32,8 +32,8 @@ POLICY = {"theorem": "Proof.first", "allowed_imports": ["Init"], "permitted_axio
 
 @pytest.fixture(autouse=True)
 def one_real_check_at_a_time():
-    # The real checker refuses to start beside another one on this host, and parallel
-    # test workers may run these tests at the same time. Wait for a turn instead.
+    # Each real check starts a protected service, and parallel test workers may run these
+    # tests at the same time. Wait for a turn instead.
     path = Path(tempfile.gettempdir()) / f"mentat-test-proof-checker-{os.getuid()}.lock"
     with open(path, "w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
