@@ -21,13 +21,14 @@ jobs:
         with:
           version: '0.11.13'
           enable-cache: false
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
-        with:
-          node-version: '26.10.0'
-      - name: Run core checks
+      # The full suite runs locally before every push (scripts/verify) and on Linux and macOS in
+      # the Release verification workflow. This job runs only what a macOS workstation cannot:
+      # the real Linux proof checker, plus the fast static checks.
+      - name: Run Linux-only checks
         env:
           MENTAT_REQUIRE_PROOF_CHECKER: '1'
         run: |
           bash scripts/install-proof-checker --ci-profile
-          uv sync --locked --extra polaris
-          scripts/verify
+          uv sync --locked
+          scripts/verify-fast
+          uv run --locked --no-sync pytest -q -rs tests/test_proof_checker.py
