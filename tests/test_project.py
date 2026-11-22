@@ -902,3 +902,39 @@ def test_spec_check_ignores_a_non_regular_approval_record(project_repo, tmp_path
     assert checked.exit_code == 0, checked.output
     assert "approval_decision_source" not in json.loads(checked.output)
 
+
+
+@pytest.mark.parametrize("answer", ["n\n", ""])
+def test_operator_prompts_decline_without_consent(project_repo, tmp_path, monkeypatch, answer):
+    from types import SimpleNamespace
+
+    from typer.testing import CliRunner
+
+    from mentat import cli, command
+
+    repo, base, _ = project_repo
+    state = tmp_path / "state"
+    state.mkdir(mode=0o700)
+    runner = CliRunner()
+    scope = ["--repo", str(repo), "--base", base, "--runner", "host"]
+    prefix = ["--state", str(state)]
+    checked = runner.invoke(cli.app, prefix + ["spec", "check"] + scope + ["--json"])
+    assert checked.exit_code == 0, checked.output
+    digest = json.loads(checked.output)["contract_digest"]
+    # The prompt needs a terminal on both streams; the runner supplies the typed answer.
+    terminal = SimpleNamespace(isatty=lambda: True)
+    monkeypatch.setattr(command, "sys", SimpleNamespace(stdin=terminal, stdout=terminal))
+    approval_path = state / "approvals" / f"{digest}.json"
+    declined = runner.invoke(cli.app, prefix + ["spec", "approve", digest] + scope, input=answer)
+    assert declined.exit_code == 2, declined.output
+    assert "The operator declined" in declined.output
+    assert not approval_path.exists()
+    approved = runner.invoke(cli.app, prefix + ["spec", "approve", digest] + scope, input="y\n")
+    assert approved.exit_code == 0, approved.output
+    verified = runner.invoke(cli.app, prefix + ["verify", "--rev", base] + scope + ["--json"])
+    assert verified.exit_code == 0, verified.output
+    run_id = json.loads(verified.output)["run_id"]
+    accepted = runner.invoke(cli.app, prefix + ["accept", run_id] + scope, input=answer)
+    assert accepted.exit_code == 2, accepted.output
+    assert "The operator declined" in accepted.output
+    assert not (state / "acceptances" / f"{run_id}.json").exists()

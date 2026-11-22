@@ -11,6 +11,7 @@ from pydantic import ValidationError
 from typer.testing import CliRunner
 
 import mentat
+from mentat import canonical
 from mentat.cli import app
 from mentat.evidence import read_run, save_run
 from mentat.project import PRESENTATION_MODULES, VERIFIER_MODULES
@@ -676,3 +677,15 @@ def test_no_private_name_crosses_a_mentat_module_boundary():
     assert not uses, "Make these names public instead of reaching them privately:\n" + "\n".join(
         uses
     )
+
+
+@pytest.mark.parametrize("raw", [b'{"x":1e999}', b'{"x":-1e999}'])
+def test_decode_json_refuses_numbers_that_overflow_to_infinity(raw):
+    with pytest.raises(ValueError):
+        canonical.decode_json(raw)
+
+
+@pytest.mark.parametrize("value", [float("inf"), float("-inf"), float("nan")])
+def test_json_bytes_refuses_non_finite_numbers(value):
+    with pytest.raises(ValueError):
+        canonical.json_bytes({"x": value})

@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 import pytest
+from helpers import PRE_SPLIT_STATE, copy_state, reseal
 from test_qualification_evidence import campaign as qualification_campaign  # noqa: F401
 from typer.testing import CliRunner
 
@@ -586,3 +587,45 @@ def test_legacy_changed_claim_content_sorts_first_without_inventing_definition_h
     assert "Stable title · stable · Definition unavailable" in html
     assert "Claim definition: unavailable" in html
     assert _state_snapshot(state) == before_state
+
+
+# Fixture pair from the pre-split corpus: both sides violate, and the pair compares across contracts.
+ACROSS_PAIR = ("b5a5bbe1929c4fbfb4f35def4e45449b", "4354a85afc7a4316b34fc391dc76f50c")
+MISSING_FIELDS = {
+    "claim_review": lambda record: record.__setitem__("claim_review", None),
+    "statement": lambda record: record["claims"][0].pop("statement"),
+}
+OUTPUTS = {"text": [], "json": ["--json"], "html": ["--out", "comparison.html"]}
+
+
+def _across_state(tmp_path, damage=None):
+    state = copy_state(PRE_SPLIT_STATE, tmp_path / "state")
+    after = ACROSS_PAIR[1]
+    record = json.loads((state / "runs" / after / "manifest.json").read_bytes())
+    if damage is not None:
+        MISSING_FIELDS[damage](record)
+    reseal(state, after, record)
+    return state
+
+
+def test_resealed_across_contract_fixture_compares(tmp_path):
+    state = _across_state(tmp_path)
+    before, after = ACROSS_PAIR
+    result = CliRunner().invoke(
+        app, ["--state", str(state), "evidence", "compare", before, after, "--across-contracts"]
+    )
+    assert result.exit_code == 0, result.output
+
+
+@pytest.mark.parametrize("output", list(OUTPUTS))
+@pytest.mark.parametrize("damage", list(MISSING_FIELDS))
+def test_resealed_across_record_missing_fields_is_refused_without_traceback(
+    tmp_path, monkeypatch, damage, output
+):
+    monkeypatch.chdir(tmp_path)
+    state = _across_state(tmp_path, damage)
+    before, after = ACROSS_PAIR
+    args = ["evidence", "compare", before, after, "--across-contracts", *OUTPUTS[output]]
+    result = CliRunner().invoke(app, ["--state", str(state), *args])
+    assert result.exit_code == 2, result.output
+    assert isinstance(result.exception, SystemExit), repr(result.exception)

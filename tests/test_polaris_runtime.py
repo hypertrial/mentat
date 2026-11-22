@@ -568,3 +568,65 @@ def test_polaris_trusted_chat_relay_validates_and_records_decisions(tmp_path, mo
     assert evidence.read_json(state_dir / "acceptances" / f"{run_id}.json")["decision_source"] == "unverified_agent_relay"
     (state_dir / "runs" / run_id / "report.md").write_text("tampered")
     assert runner.invoke(app, prefix + ["accept", run_id, "--trusted-chat-approval"]).exit_code != 0
+
+
+@pytest.mark.parametrize(
+    "export",
+    [b"catalogs: !!timestamp x\n", b"catalogs: !!int ''\n", b"catalogs: !!bool x\n"],
+)
+def test_export_with_tagged_scalar_is_refused_as_value_error(export):
+    with pytest.raises(ValueError):
+        oracle.validate_export(export, ())
+
+
+def test_verify_reports_tagged_scalar_export_as_violation(tmp_path, monkeypatch, candidate, runtime):
+    from mentat.showcases.polaris import cli
+
+    spec = load_spec(PACK / "contract.json")
+    fixture = load_cases(PACK / "public.json", spec)[0]
+    export = (
+        b"catalogs:\n- name: mentat\n  storage_type: file\n"
+        b"  default_base_location: file:///tmp/mentat-catalog/\n"
+        b"  allowed_locations: [file:///tmp/mentat-catalog/]\n  namespaces:\n"
+        b"  - name: !!timestamp x\n"
+    )
+    source = json.dumps({"catalog_exists": True, "namespaces": [
+        {"path": list(n.path), "properties": n.properties} for n in fixture.namespaces]}).encode()
+    inner = replay_docker("none", 0, False)
+
+    def docker(context, *args, **kwargs):
+        code, output = inner(context, *args, **kwargs)
+        if args[0] == "start" and args[1] == "-a":
+            if "candidate-0-export" in args[-1]:
+                return code, export
+            if "oracle-0-read" in args[-1]:
+                return code, source
+        return code, output
+
+    monkeypatch.setattr(cli, "contract_inputs", lambda ctx: (spec, "fingerprint"))
+    monkeypatch.setattr(cli.model_evidence, "pack_digest", lambda spec: "fingerprint")
+    monkeypatch.setattr(cli.model_evidence, "approval", lambda *args: {})
+    monkeypatch.setattr(cli, "run_formal", lambda *args: [
+        {"status": "pass", "kind": "z3", "detail": "verified"}
+    ])
+    monkeypatch.setattr(cli, "candidate_repo", lambda repo, state: repo)
+    monkeypatch.setattr(cli, "snapshot", lambda *args: candidate)
+    monkeypatch.setattr(cli, "load_cases", lambda *args: [fixture])
+    monkeypatch.setattr(docker_runtime, "_docker", docker)
+    monkeypatch.setattr(cli, "run_case", docker_runtime.run_case)
+    monkeypatch.setattr(docker_runtime, "run_pytest", lambda *args, **kwargs: {
+        "status": "incomplete", "checks": []
+    })
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    state = tmp_path / "state"
+    result = CliRunner().invoke(
+        app,
+        ["--state", str(state), "showcase", "polaris", "verify", "--repo", str(repo),
+         "--rev", candidate.revision, "--json"],
+    )
+    assert isinstance(result.exception, SystemExit), repr(result.exception)
+    assert result.exit_code == 1, result.output
+    assert json.loads(result.output)["status"] == "violation"
+    assert "Candidate export was invalid or unsafe" in result.output
+    assert len(list((state / "runs").iterdir())) == 1

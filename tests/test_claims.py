@@ -546,3 +546,18 @@ def test_grouped_multiline_bullets_stay_single_paragraphs(project_repo):
     assert "- Only recorded cases. Gaps remain.\n" in text
     assert "- Only synthetic cases. Production is excluded.\n" in text
     assert "- Assumption Given a valid input. The clock is fixed.\n" in text
+
+
+@pytest.mark.parametrize(
+    "statement",
+    ["Approved by security review\n=", "Returns:\n\n    a*b + c_d", "Intro line\n\n\ta*b"],
+)
+def test_rendered_statement_stays_paragraph_text(project_repo, statement):
+    repo, _, manifest = project_repo
+    manifest["claims"][0]["statement"] = statement
+    write_contract(repo, manifest)
+    assert invoke(repo, "render").exit_code == 0
+    tokens = MarkdownIt("commonmark").parse((repo / ".mentat/claims.md").read_text())
+    assert [t.type for t in tokens if t.type in {"code_block", "fence"}] == []
+    # Only the document title and the claim heading may be headings.
+    assert [t.tag for t in tokens if t.type == "heading_open"] == ["h1", "h2"]

@@ -808,3 +808,25 @@ def test_host_environment_appears_in_review_claims(trial, grouped):
     manifest["behavior"][0]["host_environment"] = ["SCOPED_CONFIG"]
     base = save(repo, manifest)
     assert "SCOPED_CONFIG" in render_claims(load_project(repo, base, "host").contract).decode()
+
+
+@pytest.mark.parametrize("xdg", ["", "relative/state", "absolute"])
+def test_state_home_follows_only_an_absolute_xdg_value(trial, tmp_path, monkeypatch, xdg):
+    repo, manifest = trial
+    base = save(repo, manifest)
+    home, cwd = tmp_path / "home", tmp_path / "cwd"
+    home.mkdir()
+    cwd.mkdir()
+    absolute = tmp_path / "xdg-state"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("XDG_STATE_HOME", str(absolute) if xdg == "absolute" else xdg)
+    monkeypatch.chdir(cwd)
+    checked = CliRunner().invoke(cli.app, ["spec", "check", *scope(repo, base), "--json"])
+    assert checked.exit_code == 0, checked.output
+    digest = json.loads(checked.output)["contract_digest"]
+    monkeypatch.setattr(cli, "operator_confirm", lambda _: None)
+    approved = CliRunner().invoke(cli.app, ["spec", "approve", digest, *scope(repo, base)])
+    assert approved.exit_code == 0, approved.output
+    state = absolute if xdg == "absolute" else home / ".local/state"
+    assert (state / "mentat/approvals" / f"{digest}.json").is_file()
+    assert list(cwd.iterdir()) == []

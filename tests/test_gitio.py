@@ -4,7 +4,7 @@ import subprocess
 import time
 
 import pytest
-from helpers import git
+from helpers import cat_object, git, replaced_loose_object
 
 from mentat import evidence, gitio, project
 
@@ -148,3 +148,55 @@ def test_ls_tree_kills_child_at_the_deadline(tmp_path, fake_git):
     # Without the kill the call would only return when the 30 second sleep ends.
     assert time.monotonic() - started < 15
     _assert_reaped(pidfile)
+
+
+@pytest.fixture(scope="module")
+def object_repos(tmp_path_factory):
+    repos = {}
+    for object_format in ("sha1", "sha256"):
+        root = tmp_path_factory.mktemp(object_format)
+        args = ["--object-format=sha256"] if object_format == "sha256" else []
+        git(root, "init", "-q", *args)
+        git(root, "config", "user.name", "Test")
+        git(root, "config", "user.email", "test@example.test")
+        (root / "a.txt").write_bytes(b"alpha\n")
+        (root / "dir").mkdir()
+        (root / "dir/b.py").write_bytes(b"print(1)\n")
+        git(root, "add", ".")
+        git(root, "commit", "-qm", "base")
+        repos[object_format] = (root, git(root, "rev-parse", "HEAD"))
+    return repos
+
+
+def _substituted_object(root, revision, target):
+    """Return (object ID, object type, same-length content) for a substituted copy of one object."""
+    if target == "commit":
+        raw = cat_object(root, "commit", revision)
+        return revision, "commit", raw.replace(b"\n\nbase\n", b"\n\nchanged\n", 1)
+    if target == "tree":
+        oid = git(root, "rev-parse", f"{revision}:dir")
+        return oid, "tree", cat_object(root, "tree", oid).replace(b"b.py", b"c.py", 1)
+    return git(root, "rev-parse", f"{revision}:a.txt"), "blob", b"omega\n"
+
+
+@pytest.mark.parametrize(
+    ("object_format", "target"),
+    [("sha1", "blob"), ("sha1", "tree"), ("sha1", "commit"), ("sha256", "blob")],
+)
+def test_snapshot_refuses_loose_object_whose_content_does_not_match_its_id(
+    object_repos, object_format, target
+):
+    root, revision = object_repos[object_format]
+    oid, kind, substituted = _substituted_object(root, revision, target)
+    with replaced_loose_object(root, oid, kind, substituted):
+        with pytest.raises(ValueError, match="integrity"):
+            project.snapshot(root, revision)
+
+
+@pytest.mark.parametrize("object_format", ["sha1", "sha256"])
+def test_unmodified_snapshot_matches_committed_bytes(object_repos, object_format):
+    root, revision = object_repos[object_format]
+    snapshot = project.snapshot(root, revision)
+    assert snapshot.files == (
+        {"a.txt": (0o644, b"alpha\n"), "dir/b.py": (0o644, b"print(1)\n")}
+    )
