@@ -43,8 +43,17 @@ def validate_export(raw: bytes, selected_properties: tuple[str, ...]) -> dict:
         ):
             raise ValueError("YAML anchors and aliases are forbidden")
         data = yaml.load(text, Loader=_UniqueLoader)
-    # Tagged scalars make PyYAML raise types beyond YAMLError (AttributeError, KeyError, ...).
-    except Exception as exc:
+    # PyYAML raises AttributeError/KeyError/IndexError on malformed tagged nodes.
+    except (
+        yaml.YAMLError,
+        UnicodeError,
+        ValueError,
+        TypeError,
+        AttributeError,
+        KeyError,
+        IndexError,
+        RecursionError,
+    ) as exc:
         raise ValueError("invalid YAML export") from exc
     if not isinstance(data, dict) or set(data) - {"principals", "principal_roles", "catalogs"}:
         raise ValueError("unsupported export scope")
