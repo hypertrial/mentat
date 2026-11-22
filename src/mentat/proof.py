@@ -320,6 +320,7 @@ def _publish_entry(temporary, entry, raw):
 
 
 def _append(path, ledger, item):
+    """Append one ledger entry. Callers must hold proof-build.lock; the replace fallback relies on it."""
     item = {**item, "previous": _hash(_json(ledger[-1])) if ledger else "0" * 64}
     raw = _json(item)
     entries = path / "entries"
@@ -689,11 +690,12 @@ def check(state: Path, campaign_id: str, submission: Path) -> dict:
     with _lock(path / "ledger.lock"):
         path, manifest = _campaign(state, campaign_id)
         solutions = _submissions(submission, set(manifest["targets"]))
-        project, _ = _current(state, manifest)
-        ledger = _ledger(path)
         targets = {target["id"]: target for target in manifest["all_targets"]}
         outcomes = []
         with _lock(state / "proof-build.lock", blocking=False), _host_lock():
+            # Appends happen only under proof-build, so the chain and inputs are read here, not earlier.
+            path, ledger = _rebind(state, campaign_id, manifest)
+            project, _ = _current(state, manifest)
             carried = _carried(state, path, manifest)
             for target_id, solution in solutions.items():
                 target = targets[target_id]
@@ -720,6 +722,14 @@ def check(state: Path, campaign_id: str, submission: Path) -> dict:
             "blockers": [],
             "usage": "unavailable",
         }
+
+
+def _rebind(state, campaign_id, manifest):
+    # Callers hold proof-build.lock, so the manifest and chain read here cannot be appended under them.
+    path, current = _campaign(state, campaign_id)
+    if _json(current) != _json(manifest):
+        raise ValueError("Proof campaign does not match this verification")
+    return path, _ledger(path)
 
 
 def _bound_recheck(state, project, candidate, approval, campaign_id):
@@ -758,14 +768,14 @@ def recheck(state: Path, project, candidate, approval: dict, campaign_ids: list[
         bound.append((campaign_id, manifest))
     results, artifacts = [], {}
     with _lock(state / "proof-build.lock", blocking=False), _host_lock():
-        # Under the build locks every ledger append in this state is serialized, so the chains read
-        # here are current. Campaigns are re-bound and re-read before the first write.
+        # Inputs are re-checked after the locks and before the first write, so an approval or
+        # contract changed since pass 1 writes nothing. Each campaign's current inputs are not
+        # re-run here: _current's checker identity is costly and pass 1 has just checked it.
+        _fresh(state, project, candidate, approval)
         snapshots = []
         for campaign_id, manifest in bound:
-            path, current = _campaign(state, campaign_id)
-            if _json(current) != _json(manifest):
-                raise ValueError("Proof campaign does not match this verification")
-            snapshots.append((campaign_id, path, manifest, _ledger(path)))
+            path, ledger = _rebind(state, campaign_id, manifest)
+            snapshots.append((campaign_id, path, manifest, ledger))
         for campaign_id, path, manifest, ledger in snapshots:
             targets = {item["id"]: item for item in manifest["all_targets"]}
             for target_id in manifest["targets"]:
