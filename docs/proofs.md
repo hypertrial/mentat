@@ -27,7 +27,7 @@ incomplete result. Mentat does not alter the machine's security policy.
 On a fresh Ubuntu machine, `bash scripts/install-proof-checker` installs the
 distribution tools and the checksum-pinned official Linux archive. It refuses to
 replace an existing toolchain and makes no AppArmor or sysctl changes by default.
-The existing Ubuntu CI and Linux release jobs explicitly use `--ci-profile` to
+The Ubuntu CI job and the Linux release job explicitly use `--ci-profile` to
 load a checksum-pinned upstream bubblewrap profile on their disposable runners.
 It refuses existing policy or local overrides, verifies enforcement, and preserves
 the global namespace restriction. The profile permits bubblewrap setup and denies

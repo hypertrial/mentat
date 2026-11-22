@@ -1,6 +1,6 @@
 # Contributing to Mentat
 
-Use Python 3.12, uv, Git, and Node.js 26.10.0. To reproduce the required Linux check, run these commands from the checkout.
+Use Python 3.12, uv, Git, and Node.js 26.10.0. Run the full gate from the checkout before every push; the required CI check does not run it.
 
 ```sh
 uv sync --locked --extra polaris
@@ -11,7 +11,9 @@ scripts/verify
 
 The gate also lints with ruff's bugbear (`B`) and pyupgrade (`UP`) groups and type-checks `src/mentat` with pyright in basic mode (`showcases/` is excluded for now). `tests/test_static_checks.py` runs pyright once; pyright and its Node engine come from the `dev` group (`pyright[nodejs]`), so the check runs offline after `uv sync`. Keep `# noqa` and `# pyright: ignore[rule]` comments narrow, naming the rule, with a short reason. Pyright reports stale ignores as errors.
 
-Expect the Lean tests and the opt-in Nano ID and Iceberg Go upstream replays to skip when their prerequisites are absent. The required check runs on pull requests and pushes to `main`.
+Expect the Lean tests and the opt-in Nano ID and Iceberg Go upstream replays to skip when their prerequisites are absent, and the real proof-checker fixtures to skip outside Linux.
+
+The required check, **Mentat checks**, runs on pull requests and pushes to `main`. To keep it fast it runs only `scripts/verify-fast` and the Linux proof-checker fixtures (`tests/test_proof_checker.py`, with missing prerequisites failing instead of skipping). Everything else is covered by your local `scripts/verify` run, so report that run in the pull request.
 
 Before publishing a release, run the **Release verification** workflow manually on the release candidate. It runs the full suite and checks the built wheel and source distribution on Linux and Apple Silicon macOS. It provisions Lean 4.31.0, Go, and both upstream mirrors, and fails if any tests skip.
 
@@ -36,7 +38,7 @@ uv run --locked --no-sync python scripts/benchmark_openspec.py
 It creates temporary committed fixtures with 1, 32, and 128 capabilities,
 checks the generated drafts, and reports Git blob-reading subprocess counts
 and timings after one warm-up and five measured runs. Compare revisions with
-the same interpreter and fixtures. CI checks results and subprocess counts;
+the same interpreter and fixtures. The test suite checks results and subprocess counts;
 elapsed times are diagnostic, without a timing threshold.
 
 For runtime phase timings, run an existing Mentat command through the developer
