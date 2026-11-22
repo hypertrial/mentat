@@ -4,6 +4,8 @@ import os
 import shutil
 import stat
 import subprocess
+from collections.abc import Iterator
+from contextlib import contextmanager
 from importlib.metadata import version
 from pathlib import Path
 from typing import Annotated, Literal
@@ -63,9 +65,10 @@ def configure(
         str | None, typer.Option("--docker-context", envvar="MENTAT_DOCKER_CONTEXT")
     ] = None,
 ) -> None:
+    xdg_state = Path(os.environ.get("XDG_STATE_HOME", ""))
     ctx.obj = {
         "state": state
-        or Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "mentat",
+        or (xdg_state if xdg_state.is_absolute() else Path.home() / ".local/state") / "mentat",
         "docker": docker_context,
     }
 
@@ -118,6 +121,23 @@ def _displayed_approval(ctx: typer.Context, project: Project) -> dict:
 
 def _error(exc: Exception, output_json: bool) -> None:
     finish({"schema_version": 2, "status": "incomplete", "detail": str(exc)}, output_json)
+
+
+@contextmanager
+def _saved_record() -> Iterator[None]:
+    """Refuse a saved record whose shape breaks a read or a field access, naming no field."""
+    try:
+        yield
+    except (KeyError, TypeError, AttributeError) as exc:
+        raise ValueError("Invalid saved verification record") from exc
+
+
+def _saved_run(state: Path, run_id: str) -> tuple[Path, dict]:
+    """Read a saved run and validate its record before any field is used."""
+    with _saved_record():
+        bundle, record = evidence.read_run(state, run_id)
+        evidence.validate_run_record(record)
+    return bundle, record
 
 
 def _summary(project: Project, against: str | None = None) -> dict:
@@ -407,8 +427,8 @@ def export_evidence(
 ) -> None:
     """Check a run's local integrity and optionally copy its bundle."""
     try:
-        state = evidence.state_directory(ctx.obj["state"])
-        bundle, record = evidence.read_run(state, run_id)
+        state = evidence.state_directory(ctx.obj["state"], create=False)
+        bundle, record = _saved_run(state, run_id)
         if output is not None:
             bundle = Path(shutil.copytree(bundle, output))
         result = {
@@ -422,7 +442,7 @@ def export_evidence(
         emit(result, output_json)
         if not output_json and "source_qualification_status" in record:
             typer.echo(f"Source qualification  {record['source_qualification_status']}")
-    except (*_USER_ERRORS, KeyError) as exc:
+    except _USER_ERRORS as exc:
         _error(exc, output_json)
 
 
@@ -459,6 +479,8 @@ def compare_evidence(
 
     try:
         state = evidence.state_directory(ctx.obj["state"], create=False)
+        _saved_run(state, before_run)
+        _saved_run(state, after_run)
         result = evidence.compare_runs(
             state, before_run, after_run, across_contracts=across_contracts
         )
@@ -474,55 +496,57 @@ def compare_evidence(
                 "status": "pass",
                 "report": str(output),
             }
+        if not output_json:
+            if "report" in result:
+                typer.echo(f"Report written to {result['report']}")
+            for side in ("before", "after"):
+                run = result[side]
+                typer.echo(
+                    f"{side.title()}  {run['revision']}  {run['status']}  (run {run['run_id']})"
+                )
+                if "source_qualification_status" in run:
+                    typer.echo(f"  Source qualification  {run['source_qualification_status']}")
+                if across_contracts:
+                    typer.echo(f"  Base {run['base']}  Approval {run['contract_digest']}")
+                typer.echo(f"  Report  {run['report']}")
+                if run["behavior_skipped"]:
+                    typer.echo("  Behavior skipped because formal checks did not pass.")
+            if result["environment_changed"]:
+                typer.echo("Recorded tools or runner metadata differ between the runs.")
+            if across_contracts:
+                typer.echo("Contract history review")
+                for key, value in result["input_changes"].items():
+                    typer.echo(f"  {key.replace('_', ' ')}  {value}")
+                for claim in result["claims"]:
+                    typer.echo(f"Claim {claim['id']}  Definition {claim['definition']}")
+                    for side in ("before", "after"):
+                        item = claim[side]
+                        if item is None:
+                            typer.echo(f"  {side}  absent")
+                            continue
+                        typer.echo(f"  {side}  {visible_text(item['statement'])}")
+                        for check in item["checks"]:
+                            typer.echo(f"    {check['kind']} {check['id']}  {check['status']}")
+                finish(result, False)
+                return
+            for claim in result["claims"]:
+                typer.echo(f"Claim {claim['id']}  {visible_text(claim['statement'])}")
+                for check in claim["checks"]:
+                    typer.echo(
+                        f"  {check['kind']} {check['id']}  "
+                        f"{check['before']['status']} -> {check['after']['status']}"
+                    )
+                    for side in ("before", "after"):
+                        bundle = Path(result[side]["bundle"])
+                        for group in ("artifacts", "logs"):
+                            for name, filename in check[side].get(group, {}).items():
+                                typer.echo(f"    {side} {name}  {bundle / filename}")
     except _USER_ERRORS as exc:
         _error(exc, output_json)
         return
-    except (KeyError, TypeError):
+    except (KeyError, TypeError, AttributeError):
         _error(ValueError("Invalid saved verification record"), output_json)
         return
-    if not output_json:
-        if "report" in result:
-            typer.echo(f"Report written to {result['report']}")
-        for side in ("before", "after"):
-            run = result[side]
-            typer.echo(f"{side.title()}  {run['revision']}  {run['status']}  (run {run['run_id']})")
-            if "source_qualification_status" in run:
-                typer.echo(f"  Source qualification  {run['source_qualification_status']}")
-            if across_contracts:
-                typer.echo(f"  Base {run['base']}  Approval {run['contract_digest']}")
-            typer.echo(f"  Report  {run['report']}")
-            if run["behavior_skipped"]:
-                typer.echo("  Behavior skipped because formal checks did not pass.")
-        if result["environment_changed"]:
-            typer.echo("Recorded tools or runner metadata differ between the runs.")
-        if across_contracts:
-            typer.echo("Contract history review")
-            for key, value in result["input_changes"].items():
-                typer.echo(f"  {key.replace('_', ' ')}  {value}")
-            for claim in result["claims"]:
-                typer.echo(f"Claim {claim['id']}  Definition {claim['definition']}")
-                for side in ("before", "after"):
-                    item = claim[side]
-                    if item is None:
-                        typer.echo(f"  {side}  absent")
-                        continue
-                    typer.echo(f"  {side}  {visible_text(item['statement'])}")
-                    for check in item["checks"]:
-                        typer.echo(f"    {check['kind']} {check['id']}  {check['status']}")
-            finish(result, False)
-            return
-        for claim in result["claims"]:
-            typer.echo(f"Claim {claim['id']}  {visible_text(claim['statement'])}")
-            for check in claim["checks"]:
-                typer.echo(
-                    f"  {check['kind']} {check['id']}  "
-                    f"{check['before']['status']} -> {check['after']['status']}"
-                )
-                for side in ("before", "after"):
-                    bundle = Path(result[side]["bundle"])
-                    for group in ("artifacts", "logs"):
-                        for name, filename in check[side].get(group, {}).items():
-                            typer.echo(f"    {side} {name}  {bundle / filename}")
     finish(result, output_json)
 
 
@@ -543,9 +567,10 @@ def summarize_pr(
 
     try:
         state = evidence.state_directory(ctx.obj["state"], create=False)
-        _, record, digest = evidence.read_run_snapshot(state, run_id)
-        evidence.validate_run_record(record)
-        claim_groups(record)
+        with _saved_record():
+            _, record, digest = evidence.read_run_snapshot(state, run_id)
+            evidence.validate_run_record(record)
+            claim_groups(record)
         typer.echo(
             pr_summary(
                 record, head, report_url, acceptance_status(state, record, digest), ci_status
@@ -588,7 +613,7 @@ def accept(
         project = load_project(repo, base, runner)
         state = _state(ctx, project)
         approved = _approval(state, project)
-        _, record = evidence.read_run(state, run_id)
+        _, record = _saved_run(state, run_id)
         if not _acceptable(project, approved, record):
             raise _refusal(record)
         receipt = (state / "receipts" / run_id).read_text()
@@ -596,7 +621,7 @@ def accept(
             operator_confirm(f"Accept candidate {record['revision']} from run {run_id}?")
         if load_project(repo, base, runner).fingerprint != project.fingerprint:
             raise ValueError("Contract changed during acceptance")
-        _, record = evidence.read_run(state, run_id)
+        _, record = _saved_run(state, run_id)
         if not _acceptable(project, approved, record):
             raise _refusal(record)
         if (state / "receipts" / run_id).read_text() != receipt or _approval(
@@ -617,5 +642,5 @@ def accept(
             ),
         )
         finish({"status": "pass", "run_id": run_id}, False)
-    except (*_USER_ERRORS, KeyError) as exc:
+    except _USER_ERRORS as exc:
         _error(exc, False)
