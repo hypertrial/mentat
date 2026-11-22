@@ -7,7 +7,7 @@ import json
 import os
 import shutil
 import sys
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -393,8 +393,34 @@ def test_partial_submission_and_overlapping_campaigns(campaign):
     assert result["status"] == "pass" and [entry["id"] for entry in result["targets"]] == ["first"]
     checks, _ = proof.recheck(c.state, c.project, c.candidate, c.approval, [first])
     assert {item["id"]: item["status"] for item in checks} == {"first": "pass", "second": "incomplete"}
+    before = proof._ledger(c.state / "proof-campaigns" / first)
     with pytest.raises(ValueError, match="overlap"):
         proof.recheck(c.state, c.project, c.candidate, c.approval, [first, second])
+    # The refusal is found before any campaign writes, so the first campaign gained no records.
+    assert proof._ledger(c.state / "proof-campaigns" / first) == before
+
+
+def test_recheck_writes_nothing_when_the_host_lock_is_taken_mid_run(campaign, monkeypatch):
+    c = campaign
+    first, _ = c.prepare("task-first", targets=["first"])
+    second, _ = c.prepare("task-second", targets=["second"])
+    assert proof.check(c.state, first, c.submission("a", "first"))["status"] == "pass"
+    assert proof.check(c.state, second, c.submission("b", "second"))["status"] == "pass"
+    path = c.state / "proof-campaigns" / first
+    before = proof._ledger(path)
+    original, taken = proof._campaign, []
+
+    def taken_mid_run(state, campaign_id):
+        # Another checker takes the host lock when the second campaign is first reached.
+        if campaign_id == second and not taken:
+            taken.append(stack.enter_context(_held_host_checker_lock()))
+        return original(state, campaign_id)
+
+    with ExitStack() as stack:
+        monkeypatch.setattr(proof, "_campaign", taken_mid_run)
+        with pytest.raises(ValueError, match="running"):
+            proof.recheck(c.state, c.project, c.candidate, c.approval, [first, second])
+    assert proof._ledger(path) == before
 
 
 def test_round_limit_persists_when_campaign_is_reopened(campaign):
@@ -1138,7 +1164,7 @@ def test_held_host_checker_lock_refuses_without_recording(campaign, monkeypatch,
     assert proof.check(c.state, ident, submission)["status"] == "pass"
 
 
-@pytest.mark.parametrize("damage", ["interrupted-entry-write", "leftover-temp-entry"])
+@pytest.mark.parametrize("damage", ["interrupted-entry-write", "leftover-temp-entry", "zero-length-entry"])
 def test_crashed_ledger_entry_does_not_block_its_campaign_or_siblings(campaign, monkeypatch, damage):
     c = campaign
     ident, _ = c.prepare("task", targets=["first"])
@@ -1161,10 +1187,29 @@ def test_crashed_ledger_entry_does_not_block_its_campaign_or_siblings(campaign, 
                 proof.check(c.state, ident, submission)
             except OSError:
                 pass
-    else:
+    elif damage == "leftover-temp-entry":
         (entries / "partial.tmp").touch()
+    else:
+        # The earlier writer's torn append: a hash-named file that is empty.
+        (entries / f"{hashlib.sha256(b'torn').hexdigest()}.json").touch()
     assert proof.check(c.state, ident, submission)["status"] == "pass"
     assert proof.check(c.state, sibling, sibling_submission)["status"] == "pass"
+
+
+def test_append_without_hard_links_publishes_the_entry(campaign, monkeypatch):
+    c = campaign
+    ident, _ = c.prepare(targets=["first"])
+    submission = c.submission("submission", "first")
+
+    def no_links(*args, **kwargs):
+        raise PermissionError(errno.EPERM, "hard links are not supported")
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(proof.os, "link", no_links)
+        assert proof.check(c.state, ident, submission)["status"] == "pass"
+    path = c.state / "proof-campaigns" / ident
+    assert [entry["kind"] for entry in proof._ledger(path)] == ["reserve", "complete"]
+    assert not list((path / "entries").glob(".entry-*"))
 
 
 def test_ledger_append_is_idempotent_and_never_overwrites(campaign):
