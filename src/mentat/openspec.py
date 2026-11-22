@@ -3,13 +3,20 @@
 import hashlib
 import subprocess
 import time
-from contextlib import closing
 from itertools import pairwise
 from pathlib import Path
 
 from markdown_it import MarkdownIt
 
-from .gitio import MAX_FILES, MAX_TOTAL, ls_tree, read_blobs, repo_root, verify_revision
+from .gitio import (
+    MAX_FILES,
+    MAX_TOTAL,
+    ls_tree,
+    read_blobs,
+    repo_root,
+    verify_listing,
+    verify_revision,
+)
 from .project import safe_git_path
 
 
@@ -30,32 +37,32 @@ def import_spec(repo: Path, base: str) -> dict:
         if len(diagnostics) < MAX_FILES:
             diagnostics.append({"path": path, "line": line, "detail": detail})
 
-    with closing(
-        ls_tree(root, revision, "-rtz", [b":(literal)openspec/specs"], deadline)
-    ) as records:
-        for record in records:
-            meta, raw_path = record.split(b"\t", 1)
-            mode, kind, oid = meta.split(b" ")
-            linked = mode in (b"120000", b"160000")
-            is_spec = raw_path.endswith(b"/spec.md")
-            if not (linked or is_spec or (raw_path == b"openspec/specs" and kind != b"tree")):
-                continue
-            try:
-                path = safe_git_path(raw_path)
-            except ValueError:
-                diagnostic(raw_path.decode("utf-8", "backslashreplace"), 1, "unsafe spec path")
-                continue
-            if (
-                len(raw_path.split(b"/")) < 4
-                or mode not in (b"100644", b"100755")
-                or kind != b"blob"
-            ):
-                diagnostic(path, 1, "unsupported spec entry")
-                continue
-            if len(entries) >= MAX_FILES:
-                diagnostic(path, 1, "too many spec files")
-                break
-            entries[path] = (int(mode, 8) & 0o777, oid)
+    records = list(ls_tree(root, revision, "-rtz", [b":(literal)openspec/specs"], deadline))
+    # Only listed paths whose records match the committed trees may appear in citations.
+    verify_listing(root, revision, records, {b"openspec/specs"})
+    for record in records:
+        meta, raw_path = record.split(b"\t", 1)
+        mode, kind, oid = meta.split(b" ")
+        linked = mode in (b"120000", b"160000")
+        is_spec = raw_path.endswith(b"/spec.md")
+        if not (linked or is_spec or (raw_path == b"openspec/specs" and kind != b"tree")):
+            continue
+        try:
+            path = safe_git_path(raw_path)
+        except ValueError:
+            diagnostic(raw_path.decode("utf-8", "backslashreplace"), 1, "unsafe spec path")
+            continue
+        if (
+            len(raw_path.split(b"/")) < 4
+            or mode not in (b"100644", b"100755")
+            or kind != b"blob"
+        ):
+            diagnostic(path, 1, "unsupported spec entry")
+            continue
+        if len(entries) >= MAX_FILES:
+            diagnostic(path, 1, "too many spec files")
+            break
+        entries[path] = (int(mode, 8) & 0o777, oid)
 
     if not entries and not diagnostics:
         diagnostic("openspec/specs", 1, "no capability specs found")
