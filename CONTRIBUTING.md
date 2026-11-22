@@ -13,7 +13,7 @@ The gate also lints with ruff's bugbear (`B`) and pyupgrade (`UP`) groups and ty
 
 Expect the Lean tests and the opt-in Nano ID and Iceberg Go upstream replays to skip when their prerequisites are absent, and the real proof-checker fixtures to skip outside Linux.
 
-The required check, **Mentat checks**, runs on pull requests and pushes to `main`. To keep it fast it runs only `scripts/verify-fast` and the Linux proof-checker fixtures (`tests/test_proof_checker.py`, with missing prerequisites failing instead of skipping). Everything else is covered by your local `scripts/verify` run, so report that run in the pull request.
+The required check, **Mentat checks**, runs on pull requests and pushes to `main`. To keep it fast it runs only `scripts/verify-fast` and the Linux proof-checker fixtures (`tests/test_proof_checker.py`, with missing prerequisites failing instead of skipping). Those fixtures take about five minutes, so a pull request runs them only when it changes `proof_checker.py`, `proof_lean.py`, `canonical.py`, their test, the installer, the CI workflow, `pyproject.toml` or `uv.lock`; every push to `main` runs them. Everything else is covered by your local `scripts/verify` run, so report that run in the pull request.
 
 Before publishing a release, run the **Release verification** workflow manually on the release candidate. It runs the full suite and checks the built wheel and source distribution on Linux and Apple Silicon macOS. It provisions Lean 4.31.0, Go, and both upstream mirrors, and fails if any tests skip.
 
