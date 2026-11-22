@@ -126,3 +126,10 @@ def test_declaration_added_with_kernel_check_skipped_cannot_pass(lean_tools):
     assert result["status"] == "incomplete", result
     control = audit("theorem t : True := True.intro\n", "t", lean_tools)
     assert control["status"] == "pass", control
+
+
+def test_missing_leanchecker_is_incomplete(lean_tools, tmp_path):
+    tools = {"lean": {**lean_tools["lean"], "executable": str(tmp_path / "lean")}}
+    result = audit("theorem verified : True := trivial\n", "verified", tools)
+    assert result["status"] == "incomplete", result
+    assert "leanchecker" in result["detail"]

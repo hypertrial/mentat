@@ -636,7 +636,8 @@ def lean_audit(root):
         contract=project.contract.model_copy(update={"formal": [check]}),
         files={**project.files, "Model.lean": b"theorem verified : True := trivial"},
     )
-    tools = {"lean": {"version": "4.31.0", "executable": "lean", "libdir": str(root)}}
+    (root / "leanchecker").touch()
+    tools = {"lean": {"version": "4.31.0", "executable": str(root / "lean"), "libdir": str(root)}}
     for theorem, audit, code, status in [
         ("verified", "'verified' does not depend on any axioms", 0, "pass"),
         ("verified", "'verified' depends on axioms: [bad]", 0, "incomplete"),
@@ -646,6 +647,8 @@ def lean_audit(root):
     ]:
 
         def run(args, **kwargs):
+            if str(args[0]).endswith("leanchecker"):
+                return subprocess.CompletedProcess(args, 0, "", "")
             if "--deps" in args:
                 return subprocess.CompletedProcess(args, 0, str(root / "Init.olean"), "")
             if "-o" in args:
