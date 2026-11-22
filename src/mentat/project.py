@@ -4,7 +4,7 @@ import hashlib
 import re
 import time
 import unicodedata
-from collections.abc import Generator, Iterable
+from collections.abc import Iterable
 from contextlib import closing
 from dataclasses import dataclass
 from importlib import metadata
@@ -15,7 +15,16 @@ from urllib.parse import urlsplit
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .canonical import decode_json
-from .gitio import MAX_FILES, MAX_PATH, MAX_TOTAL, ls_tree, read_blobs, repo_root, verify_revision
+from .gitio import (
+    MAX_FILES,
+    MAX_PATH,
+    MAX_TOTAL,
+    ls_tree,
+    read_blobs,
+    repo_root,
+    verify_listing,
+    verify_revision,
+)
 from .project_formal import LEAN_NAME_PATTERN
 
 CHECKS_PREFIX = "{checks}/"
@@ -569,33 +578,39 @@ class Project:
     verifier_digest: str
 
 
-def _tree_records(root: Path, revision: str, *, approved: bool) -> Generator[bytes, None, None]:
+def _tree_records(
+    root: Path, revision: str, *, approved: bool
+) -> tuple[list[bytes], set[bytes], list[bytes] | None]:
+    """Return the recursive records, their scope paths, and the root listing for a candidate."""
     deadline = time.monotonic() + 60
     if approved:
-        yield from ls_tree(root, revision, "-rtz", [b".mentat"], deadline)
-        return
+        return list(ls_tree(root, revision, "-rtz", [b".mentat"], deadline)), {b".mentat"}, None
 
     # ls-tree accepts literal paths but cannot exclude a subtree by pathspec.
-    with closing(ls_tree(root, revision, "-z", [], deadline)) as roots:
-        scope = []
-        size = 0
-        for record in roots:
-            raw_path = record.split(b"\t", 1)[1]
-            if raw_path == b".mentat":
-                continue
-            if b"/" in raw_path:
-                raise ValueError("invalid Git root entry")
-            safe_git_path(raw_path)
-            pathspec = b":(literal)" + raw_path
-            weight = len(pathspec) + 9
-            if size + weight > 32_768:
-                yield from ls_tree(root, revision, "-rtz", scope, deadline)
-                scope = []
-                size = 0
-            scope.append(pathspec)
-            size += weight
-        if scope:
-            yield from ls_tree(root, revision, "-rtz", scope, deadline)
+    roots = list(ls_tree(root, revision, "-z", [], deadline))
+    records = []
+    scopes = set()
+    scope = []
+    size = 0
+    for record in roots:
+        raw_path = record.split(b"\t", 1)[1]
+        if raw_path == b".mentat":
+            continue
+        if b"/" in raw_path:
+            raise ValueError("invalid Git root entry")
+        safe_git_path(raw_path)
+        pathspec = b":(literal)" + raw_path
+        weight = len(pathspec) + 9
+        if size + weight > 32_768:
+            records.extend(ls_tree(root, revision, "-rtz", scope, deadline))
+            scope = []
+            size = 0
+        scope.append(pathspec)
+        scopes.add(raw_path)
+        size += weight
+    if scope:
+        records.extend(ls_tree(root, revision, "-rtz", scope, deadline))
+    return records, scopes, roots
 
 
 def safe_git_path(raw_path: bytes) -> str:
@@ -639,9 +654,9 @@ def _tree_entries(
 
 
 def _tree(root: Path, revision: str, *, approved: bool) -> dict[str, tuple[int, bytes]]:
-    with closing(_tree_records(root, revision, approved=approved)) as listing:
-        entries = _tree_entries(listing, allow_links=not approved)
-    return read_blobs(root, entries)
+    records, scopes, top = _tree_records(root, revision, approved=approved)
+    verify_listing(root, revision, records, scopes, top)
+    return read_blobs(root, _tree_entries(records, allow_links=not approved))
 
 
 def tree_digest(files: dict[str, tuple[int, bytes]]) -> str:
@@ -753,10 +768,11 @@ def snapshot(root: Path, rev: str) -> Snapshot:
 
 
 def _selected_entries(
-    root: Path, revision: str, scope: list[bytes], deadline: float, entries: dict
+    root: Path, revision: str, scope: list[bytes], deadline: float, entries: dict, records: list
 ):
-    with closing(ls_tree(root, revision, "-z", scope, deadline)) as records:
-        for record in records:
+    with closing(ls_tree(root, revision, "-z", scope, deadline)) as listed:
+        for record in listed:
+            records.append(record)
             meta, raw_path = record.split(b"\t", 1)
             mode, kind, oid = meta.split(b" ")
             path = safe_git_path(raw_path)
@@ -779,19 +795,21 @@ def contract_inputs(repo: Path, base: str) -> tuple[Path, str, Contract, dict[st
         if any(path.split("/", 1)[0].casefold() == "base" for path in files):
             raise ValueError(".mentat/base conflicts with base files")
         entries = {}
+        records = []
         deadline = time.monotonic() + 60
         scope = []
         weight = 0
         for path in contract.base_files:
             spec = b":(literal)" + path.encode("utf-8")
             if weight + len(spec) + 9 > 32_768:
-                _selected_entries(root, revision, scope, deadline, entries)
+                _selected_entries(root, revision, scope, deadline, entries, records)
                 scope, weight = [], 0
             scope.append(spec)
             weight += len(spec) + 9
-        _selected_entries(root, revision, scope, deadline, entries)
+        _selected_entries(root, revision, scope, deadline, entries, records)
         if set(entries) != set(contract.base_files):
             raise ValueError("base file is absent or not a regular tracked file")
+        verify_listing(root, revision, records, set())
         selected = read_blobs(root, entries)
         if (
             len(files) + len(selected) > MAX_FILES

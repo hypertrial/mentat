@@ -9,7 +9,7 @@ from mentat import evidence, gitio
 
 from . import docker_runtime
 from .regression import render_regression
-from .replay import MAX_CANDIDATE_FILE, Snapshot, run_case, snapshot
+from .replay import Snapshot, run_case, snapshot
 
 BEFORE = "7bb319e281225b2b63c78f1cbc87726a1c9a7ece"
 FIXED = "ba152c04f7f985bbaeb487a55ef442df52321afe"
@@ -85,14 +85,7 @@ SetupCommand._export_namespaces_for_catalog = _mentat_control
 
 
 def _upstream_test(repo: Path, name: str) -> str:
-    return gitio.run(
-        repo,
-        "show",
-        "--no-textconv",
-        f"{BEFORE}:client/python/tests/{name}",
-        limit=MAX_CANDIDATE_FILE,
-        timeout=10,
-    ).decode()
+    return gitio.read_file(repo, BEFORE, f"client/python/tests/{name}").decode()
 
 
 def _hypothesis(public, keys: tuple[str, ...]) -> str:
