@@ -26,6 +26,7 @@ _ATTEMPT_SECONDS = 120
 _CAMPAIGN_SECONDS = 1800
 _ROUNDS = 3
 _ID = re.compile(r"[0-9a-f]{32}\Z")
+_ENTRY = re.compile(r"[0-9a-f]{64}\.json")
 
 
 def _hash(data):
@@ -107,6 +108,27 @@ def _lock(path, *, blocking=True):
             fcntl.flock(fd, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
         except BlockingIOError as exc:
             raise ValueError("Another proof build is running; retry after it finishes") from exc
+        yield
+    finally:
+        os.close(fd)
+
+
+def _host_lock_path():
+    return Path(tempfile.gettempdir()) / f"mentat-proof-build-{os.getuid()}.lock"
+
+
+@contextmanager
+def _host_lock():
+    # Machine-wide, held by the caller before any reservation is written. Contention records nothing.
+    fd = os.open(_host_lock_path(), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    try:
+        info = os.fstat(fd)
+        if info.st_uid != os.getuid() or not stat.S_ISREG(info.st_mode):
+            raise ValueError("Invalid Linux proof build lock")
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise ValueError("Another protected proof check is running") from exc
         yield
     finally:
         os.close(fd)
@@ -209,6 +231,9 @@ def _ledger(path):
     _directory(directory)
     by_previous = {}
     for entry in directory.iterdir():
+        # Leftover temporary files from an interrupted append are not entries.
+        if not _ENTRY.fullmatch(entry.name):
+            continue
         raw = _regular(entry)
         if entry.name != f"{_hash(raw)}.json":
             raise ValueError("Proof ledger entry failed integrity validation")
@@ -276,12 +301,24 @@ def _ledger(path):
 def _append(path, ledger, item):
     item = {**item, "previous": _hash(_json(ledger[-1])) if ledger else "0" * 64}
     raw = _json(item)
-    entry = path / "entries" / f"{_hash(raw)}.json"
-    fd = os.open(entry, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
-    with os.fdopen(fd, "wb") as stream:
-        stream.write(raw)
-        stream.flush()
-        os.fsync(stream.fileno())
+    entries = path / "entries"
+    entry = entries / f"{_hash(raw)}.json"
+    # Complete the bytes under a temporary name, then link: a crash never leaves a partial entry
+    # under its hash name, and link never replaces an existing entry.
+    fd, temporary = tempfile.mkstemp(dir=entries, prefix=".entry-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(raw)
+            stream.flush()
+            os.fsync(stream.fileno())
+        try:
+            os.link(temporary, entry)
+        except FileExistsError as exc:
+            # The name is the content hash, so an existing entry is the same entry only if its bytes match.
+            if _regular(entry) != raw:
+                raise ValueError("Proof ledger entry conflicts with an existing entry") from exc
+    finally:
+        os.unlink(temporary)
     ledger.append(item)
     evidence.write_record(path / "ledger.json", _json({"length": len(ledger), "head": _hash(raw)}))
 
@@ -321,8 +358,9 @@ def _valid_checker_result(value, identity):
 
 def _task_text(manifest):
     return (
-        "# Approved proof task\n\nEdit only Solution.lean in each requested target directory. "
-        "Submit one or more target directories; all other files are rejected. "
+        "# Approved proof task\n\nEdit only Solution.lean in each requested target directory "
+        "under targets/. Submit a directory containing one or more of those target directories "
+        "(a copy of targets/ is fine); all other files are rejected. "
         "The approved theorem and policy cannot be changed.\n\n"
         "If the approved specification needs amendment, seek separate review and renewed "
         "approval using this template:\n\n- Mismatch or counterexample:\n- Requested change:\n"
@@ -387,7 +425,7 @@ def prepare(state: Path, project, candidate, approval: dict, out: Path, *, targe
     ):
         raise ValueError("Select distinct declared lean-comparator target IDs")
     selected = [item for item in ids if item in selected]
-    with _lock(state / "proof-build.lock", blocking=False):
+    with _lock(state / "proof-build.lock", blocking=False), _host_lock():
         for source, group in groups.items():
             audit = proof_checker.audit_approved(
                 project.files[source],
@@ -442,12 +480,15 @@ def prepare(state: Path, project, candidate, approval: dict, out: Path, *, targe
         tasks_staging = Path(tempfile.mkdtemp(dir=out.parent, prefix=".mentat-tasks-"))
         task_tree = tasks_staging / "tasks"
         task_tree.mkdir(mode=0o700)
+        # Target IDs live in their own folder so they cannot collide with TASK.md or manifest.json.
+        targets_tree = task_tree / "targets"
+        targets_tree.mkdir(mode=0o700)
         receipt_created = False
         campaign_created = False
         try:
             for target in all_targets:
                 if target["id"] in selected:
-                    directory = task_tree / target["id"]
+                    directory = targets_tree / target["id"]
                     directory.mkdir(mode=0o700)
                     evidence.write_record(
                         directory / "Solution.lean", project.files[target["source"]]
@@ -630,7 +671,7 @@ def check(state: Path, campaign_id: str, submission: Path) -> dict:
         ledger = _ledger(path)
         targets = {target["id"]: target for target in manifest["all_targets"]}
         outcomes = []
-        with _lock(state / "proof-build.lock", blocking=False):
+        with _lock(state / "proof-build.lock", blocking=False), _host_lock():
             carried = _carried(state, path, manifest)
             for target_id, solution in solutions.items():
                 target = targets[target_id]
@@ -687,7 +728,7 @@ def recheck(state: Path, project, candidate, approval: dict, campaign_ids: list[
             seen.update(manifest["targets"])
             ledger = _ledger(path)
             targets = {item["id"]: item for item in manifest["all_targets"]}
-            with _lock(state / "proof-build.lock", blocking=False):
+            with _lock(state / "proof-build.lock", blocking=False), _host_lock():
                 for target_id in manifest["targets"]:
                     target = targets[target_id]
                     reserved, finished, _ = _usage(ledger)

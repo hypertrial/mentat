@@ -7,7 +7,6 @@ import json
 import os
 import shutil
 import sys
-import tempfile
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -53,6 +52,8 @@ def _build_campaign(root, patch, param=None, check_argv=None, first="first"):
                            check_submission=check_submission)
     patch.setitem(sys.modules, "mentat.proof_checker", fake)
     patch.setattr(mentat, "proof_checker", fake, raising=False)
+    # Each campaign gets its own host lock file, so xdist workers never contend on the real one.
+    patch.setattr(proof, "_host_lock_path", lambda: root / "host.lock")
     repo = root / "repo"
     repo.mkdir()
     git(repo, "init", "-q")
@@ -123,7 +124,7 @@ def test_prepare_check_recheck_bind_exact_inputs_with_synthetic_checker(campaign
     assert manifest["contract_digest"] == c.project.fingerprint and manifest["verifier_digest"] == c.project.verifier_digest
     assert manifest["approval"] == c.approval and manifest["checker_identity"] == c.identity
     assert manifest["targets"] == ["first"]
-    assert (task / "first" / "Solution.lean").read_bytes() == c.project.files["proof.lean"]
+    assert (task / "targets" / "first" / "Solution.lean").read_bytes() == c.project.files["proof.lean"]
     submitted = c.submission("submission", "first")
     checked = proof.check(c.state, ident, submitted)
     assert checked["status"] == "pass" and checked["targets"][0]["status"] == "accepted"
@@ -1008,11 +1009,11 @@ def test_task_directory_appears_only_after_complete_publication(campaign, tmp_pa
     def inspect_publication(source, destination):
         assert destination == output and not output.exists()
         assert {str(item.relative_to(source)) for item in source.rglob("*") if item.is_file()} == {
-            "TASK.md", "manifest.json", "first/Solution.lean", "second/Solution.lean"
+            "TASK.md", "manifest.json", "targets/first/Solution.lean", "targets/second/Solution.lean"
         }
         result = original_publish(source, destination)
         assert {str(item.relative_to(output)) for item in output.rglob("*") if item.is_file()} == {
-            "TASK.md", "manifest.json", "first/Solution.lean", "second/Solution.lean"
+            "TASK.md", "manifest.json", "targets/first/Solution.lean", "targets/second/Solution.lean"
         }
         return result
 
@@ -1101,17 +1102,12 @@ def test_prepare_failure_cleans_only_its_owned_state(campaign, tmp_path, monkeyp
 @contextmanager
 def _held_host_checker_lock():
     """Hold the host-wide checker lock as a concurrent checker process would."""
-    # The same turn lock as the real-checker tests, so this cannot race them under xdist.
-    turn = Path(tempfile.gettempdir()) / f"mentat-test-proof-checker-{os.getuid()}.lock"
-    lock = Path(tempfile.gettempdir()) / f"mentat-proof-build-{os.getuid()}.lock"
-    with open(turn, "w") as turn_file:
-        fcntl.flock(turn_file, fcntl.LOCK_EX)
-        fd = os.open(lock, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX)
-            yield
-        finally:
-            os.close(fd)
+    fd = os.open(proof._host_lock_path(), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)
 
 
 @pytest.mark.parametrize("mode", ["check", "recheck"])
@@ -1171,9 +1167,27 @@ def test_crashed_ledger_entry_does_not_block_its_campaign_or_siblings(campaign, 
     assert proof.check(c.state, sibling, sibling_submission)["status"] == "pass"
 
 
+def test_ledger_append_is_idempotent_and_never_overwrites(campaign):
+    c = campaign
+    ident, _ = c.prepare(targets=["first"])
+    path = c.state / "proof-campaigns" / ident
+    item = {"kind": "probe"}
+    raw = evidence.json_bytes({**item, "previous": "0" * 64})
+    entry = path / "entries" / f"{hashlib.sha256(raw).hexdigest()}.json"
+    proof._append(path, [], item)
+    assert entry.read_bytes() == raw
+    # Identical bytes name the same entry, so publishing it again is not an error.
+    proof._append(path, [], item)
+    entry.write_bytes(b"tampered")
+    with pytest.raises(ValueError, match="conflicts with an existing entry"):
+        proof._append(path, [], item)
+    assert entry.read_bytes() == b"tampered"
+    assert not list((path / "entries").glob(".entry-*"))
+
+
 @pytest.mark.parametrize("first", ["manifest.json", "TASK.md"])
 def test_formal_check_ids_named_like_task_files_prepare(tmp_path, monkeypatch, first):
     c = _build_campaign(tmp_path, monkeypatch, first=first)
     ident, out = c.prepare(targets=None)
-    assert (out / first).is_dir()
+    assert (out / "targets" / first / "Solution.lean").is_file()
     assert proof.check(c.state, ident, c.submission("submission", first))["status"] == "pass"

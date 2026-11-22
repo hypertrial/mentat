@@ -1,7 +1,6 @@
 """Pinned Linux checker; only trusted data exports leave the source sandboxes."""
 
 import base64
-import fcntl
 import hashlib
 import json
 import os
@@ -347,22 +346,11 @@ def _check(approved, solution, policy, timeout_seconds):
             "policy.json": json.dumps(policy).encode(),
             "driver.py": _DRIVER.encode(),
         }
-        lock_path = Path(tempfile.gettempdir()) / f"mentat-proof-build-{os.getuid()}.lock"
-        fd = os.open(lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
-        try:
-            info = os.fstat(fd)
-            if info.st_uid != os.getuid() or not stat.S_ISREG(info.st_mode):
-                raise ValueError("Invalid Linux proof build lock")
-            try:
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError as exc:
-                raise ValueError("Another protected proof check is running") from exc
-            checked = _service(files, timeout_seconds)
-            if checker_identity() != identity:
-                raise ValueError("Proof checker environment changed during checking")
-            result.update(checked)
-        finally:
-            os.close(fd)
+        # The caller holds the host-wide lock (proof._host_lock); a second flock here would self-block.
+        checked = _service(files, timeout_seconds)
+        if checker_identity() != identity:
+            raise ValueError("Proof checker environment changed during checking")
+        result.update(checked)
     except (OSError, ValueError, UnicodeError, subprocess.SubprocessError) as exc:
         # Source and tool output never become diagnostics on this path.
         result.update(status="incomplete", detail=str(exc), logs={})
