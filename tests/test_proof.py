@@ -1196,6 +1196,27 @@ def test_crashed_ledger_entry_does_not_block_its_campaign_or_siblings(campaign, 
     assert proof.check(c.state, sibling, sibling_submission)["status"] == "pass"
 
 
+def test_recheck_writes_nothing_when_the_approval_is_revoked_after_pass_one(campaign, monkeypatch):
+    c = campaign
+    ident, _ = c.prepare("task", targets=["first"])
+    assert proof.check(c.state, ident, c.submission("ok", "first"))["status"] == "pass"
+    path = c.state / "proof-campaigns" / ident
+    before = proof._ledger(path)
+    original, revoked = proof._lock, []
+
+    def revoke_before_build(lock, **kwargs):
+        # The approval is withdrawn after pass 1 and before the build locks are taken.
+        if lock.name == "proof-build.lock" and not revoked:
+            revoked.append(lock)
+            (c.state / "approvals" / f"{c.project.fingerprint}.json").unlink()
+        return original(lock, **kwargs)
+
+    monkeypatch.setattr(proof, "_lock", revoke_before_build)
+    with pytest.raises(ValueError, match="approval"):
+        proof.recheck(c.state, c.project, c.candidate, c.approval, [ident])
+    assert revoked and proof._ledger(path) == before
+
+
 def test_append_without_hard_links_publishes_the_entry(campaign, monkeypatch):
     c = campaign
     ident, _ = c.prepare(targets=["first"])
