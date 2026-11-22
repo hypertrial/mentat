@@ -111,3 +111,18 @@ def test_driver_unexpected_output_and_failure_are_incomplete(lean_tools, monkeyp
     result = audit("theorem verified : True := trivial\n", "verified", lean_tools)
     assert invoked, "the trusted driver was not run"
     assert result["status"] == "incomplete", result
+
+
+def test_declaration_added_with_kernel_check_skipped_cannot_pass(lean_tools):
+    source = (
+        "import Lean\n"
+        "open Lean Elab Command\n"
+        "set_option debug.skipKernelTC true in\n"
+        "run_cmd liftCoreM do\n"
+        "  addDecl (.thmDecl {name := `t, levelParams := [], type := mkConst ``False, "
+        "value := mkConst ``True.intro})\n"
+    )
+    result = audit(source, "t", lean_tools)
+    assert result["status"] == "incomplete", result
+    control = audit("theorem t : True := True.intro\n", "t", lean_tools)
+    assert control["status"] == "pass", control

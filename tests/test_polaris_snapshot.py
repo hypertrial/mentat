@@ -6,7 +6,7 @@ import subprocess
 from unittest.mock import MagicMock
 
 import pytest
-from helpers import git
+from helpers import cat_object, git, replaced_loose_object
 
 from mentat.showcases.polaris import evaluation, replay
 from mentat.showcases.polaris.cli import candidate_repo
@@ -135,3 +135,46 @@ def test_polaris_git_reads_use_selected_checkout(tmp_path, monkeypatch):
 
     assert candidate_repo(repo, tmp_path / "state") == repo.resolve()
     assert evaluation._upstream_test(repo, baseline.name) == "# Frozen test\n"
+
+
+@pytest.fixture(scope="module")
+def committed_candidate(tmp_path_factory):
+    root = tmp_path_factory.mktemp("candidate")
+    git(root, "init", "-q")
+    git(root, "config", "user.email", "test@example.com")
+    git(root, "config", "user.name", "Test")
+    (root / replay._PREFIX / "command").mkdir(parents=True)
+    (root / replay._PREFIX / "command/setup.py").write_bytes(b"hello\n")
+    (root / replay._PREFIX / "command/extra.py").write_bytes(b"x = 1\n")
+    git(root, "add", ".")
+    git(root, "commit", "-qm", "base")
+    return root, git(root, "rev-parse", "HEAD")
+
+
+def _substituted_object(root, revision, target):
+    """Return (object ID, object type, same-length content) for a substituted copy of one object."""
+    if target == "commit":
+        raw = cat_object(root, "commit", revision)
+        return revision, "commit", raw.replace(b"\n\nbase\n", b"\n\nchanged\n", 1)
+    if target == "tree":
+        oid = git(root, "rev-parse", f"{revision}:{replay._PREFIX}command")
+        return oid, "tree", cat_object(root, "tree", oid).replace(b"extra.py", b"extrb.py", 1)
+    return git(root, "rev-parse", f"{revision}:{replay._PREFIX}command/setup.py"), "blob", b"jello\n"
+
+
+@pytest.mark.parametrize("target", ["blob", "tree", "commit"])
+def test_snapshot_refuses_loose_object_whose_content_does_not_match_its_id(committed_candidate, target):
+    root, revision = committed_candidate
+    oid, kind, content = _substituted_object(root, revision, target)
+    with replaced_loose_object(root, oid, kind, content):
+        with pytest.raises(ValueError, match="integrity"):
+            replay.snapshot(root, revision)
+
+
+def test_unmodified_candidate_snapshot_matches_committed_bytes(committed_candidate):
+    root, revision = committed_candidate
+    snapshot = replay.snapshot(root, revision)
+    assert snapshot.files == (
+        ("command/extra.py", b"x = 1\n"),
+        ("command/setup.py", b"hello\n"),
+    )

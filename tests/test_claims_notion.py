@@ -1,6 +1,13 @@
+import http.client
+
 import pytest
+from helpers import commit
+from typer.testing import CliRunner
 
 from mentat import claims_notion as notion
+from mentat import cli
+
+pytest_plugins = ["test_project"]
 
 PAGE = "41afbf15-6f89-80a5-854a-c5fc7b82e923"
 URL = "https://app.notion.com/p/Mentat-Claims-Spec-41afbf156f8980a5854ac5fc7b82e923"
@@ -686,3 +693,46 @@ def test_grouped_existing_standalone_document_remains_unchanged(monkeypatch):
 
     monkeypatch.setattr(notion, "_request", request)
     assert notion.notion_claims(PAGE, claims, BASE, publish=True)
+
+
+def test_legacy_claim_id_with_trailing_dot_publishes(monkeypatch):
+    claims = CLAIMS.replace(b"## claim.id", b"## 7\\.")
+    contents = notion._START + "\n\n---"
+
+    def request(page_id, payload=None):
+        nonlocal contents
+        if payload:
+            edit = payload["update_content"]["content_updates"][0]
+            assert contents.count(edit["old_str"]) == 1
+            contents = contents.replace(edit["old_str"], edit["new_str"], 1)
+        return contents
+
+    monkeypatch.setattr(notion, "_request", request)
+    assert notion.notion_claims(PAGE, claims, BASE, publish=True)
+    assert "## 7\\." in contents
+    assert notion.notion_claims(PAGE, claims, BASE)
+
+
+class _ReplyRefused:
+    def __init__(self, error):
+        self.error = error
+
+    def open(self, request, timeout=None):
+        raise self.error
+
+
+@pytest.mark.parametrize(
+    "error",
+    [http.client.BadStatusLine("NOT-HTTP reply"), http.client.IncompleteRead(b"{")],
+)
+def test_non_http_notion_reply_is_user_error(project_repo, monkeypatch, error):
+    repo, _, _ = project_repo
+    assert CliRunner().invoke(cli.app, ["claims", "render", "--repo", str(repo)]).exit_code == 0
+    base = commit(repo, "add claims")
+    monkeypatch.setenv("MENTAT_NOTION_TOKEN", "test-token")
+    monkeypatch.setattr(notion, "build_opener", lambda *handlers: _ReplyRefused(error))
+    result = CliRunner().invoke(
+        cli.app, ["claims", "check", "--repo", str(repo), "--base", base, "--notion", PAGE]
+    )
+    assert result.exit_code == 2, result.output
+    assert isinstance(result.exception, SystemExit), repr(result.exception)

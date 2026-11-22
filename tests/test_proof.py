@@ -1,9 +1,14 @@
 """Campaign state tests with a synthetic checker, not Lean acceptance tests."""
 
+import errno
+import fcntl
 import hashlib
 import json
+import os
 import shutil
 import sys
+import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -13,10 +18,11 @@ from typer.testing import CliRunner
 
 import mentat
 from mentat import cli, evidence, proof
+from mentat import proof_checker as real_checker
 from mentat.project import load_project, snapshot
 
 
-def _build_campaign(root, patch, param=None, check_argv=None):
+def _build_campaign(root, patch, param=None, check_argv=None, first="first"):
     identity = {"checker": "synthetic-v1", "version": "4.35.0", "toolchain_sha256": "a" * 64,
                 "bwrap_sha256": "b" * 64, "policy_sha256": "c" * 64}
     outcomes = []
@@ -60,7 +66,7 @@ def _build_campaign(root, patch, param=None, check_argv=None):
         "formal": [
             {"id": name, "claim": "claim", "engine": "lean-comparator", "source": "proof.lean",
              "theorem": f"Proof.{name}", "allowed_imports": ["Init"], "permitted_axioms": []}
-            for name in ("first", "second")
+            for name in (first, "second")
         ],
         "behavior": [{"id": "behavior", "claim": "claim",
                       "argv": check_argv or [sys.executable, "{checks}/check.py"]}],
@@ -1090,3 +1096,84 @@ def test_prepare_failure_cleans_only_its_owned_state(campaign, tmp_path, monkeyp
     assert (c.state / "proof-campaigns" / existing_id / "manifest.json").read_bytes() == existing_manifest
     assert (c.state / "proof-campaign-receipts" / existing_id).read_bytes() == existing_receipt
     assert not list(tmp_path.glob(".mentat-tasks-*"))
+
+
+@contextmanager
+def _held_host_checker_lock():
+    """Hold the host-wide checker lock as a concurrent checker process would."""
+    # The same turn lock as the real-checker tests, so this cannot race them under xdist.
+    turn = Path(tempfile.gettempdir()) / f"mentat-test-proof-checker-{os.getuid()}.lock"
+    lock = Path(tempfile.gettempdir()) / f"mentat-proof-build-{os.getuid()}.lock"
+    with open(turn, "w") as turn_file:
+        fcntl.flock(turn_file, fcntl.LOCK_EX)
+        fd = os.open(lock, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            yield
+        finally:
+            os.close(fd)
+
+
+@pytest.mark.parametrize("mode", ["check", "recheck"])
+def test_held_host_checker_lock_refuses_without_recording(campaign, monkeypatch, mode):
+    c = campaign
+    ident, _ = c.prepare(targets=["first"])
+    submission = c.submission("submission", "first")
+    fake = sys.modules["mentat.proof_checker"]
+    accepted = fake.check_submission
+    assert proof.check(c.state, ident, submission)["status"] == "pass"
+    path = c.state / "proof-campaigns" / ident
+    recorded = len(proof._ledger(path))
+
+    def run():
+        if mode == "check":
+            return proof.check(c.state, ident, submission)
+        return proof.recheck(c.state, c.project, c.candidate, c.approval, [ident])
+
+    # The real checker and its host-wide lock; the protected service must never start.
+    monkeypatch.setattr(fake, "check_submission", real_checker.check_submission)
+    monkeypatch.setattr(real_checker, "checker_identity", lambda: c.identity.copy())
+    monkeypatch.setattr(real_checker, "_service", lambda *a: pytest.fail("service started"))
+    with _held_host_checker_lock():
+        with pytest.raises(ValueError, match="running"):
+            run()
+    assert len(proof._ledger(path)) == recorded
+    monkeypatch.setattr(fake, "check_submission", accepted)
+    assert proof.check(c.state, ident, submission)["status"] == "pass"
+
+
+@pytest.mark.parametrize("damage", ["interrupted-entry-write", "leftover-temp-entry"])
+def test_crashed_ledger_entry_does_not_block_its_campaign_or_siblings(campaign, monkeypatch, damage):
+    c = campaign
+    ident, _ = c.prepare("task", targets=["first"])
+    sibling, _ = c.prepare("sibling", targets=["second"])
+    submission = c.submission("submission", "first")
+    sibling_submission = c.submission("sibling-submission", "second")
+    entries = c.state / "proof-campaigns" / ident / "entries"
+    if damage == "interrupted-entry-write":
+        real_fdopen = os.fdopen
+
+        def interrupted(fd, mode="r", *args, **kwargs):
+            if mode == "wb":
+                os.close(fd)
+                raise OSError(errno.ENOSPC, "No space left on device")
+            return real_fdopen(fd, mode, *args, **kwargs)
+
+        with monkeypatch.context() as scoped:
+            scoped.setattr(proof.os, "fdopen", interrupted)
+            try:
+                proof.check(c.state, ident, submission)
+            except OSError:
+                pass
+    else:
+        (entries / "partial.tmp").touch()
+    assert proof.check(c.state, ident, submission)["status"] == "pass"
+    assert proof.check(c.state, sibling, sibling_submission)["status"] == "pass"
+
+
+@pytest.mark.parametrize("first", ["manifest.json", "TASK.md"])
+def test_formal_check_ids_named_like_task_files_prepare(tmp_path, monkeypatch, first):
+    c = _build_campaign(tmp_path, monkeypatch, first=first)
+    ident, out = c.prepare(targets=None)
+    assert (out / first).is_dir()
+    assert proof.check(c.state, ident, c.submission("submission", first))["status"] == "pass"

@@ -1,10 +1,14 @@
 import concurrent.futures
+import json
 import threading
 from pathlib import Path
 
 import pytest
+from helpers import PRE_SPLIT_STATE, copy_state, reseal
+from typer.testing import CliRunner
 
 from mentat import evidence
+from mentat.cli import app
 
 RUN_ID = "a" * 32
 
@@ -152,3 +156,63 @@ def test_existing_bundle_layout_remains_readable(tmp_path):
 def test_status_precedence_and_invalid_results(checks, normal, incomplete_first):
     assert evidence.status(checks) == normal
     assert evidence.status(checks, incomplete_first=True) == incomplete_first
+
+
+PUBLISHED_RUN = "4354a85afc7a4316b34fc391dc76f50c"
+MISSING_FIELDS = {
+    "run_id": lambda record: record.pop("run_id"),
+    "model_checks": lambda record: record.__setitem__("model_checks", None),
+    "artifacts": lambda record: record.__setitem__("artifacts", None),
+}
+
+
+def _published_state(tmp_path, damage=None):
+    state = copy_state(PRE_SPLIT_STATE, tmp_path / "state")
+    record = json.loads((state / "runs" / PUBLISHED_RUN / "manifest.json").read_bytes())
+    if damage is not None:
+        MISSING_FIELDS[damage](record)
+    reseal(state, PUBLISHED_RUN, record)
+    return state, record["revision"]
+
+
+def _summary(state, head):
+    args = ["evidence", "pr-summary", PUBLISHED_RUN, "--head", head,
+            "--report-url", "https://example.com/report"]
+    return CliRunner().invoke(app, ["--state", str(state), *args])
+
+
+def _export(state):
+    return CliRunner().invoke(app, ["--state", str(state), "evidence", "export", PUBLISHED_RUN])
+
+
+def test_resealed_published_run_fixture_summarizes_and_exports(tmp_path):
+    state, head = _published_state(tmp_path)
+    assert _summary(state, head).exit_code == 0
+    assert _export(state).exit_code == 0
+
+
+@pytest.mark.parametrize(
+    ("command", "damage"),
+    [
+        ("pr-summary", "run_id"),
+        ("pr-summary", "model_checks"),
+        ("export", "model_checks"),
+        ("export", "artifacts"),
+    ],
+)
+def test_resealed_run_missing_required_fields_is_refused_without_traceback(
+    tmp_path, command, damage
+):
+    state, head = _published_state(tmp_path, damage)
+    result = _summary(state, head) if command == "pr-summary" else _export(state)
+    assert result.exit_code == 2, result.output
+    assert isinstance(result.exception, SystemExit), repr(result.exception)
+
+
+def test_export_of_missing_run_does_not_create_state(tmp_path):
+    state = tmp_path / "missing" / "state"
+    result = CliRunner().invoke(
+        app, ["--state", str(state), "evidence", "export", "a" * 32]
+    )
+    assert result.exit_code == 2, result.output
+    assert not state.exists()

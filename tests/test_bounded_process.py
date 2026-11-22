@@ -512,11 +512,17 @@ def test_colima_socket_mismatch_is_value_error(bin_dir):
     assert str(caught.value) == "Docker context does not match the selected Colima profile"
 
 
-def test_colima_mounted_vm_is_value_error(bin_dir):
-    _colima_ok(bin_dir, ssh="printf mounted")
-    with pytest.raises(ValueError) as caught:
-        colima.validate_colima("colima-test")
-    assert str(caught.value) == "The dedicated Colima VM must have host mounts disabled"
+@pytest.mark.parametrize("findmnt_exit", [0, 1])
+def test_colima_probe_runs_through_ssh_and_refuses_a_mounted_vm(bin_dir, findmnt_exit):
+    # `colima ssh` runs the probe through sh; findmnt exits 0 when a host mount is present.
+    fake(bin_dir, "findmnt", f"[ {findmnt_exit} = 0 ] && echo '/mnt/host virtiofs rw'\nexit {findmnt_exit}")
+    _colima_ok(bin_dir, ssh='shift 4; exec "$@"')
+    if findmnt_exit == 0:
+        with pytest.raises(ValueError) as caught:
+            colima.validate_colima("colima-test")
+        assert str(caught.value) == "The dedicated Colima VM must have host mounts disabled"
+    else:
+        assert colima.validate_colima("colima-test") is None
 
 
 def test_colima_status_failure_raises_called_process_error(bin_dir):
