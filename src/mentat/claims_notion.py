@@ -4,6 +4,7 @@ import json
 import os
 import re
 from collections.abc import Iterator
+from http.client import HTTPException
 from io import StringIO
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qsl, urlsplit
@@ -19,7 +20,8 @@ _DRAFT = re.compile(r"Source: working-tree draft · ([1-9][0-9]{0,2}) claims?")
 _PAGE_ID = r"[0-9a-fA-F]{32}|[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}"
 _LIMIT = 4_000_000
 _CODE = re.compile(r"<code>([A-Za-z0-9_.\'-]+)</code>")
-_CLAIM_HEADING = re.compile(r"## (?:[A-Za-z0-9_.-]|\\_)+")
+# escape_prose writes a claim ID such as "7." as "7\." (and "_" as "\_").
+_CLAIM_HEADING = re.compile(r"## (?:[A-Za-z0-9_.-]|\\_)+|## [0-9]+\\\.")
 _ID = r"[A-Za-z0-9_][A-Za-z0-9_.-]*"
 _CHECK_IDS = rf"`{_ID}`(?:, `{_ID}`)*"
 _LEGACY_SELECTOR = re.compile(rf"(- Check (?:`{_ID}`|<code>{_ID}</code>) selects )(.*)")
@@ -111,7 +113,7 @@ def _request(page_id: str, payload: dict | None = None) -> str:
         raise ValueError(
             f"Notion API returned HTTP {exc.code}; check page access or retry later"
         ) from None
-    except (URLError, TimeoutError, OSError):
+    except (URLError, TimeoutError, OSError, HTTPException):
         raise ValueError("Notion API request failed; check page status before retrying") from None
     if len(raw) > _LIMIT:
         raise ValueError("Notion response exceeded the size limit")

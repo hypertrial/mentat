@@ -55,7 +55,8 @@ def validate_colima(context: str) -> None:
             "--",
             "sh",
             "-c",
-            'findmnt -rn -t virtiofs,9p,fuse.sshfs >/dev/null; test "$?" -eq 1 && printf unshared',
+            "findmnt -rn -t virtiofs,9p,fuse.sshfs >/dev/null; rc=$?; "
+            'if [ "$rc" -eq 1 ]; then printf unshared; else printf "mounted:%s" "$rc"; fi',
         ],
         timeout=15,
         check=True,
