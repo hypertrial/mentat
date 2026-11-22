@@ -231,10 +231,14 @@ def _ledger(path):
     _directory(directory)
     by_previous = {}
     for entry in directory.iterdir():
-        # Leftover temporary files from an interrupted append are not entries.
+        # Leftover temporary files are not entries. An empty hash-named file is a torn append from
+        # the earlier writer. A torn reserve never reached its checker; a torn completion leaves
+        # its reserve in the chain, charged the full attempt time.
         if not _ENTRY.fullmatch(entry.name):
             continue
         raw = _regular(entry)
+        if not raw:
+            continue
         if entry.name != f"{_hash(raw)}.json":
             raise ValueError("Proof ledger entry failed integrity validation")
         item = evidence.decode_json(raw)
@@ -298,27 +302,45 @@ def _ledger(path):
     return ledger
 
 
+def _publish_entry(temporary, entry, raw):
+    try:
+        os.link(temporary, entry)
+        return
+    except FileExistsError:
+        pass
+    except OSError:
+        # No hard links here. Appends hold proof-build.lock, so no other writer can create the
+        # name between this check and the replace.
+        if not os.path.lexists(entry):
+            os.replace(temporary, entry)
+            return
+    # The name is the content hash, so an existing entry is the same entry only if its bytes match.
+    if _regular(entry) != raw:
+        raise ValueError("Proof ledger entry conflicts with an existing entry")
+
+
 def _append(path, ledger, item):
     item = {**item, "previous": _hash(_json(ledger[-1])) if ledger else "0" * 64}
     raw = _json(item)
     entries = path / "entries"
     entry = entries / f"{_hash(raw)}.json"
-    # Complete the bytes under a temporary name, then link: a crash never leaves a partial entry
-    # under its hash name, and link never replaces an existing entry.
+    # Complete the bytes under a temporary name, then publish them under the hash name, so a crash
+    # never leaves a partial entry under that name.
     fd, temporary = tempfile.mkstemp(dir=entries, prefix=".entry-", suffix=".tmp")
     try:
         with os.fdopen(fd, "wb") as stream:
             stream.write(raw)
             stream.flush()
             os.fsync(stream.fileno())
-        try:
-            os.link(temporary, entry)
-        except FileExistsError as exc:
-            # The name is the content hash, so an existing entry is the same entry only if its bytes match.
-            if _regular(entry) != raw:
-                raise ValueError("Proof ledger entry conflicts with an existing entry") from exc
+        _publish_entry(temporary, entry, raw)
     finally:
-        os.unlink(temporary)
+        Path(temporary).unlink(missing_ok=True)
+    # The entry must be durable before the ledger head names it.
+    directory = os.open(entries, os.O_RDONLY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
     ledger.append(item)
     evidence.write_record(path / "ledger.json", _json({"length": len(ledger), "head": _hash(raw)}))
 
@@ -700,100 +722,115 @@ def check(state: Path, campaign_id: str, submission: Path) -> dict:
         }
 
 
+def _bound_recheck(state, project, candidate, approval, campaign_id):
+    path, _ = _campaign(state, campaign_id)
+    with _lock(path / "ledger.lock"):
+        # Bind the same manifest read that is checked; state may change while waiting.
+        path, manifest = _campaign(state, campaign_id)
+        if (
+            manifest["repo"] != str(project.root)
+            or manifest["base"] != project.base
+            or manifest["runner"] != project.runner
+            or manifest["revision"] != candidate.revision
+            or manifest["snapshot_digest"] != candidate.digest
+            or manifest["contract_digest"] != project.fingerprint
+            or manifest["verifier_digest"] != project.verifier_digest
+            or manifest["approval"] != approval
+        ):
+            raise ValueError("Proof campaign does not match this verification")
+        _current(state, manifest)
+        _ledger(path)  # the chain is validated before anything is written
+        return path, manifest
+
+
 def recheck(state: Path, project, candidate, approval: dict, campaign_ids: list[str]):
     state = Path(state).resolve()
     project, candidate = _fresh(state, project, candidate, approval)
     if len(campaign_ids) != len(set(campaign_ids)):
         raise ValueError("Proof campaign IDs must be distinct")
-    results, artifacts, seen = [], {}, set()
+    # Every campaign is validated before any record is written, so a refusal leaves no records.
+    bound, seen = [], set()
     for campaign_id in campaign_ids:
-        path, _ = _campaign(state, campaign_id)
-        with _lock(path / "ledger.lock"):
-            # Bind the same manifest read that is checked; state may change while waiting.
-            path, manifest = _campaign(state, campaign_id)
-            if (
-                manifest["repo"] != str(project.root)
-                or manifest["base"] != project.base
-                or manifest["runner"] != project.runner
-                or manifest["revision"] != candidate.revision
-                or manifest["snapshot_digest"] != candidate.digest
-                or manifest["contract_digest"] != project.fingerprint
-                or manifest["verifier_digest"] != project.verifier_digest
-                or manifest["approval"] != approval
-            ):
+        _, manifest = _bound_recheck(state, project, candidate, approval, campaign_id)
+        if seen.intersection(manifest["targets"]):
+            raise ValueError("Proof campaigns have overlapping targets")
+        seen.update(manifest["targets"])
+        bound.append((campaign_id, manifest))
+    results, artifacts = [], {}
+    with _lock(state / "proof-build.lock", blocking=False), _host_lock():
+        # Under the build locks every ledger append in this state is serialized, so the chains read
+        # here are current. Campaigns are re-bound and re-read before the first write.
+        snapshots = []
+        for campaign_id, manifest in bound:
+            path, current = _campaign(state, campaign_id)
+            if _json(current) != _json(manifest):
                 raise ValueError("Proof campaign does not match this verification")
-            _current(state, manifest)
-            if seen.intersection(manifest["targets"]):
-                raise ValueError("Proof campaigns have overlapping targets")
-            seen.update(manifest["targets"])
-            ledger = _ledger(path)
+            snapshots.append((campaign_id, path, manifest, _ledger(path)))
+        for campaign_id, path, manifest, ledger in snapshots:
             targets = {item["id"]: item for item in manifest["all_targets"]}
-            with _lock(state / "proof-build.lock", blocking=False), _host_lock():
-                for target_id in manifest["targets"]:
-                    target = targets[target_id]
-                    reserved, finished, _ = _usage(ledger)
-                    latest = next(
-                        (
-                            item
-                            for item in reversed(ledger)
-                            if item["kind"] == "reserve"
-                            and item["target"] == target_id
-                            and not item.get("recheck")
-                        ),
-                        None,
+            for target_id in manifest["targets"]:
+                target = targets[target_id]
+                reserved, finished, _ = _usage(ledger)
+                latest = next(
+                    (
+                        item
+                        for item in reversed(ledger)
+                        if item["kind"] == "reserve"
+                        and item["target"] == target_id
+                        and not item.get("recheck")
+                    ),
+                    None,
+                )
+                completion = finished.get(latest["attempt"]) if latest else None
+                outcome: dict[str, Any] = {
+                    "status": "incomplete",
+                    "detail": "Latest proof submission is not accepted",
+                }
+                solution = (
+                    _source(path / "submissions" / f"{latest['attempt']}.lean") if latest else None
+                )
+                if latest and _hash(solution) != latest["source_sha256"]:
+                    raise ValueError("Proof submission failed integrity validation")
+                if completion and completion["status"] == "accepted":
+                    outcome = _run_attempt(
+                        path,
+                        manifest,
+                        ledger,
+                        target,
+                        solution,
+                        project.files[target["source"]],
+                        ({}, 0.0),  # rechecks read no sibling campaigns
+                        recheck=True,
                     )
-                    completion = finished.get(latest["attempt"]) if latest else None
-                    outcome: dict[str, Any] = {
-                        "status": "incomplete",
-                        "detail": "Latest proof submission is not accepted",
-                    }
-                    solution = (
-                        _source(path / "submissions" / f"{latest['attempt']}.lean")
-                        if latest
-                        else None
-                    )
-                    if latest and _hash(solution) != latest["source_sha256"]:
-                        raise ValueError("Proof submission failed integrity validation")
-                    if completion and completion["status"] == "accepted":
-                        outcome = _run_attempt(
-                            path,
-                            manifest,
-                            ledger,
-                            target,
-                            solution,
-                            project.files[target["source"]],
-                            ({}, 0.0),  # rechecks read no sibling campaigns
-                            recheck=True,
-                        )
-                    result = {
-                        "id": target_id,
-                        "claim": target["claim"],
-                        "kind": "lean-comparator",
-                        "status": "pass" if outcome["status"] == "accepted" else "incomplete",
-                        "detail": outcome["detail"],
-                        "version": LEAN_VERSION,
-                        "evidence": {
-                            "campaign_id": campaign_id,
-                            "theorem": target["theorem"],
-                            "source_sha256": _hash(solution) if latest else None,
-                            "approved_sha256": target["approved_sha256"],
-                            "environment": manifest["checker_identity"],
-                            "revision": manifest["revision"],
-                            "base": manifest["base"],
-                            "contract_digest": manifest["contract_digest"],
-                            "verifier_digest": manifest["verifier_digest"],
-                        },
-                    }
-                    if latest:
-                        source_name = f"proof-{campaign_id}-{target_id}-Solution.lean"
-                        artifacts[source_name] = solution
-                        result.setdefault("artifacts", {})["proof-source"] = source_name
-                    for name, digest in outcome.get("logs", {}).items():
-                        data = _regular(path / "logs" / name)
-                        if _hash(data) != digest:
-                            raise ValueError("Proof checker log failed integrity validation")
-                        key = f"proof-{campaign_id}-{name}"
-                        artifacts[key] = data
-                        result.setdefault("artifacts", {})[name] = key
-                    results.append(result)
+                result = {
+                    "id": target_id,
+                    "claim": target["claim"],
+                    "kind": "lean-comparator",
+                    "status": "pass" if outcome["status"] == "accepted" else "incomplete",
+                    "detail": outcome["detail"],
+                    "version": LEAN_VERSION,
+                    "evidence": {
+                        "campaign_id": campaign_id,
+                        "theorem": target["theorem"],
+                        "source_sha256": _hash(solution) if latest else None,
+                        "approved_sha256": target["approved_sha256"],
+                        "environment": manifest["checker_identity"],
+                        "revision": manifest["revision"],
+                        "base": manifest["base"],
+                        "contract_digest": manifest["contract_digest"],
+                        "verifier_digest": manifest["verifier_digest"],
+                    },
+                }
+                if latest:
+                    source_name = f"proof-{campaign_id}-{target_id}-Solution.lean"
+                    artifacts[source_name] = solution
+                    result.setdefault("artifacts", {})["proof-source"] = source_name
+                for name, digest in outcome.get("logs", {}).items():
+                    data = _regular(path / "logs" / name)
+                    if _hash(data) != digest:
+                        raise ValueError("Proof checker log failed integrity validation")
+                    key = f"proof-{campaign_id}-{name}"
+                    artifacts[key] = data
+                    result.setdefault("artifacts", {})[name] = key
+                results.append(result)
     return results, artifacts
