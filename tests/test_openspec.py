@@ -321,8 +321,8 @@ def test_import_reports_unreadable_capability_trees(repo, entry):
     assert draft["diagnostics"] == [{"path": path, "line": 1, "detail": "unsupported spec entry"}]
 
 
-# Two cat-file batches per object batch, plus the verified commit and tree reads (four calls).
-@pytest.mark.parametrize("count,expected_calls", [(1, 6), (128, 12)])
+# One cat-file batch per object batch: the commit, one tree batch, and one blob batch per 32 specs.
+@pytest.mark.parametrize("count,expected_calls", [(1, 3), (128, 6)])
 def test_import_batches_git_objects_and_preserves_identity_and_provenance(
     repo, monkeypatch, count, expected_calls
 ):

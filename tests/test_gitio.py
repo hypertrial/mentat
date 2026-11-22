@@ -249,3 +249,72 @@ def test_unmodified_snapshot_matches_committed_bytes(object_repos, object_format
     assert snapshot.files == (
         {"a.txt": (0o644, b"alpha\n"), "dir/b.py": (0o644, b"print(1)\n")}
     )
+
+
+def _counted_runs(monkeypatch):
+    calls = []
+    real_run = gitio.run
+
+    def counted(root, *args, **kwargs):
+        calls.append(args)
+        return real_run(root, *args, **kwargs)
+
+    monkeypatch.setattr(gitio, "run", counted)
+    return calls
+
+
+def test_verified_read_starts_one_git_process(tmp_path, monkeypatch):
+    revision = _fixed_repo(tmp_path)
+    blob = git(tmp_path, "rev-parse", f"{revision}:a.txt")
+    calls = _counted_runs(monkeypatch)
+    assert gitio.read_blobs(tmp_path, {"a.txt": (0o644, blob.encode())}) == {
+        "a.txt": (0o644, b"alpha\n")
+    }
+    assert calls == [("cat-file", "--batch")]
+
+
+def test_object_format_is_looked_up_once_per_repository(tmp_path, monkeypatch):
+    revision = _fixed_repo(tmp_path)
+    calls = _counted_runs(monkeypatch)
+    assert gitio.verify_revision(tmp_path, revision) == revision
+    assert gitio.verify_revision(tmp_path, revision) == revision
+    assert [args[1] for args in calls] == ["--show-object-format", "--verify", "--verify"]
+
+
+@pytest.mark.parametrize(
+    ("paths", "limits", "error"),
+    [
+        (["a.txt"], {"max_file": 6}, None),
+        (["a.txt"], {"max_file": 5}, "Git objects exceed size limit"),
+        (["a.txt", "dir/b.py"], {"max_total": 15}, None),
+        (["a.txt", "dir/b.py"], {"max_total": 14}, "Git objects exceed size limit"),
+    ],
+)
+def test_object_size_limits_are_inclusive(tmp_path, paths, limits, error):
+    revision = _fixed_repo(tmp_path)
+    entries = {
+        path: (0o644, git(tmp_path, "rev-parse", f"{revision}:{path}").encode()) for path in paths
+    }
+    if error is None:
+        assert set(gitio.read_blobs(tmp_path, entries, **limits)) == set(paths)
+    else:
+        with pytest.raises(ValueError, match=error):
+            gitio.read_blobs(tmp_path, entries, **limits)
+
+
+def test_missing_object_is_an_invalid_object(tmp_path):
+    _fixed_repo(tmp_path)
+    with pytest.raises(ValueError, match="^invalid Git object$"):
+        gitio.read_blobs(tmp_path, {"a.txt": (0o644, b"0" * 40)})
+
+
+def test_batch_output_past_the_limit_is_a_size_error(tmp_path, monkeypatch):
+    revision = _fixed_repo(tmp_path)
+    blob = git(tmp_path, "rev-parse", f"{revision}:a.txt")
+
+    def overflow(root, *args, **kwargs):
+        raise ValueError("Git cat-file output exceeds size limit")
+
+    monkeypatch.setattr(gitio, "run", overflow)
+    with pytest.raises(ValueError, match="^Git objects exceed size limit$"):
+        gitio.read_blobs(tmp_path, {"a.txt": (0o644, blob.encode())})

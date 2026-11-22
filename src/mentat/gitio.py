@@ -1,5 +1,6 @@
 """Git reads for verifier inputs: one environment and argument policy, bounded output and time."""
 
+import functools
 import hashlib
 import os
 import re
@@ -150,48 +151,48 @@ def _objects(
     if not oids:
         return []
     ids = b"".join(oid + b"\n" for oid in oids)
-    headers = _git(
-        root,
-        "cat-file",
-        "--batch-check=%(objectname) %(objecttype) %(objectsize)",
-        data=ids,
-        limit=len(oids) * 100,
-    ).splitlines()
-    if len(headers) != len(oids):
-        raise ValueError("incomplete Git objects")
-    shapes = []
-    for oid, header in zip(oids, headers, strict=True):
-        parts = header.split()
-        if len(parts) != 3 or parts[0] != oid or parts[1] not in _KINDS or not parts[2].isdigit():
-            raise ValueError("invalid Git object")
-        shapes.append((parts[1], int(parts[2])))
-    sizes = [size for _, size in shapes]
-    if any(size > max_size for size in sizes) or sum(sizes) > max_total:
-        raise ValueError("Git objects exceed size limit")
-    # Each object adds its header, a newline after the header, and a newline after its content.
-    limit = sum(sizes) + sum(
-        len(oid) + len(kind) + len(str(size)) + 4
-        for oid, (kind, size) in zip(oids, shapes, strict=True)
-    )
-    content = _git(root, "cat-file", "--batch", data=ids, limit=limit)
-    objects = []
+    # Each object adds a header, a newline after it and a newline after its content. The header
+    # allowance covers the longest kind and a size of up to 20 digits.
+    limit = max_total + sum(len(oid) + len(b"commit") + 20 + 4 for oid in oids)
+    try:
+        content = run(root, "cat-file", "--batch", data=ids, limit=limit)
+    except ValueError as exc:
+        raise ValueError("Git objects exceed size limit") from exc
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise ValueError("git command failed: cat-file") from exc
+    parsed = []
     offset = 0
-    for oid, (kind, size) in zip(oids, shapes, strict=True):
-        header = oid + b" " + kind + b" " + str(size).encode() + b"\n"
-        if content[offset : offset + len(header)] != header:
-            raise ValueError("invalid Git batch output")
-        offset += len(header)
+    for oid in oids:
+        end = content.find(b"\n", offset)
+        if end < 0:
+            raise ValueError("truncated Git object")
+        parts = content[offset:end].split()
+        if (
+            len(parts) != 3
+            or parts[0] != oid
+            or parts[1] not in _KINDS
+            or not (parts[2].isdigit() and len(parts[2]) <= 20)
+        ):
+            raise ValueError("invalid Git object")
+        kind, size = parts[1], int(parts[2])
+        offset = end + 1
         body = content[offset : offset + size]
         offset += size
         if len(body) != size or content[offset : offset + 1] != b"\n":
             raise ValueError("truncated Git object")
         offset += 1
+        parsed.append((kind, size, body))
+    if offset != len(content):
+        raise ValueError("unexpected Git batch output")
+    sizes = [size for _, size, _ in parsed]
+    if any(size > max_size for size in sizes) or sum(sizes) > max_total:
+        raise ValueError("Git objects exceed size limit")
+    objects = []
+    for oid, (kind, size, body) in zip(oids, parsed, strict=True):
         digest = hashlib.new(_HASHES[len(oid)], b"%s %d\0" % (kind, size) + body)
         if digest.hexdigest().encode() != oid:
             raise ValueError(_INTEGRITY)
         objects.append((kind, body))
-    if offset != len(content):
-        raise ValueError("unexpected Git batch output")
     return objects
 
 
@@ -211,8 +212,14 @@ def _rewritten(root: Path, rev: str) -> bool:
     return False
 
 
+@functools.lru_cache(maxsize=64)
+def _object_format(root: Path) -> bytes:
+    # A repository's object format is fixed when it is created, so only that is cached, by root.
+    return _git(root, "rev-parse", "--show-object-format", limit=_LINE).strip()
+
+
 def verify_revision(root: Path, rev: str) -> str:
-    fmt = _git(root, "rev-parse", "--show-object-format", limit=_LINE).strip()
+    fmt = _object_format(root.resolve())
     length = {b"sha1": 40, b"sha256": 64}.get(fmt)
     if length is None or not re.fullmatch(rf"[0-9a-f]{{{length}}}", rev):
         raise ValueError("revision must be a full commit ID")
