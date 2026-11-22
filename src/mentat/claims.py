@@ -14,8 +14,9 @@ from .project import Claim, Contract, Review, contract_inputs
 
 _FILENAME = "claims.md"
 _MARKUP = re.compile(r"([\\`*_\[\]<>~$&|])")
-_LINE_MARKUP = re.compile(r"^([ \t]*)(?=(?:#{1,6}|[+-])(?:[ \t]|$)|[-=]{2,}[ \t]*$)", re.MULTILINE)
+_LINE_MARKUP = re.compile(r"^([ \t]*)(?=(?:#{1,6}|[+-])(?:[ \t]|$)|[-=]+[ \t]*$)", re.MULTILINE)
 _ORDERED_LIST = re.compile(r"^([ \t]*\d+)([.)])(?=[ \t]|$)", re.MULTILINE)
+_CODE_INDENT = re.compile(r"^(?=[ \t]*\t|[ ]{4})[ \t]+", re.MULTILINE)
 _HEADING_END = re.compile(r"(?<!\S)#+$")
 
 
@@ -24,6 +25,11 @@ def escape_prose(value: str) -> str:
     value = _MARKUP.sub(r"\\\1", value)
     value = _LINE_MARKUP.sub(r"\1\\", value)
     return _ORDERED_LIST.sub(r"\1\\\2", value)
+
+
+def _paragraph_prose(value: str) -> str:
+    # Four columns or a tab of indentation would open an indented code block after a blank line.
+    return _CODE_INDENT.sub("", escape_prose(value))
 
 
 def _review_prose(value: str) -> str:
@@ -176,13 +182,13 @@ def _append_review_claim(
     lines: list[str], contract: Contract, number: int, claim: Claim, *, grouped: bool
 ) -> None:
     title = _HEADING_END.sub(r"\\\g<0>", escape_prose(claim.title.rstrip()))  # pyright: ignore[reportOptionalMemberAccess]  # Claim.relationships requires titles when review is set
-    lines.extend(("", f"### {number}. {title}", "", escape_prose(claim.statement)))
+    lines.extend(("", f"### {number}. {title}", "", _paragraph_prose(claim.statement)))
     behavior = ", ".join(f"`{check.id}`" for check in contract.behavior if check.claim == claim.id)
     formal = ", ".join(f"`{check.id}`" for check in contract.formal if check.claim == claim.id)
     if claim.assumptions and not (grouped and formal):
         lines.extend(("", "Assumptions", ""))
         for item in claim.assumptions:
-            text = inline_prose(item) if grouped else escape_prose(item).replace("\n", "\n  ")
+            text = inline_prose(item) if grouped else _paragraph_prose(item).replace("\n", "\n  ")
             lines.append("- " + text)
     if not grouped:
         _append_selectors(lines, contract, claim.id)
@@ -298,11 +304,11 @@ def render_claims(contract: Contract) -> bytes:
         "Generated from `contract.json`. Edit the contract and regenerate.",
     ]
     for claim in contract.claims:
-        lines.extend(("", f"## {escape_prose(claim.id)}", "", escape_prose(claim.statement)))
+        lines.extend(("", f"## {escape_prose(claim.id)}", "", _paragraph_prose(claim.statement)))
         if claim.assumptions:
             lines.extend(("", "Assumptions", ""))
             for assumption in claim.assumptions:
-                lines.append("- " + escape_prose(assumption).replace("\n", "\n  "))
+                lines.append("- " + _paragraph_prose(assumption).replace("\n", "\n  "))
             lines.extend(("", "Checks"))
         if claim.provenance:
             lines.extend(("", *provenance_lines(claim.provenance.model_dump())))
