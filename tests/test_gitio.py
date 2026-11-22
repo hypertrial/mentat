@@ -103,8 +103,6 @@ def test_every_git_invocation_carries_both_no_replace_protections(tmp_path, monk
     for argv, env in invocations:
         assert argv[1] == "--no-replace-objects", argv
         assert env.get("GIT_NO_REPLACE_OBJECTS") == "1", argv
-    shows = [argv for argv, _ in invocations if "show" in argv]
-    assert shows and all("--no-textconv" in argv for argv in shows)
 
 
 @pytest.fixture
@@ -191,6 +189,26 @@ def test_snapshot_refuses_loose_object_whose_content_does_not_match_its_id(
     with replaced_loose_object(root, oid, kind, substituted):
         with pytest.raises(ValueError, match="integrity"):
             project.snapshot(root, revision)
+
+
+@pytest.mark.parametrize("edit", ["retarget", "omit"])
+def test_listing_that_disagrees_with_verified_trees_is_refused(tmp_path, monkeypatch, edit):
+    revision = _fixed_repo(tmp_path)
+    blob = git(tmp_path, "rev-parse", f"{revision}:dir/b.py")
+    other = git(tmp_path, "rev-parse", f"{revision}:a.txt")
+    real_ls_tree = project.ls_tree
+
+    def altered(root, rev, flags, scope, deadline):
+        records = list(real_ls_tree(root, rev, flags, scope, deadline))
+        if flags != "-rtz":
+            return records
+        if edit == "omit":
+            return [record for record in records if not record.endswith(b"\tdir/b.py")]
+        return [record.replace(blob.encode(), other.encode()) for record in records]
+
+    monkeypatch.setattr(project, "ls_tree", altered)
+    with pytest.raises(ValueError, match="integrity"):
+        project.snapshot(tmp_path, revision)
 
 
 @pytest.mark.parametrize("object_format", ["sha1", "sha256"])

@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 from helpers import cat_object, git, replaced_loose_object
 
+from mentat import gitio
 from mentat.showcases.polaris import evaluation, replay
 from mentat.showcases.polaris.cli import candidate_repo
 
@@ -40,7 +41,8 @@ def test_snapshot_batches_and_preserves_bytes_and_digest(tmp_path, monkeypatch):
     result = replay.snapshot(tmp_path, rev)
     assert result.files == expected_files
     assert result.digest == digest.hexdigest()
-    assert calls == ["rev-parse", "ls-tree", "cat-file", "cat-file"]
+    # Object reads go through the verified gitio reader, so replay issues only its listing.
+    assert calls == ["ls-tree"]
 
 
 def test_batch_output_rejects_truncation(tmp_path, monkeypatch):
@@ -53,14 +55,14 @@ def test_batch_output_rejects_truncation(tmp_path, monkeypatch):
     git(tmp_path, "add", ".")
     git(tmp_path, "commit", "-qm", "test")
     rev = git(tmp_path, "rev-parse", "HEAD")
-    original = replay._git
+    original = gitio.run
 
     def truncated(*args, **kwargs):
         data = original(*args, **kwargs)
         return data[:-1] if args[-1] == "--batch" else data
 
-    monkeypatch.setattr(replay, "_git", truncated)
-    with pytest.raises(ValueError, match="blob size changed"):
+    monkeypatch.setattr(gitio, "run", truncated)
+    with pytest.raises(ValueError, match="truncated Git object"):
         replay.snapshot(tmp_path, rev)
 
 
@@ -75,7 +77,7 @@ def test_batch_rejects_oversize_and_missing_objects(tmp_path, monkeypatch):
     git(tmp_path, "commit", "-qm", "test")
     rev = git(tmp_path, "rev-parse", "HEAD")
     monkeypatch.setattr(replay, "MAX_CANDIDATE_FILE", 6)
-    with pytest.raises(ValueError, match="snapshot size limit"):
+    with pytest.raises(ValueError, match="exceed size limit"):
         replay.snapshot(tmp_path, rev)
     monkeypatch.setattr(replay, "MAX_CANDIDATE_FILE", 100)
     oid = git(tmp_path, "rev-parse", f"{rev}:{replay._PREFIX}command/setup.py")
