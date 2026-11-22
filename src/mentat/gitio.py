@@ -214,7 +214,8 @@ def _rewritten(root: Path, rev: str) -> bool:
 
 @functools.lru_cache(maxsize=64)
 def _object_format(root: Path) -> bytes:
-    # A repository's object format is fixed when it is created, so only that is cached, by root.
+    # Cached by resolved root. A stale entry can only refuse, never accept: verify_revision still
+    # checks the revision length and the rev-parse --verify result.
     return _git(root, "rev-parse", "--show-object-format", limit=_LINE).strip()
 
 

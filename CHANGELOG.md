@@ -5,7 +5,10 @@
 - Verified Git reads start one `git cat-file --batch` process instead of two, and the object
   format is looked up once per repository per process instead of on every snapshot. Object size
   limits and the integrity check keep their messages. A batch header that does not name its
-  object is now refused as `invalid Git object`. `gitio` is a verifier module, so the verifier
+  object is now refused as `invalid Git object`, and a short or mismatched batch reports
+  `truncated Git object` or `invalid Git object` instead of `incomplete Git objects`. An
+  oversized object is refused after it is read, still bounded by the caller's total limit.
+  `gitio` is a verifier module, so the verifier
   digest changes, and the Polaris pack digest changes too (it covers `gitio.py`). So approvals,
   proof campaigns and pending acceptances must be renewed.
 
