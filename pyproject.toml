@@ -55,7 +55,7 @@ select = ["B", "E4", "E7", "E9", "F", "I", "UP"]
 "src/mentat/showcases/polaris/cli.py" = ["B008"]
 # The %r template is a Python source literal, not a plain format string; an f-string rewrite would need brace escaping. Editing this file would change the Polaris pack digest.
 "src/mentat/showcases/polaris/regression.py" = ["UP031"]
-# Approved base file: not edited. Its loop closures are called within the same iteration.
+# Approved base file: editing it renews Mentat's own approval. Its loop closures are called within the same iteration.
 ".mentat/selfcheck.py" = ["B023"]
 
 [tool.pyright]

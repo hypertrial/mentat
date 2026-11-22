@@ -2,6 +2,40 @@
 
 ## Unreleased
 
+- Fix defects found by a repository audit. No stored-format change; well-formed runs, records
+  and contracts give the same results.
+  - Lean formal checks re-check the compiled model with the toolchain's `leanchecker` before the
+    axiom audit. A declaration the kernel rejects now makes the check incomplete. `leanchecker`
+    must sit beside the `lean` Mentat runs.
+  - Snapshots verify every Git object they use (the commit, each tree on the way to the files,
+    and every blob) against its object ID, for SHA-1 and SHA-256 repositories, in the core
+    reader and the Polaris showcase. A mismatch is refused with
+    `Git object failed integrity validation`.
+  - `evidence export`, `accept`, `evidence pr-summary` and `evidence compare` (including
+    `--across-contracts`) refuse malformed saved runs with exit 2 instead of a traceback.
+    `evidence export` no longer creates a missing state directory.
+  - Proof checks take the machine-wide checker lock before recording an attempt, so contention
+    is refused without using a round. Ledger entries are written to a temporary file and linked
+    into place, so an interrupted write no longer blocks the campaign or its siblings. Prepared
+    targets now live under `targets/<id>/` in the task directory, so formal check IDs such as
+    `manifest.json` and `TASK.md` can be prepared.
+  - A Polaris export with an explicitly tagged YAML scalar is recorded as an invalid export
+    (a violation) instead of crashing `verify` or `evaluate`.
+  - A Colima VM with host mounts gets the "host mounts disabled" refusal instead of a raw
+    command error.
+  - Claim text that would render as a setext heading or an indented code block stays a
+    paragraph in `claims.md`. Notion publish accepts legacy claim IDs such as `7.`, and a
+    non-HTTP reply from Notion is reported as an unavailable service (exit 2).
+  - `XDG_STATE_HOME` is used only when it is an absolute path.
+  - End of input or an interrupt at the approval or acceptance prompt is treated as a decline
+    (exit 2).
+  - JSON numbers that overflow to infinity are refused when read, and non-finite numbers are
+    refused when written.
+  - The verifier digest changes (the verifier modules `canonical`, `claims`, `cli`, `colima`,
+    `command`, `gitio`, `project`, `project_formal`, `proof` and `proof_checker` and the approved
+    `.mentat/selfcheck.py` changed), and the Polaris pack digest changes. Approvals, proof
+    campaigns and pending acceptances must be renewed.
+
 - Add pyright (basic mode) and the ruff `B` (bugbear) and `UP` (pyupgrade) rule groups to the gate.
   `tests/test_static_checks.py` runs pyright once over `src/mentat` (`showcases/` stays excluded). Pyright
   and its Node engine come from the `dev` group (`pyright[nodejs]`), so no download happens after `uv sync`.
