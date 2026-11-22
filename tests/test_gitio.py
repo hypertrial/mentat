@@ -308,6 +308,48 @@ def test_missing_object_is_an_invalid_object(tmp_path):
         gitio.read_blobs(tmp_path, {"a.txt": (0o644, b"0" * 40)})
 
 
+def test_batch_read_is_capped_at_the_total_plus_header_allowance(tmp_path, monkeypatch):
+    revision = _fixed_repo(tmp_path)
+    oids = [
+        git(tmp_path, "rev-parse", f"{revision}:{path}").encode() for path in ("a.txt", "dir/b.py")
+    ]
+    limits = []
+    real_run = gitio.run
+
+    def spy(root, *args, **kwargs):
+        limits.append(kwargs["limit"])
+        return real_run(root, *args, **kwargs)
+
+    monkeypatch.setattr(gitio, "run", spy)
+    gitio.read_blobs(tmp_path, {"a.txt": (0o644, oids[0]), "dir/b.py": (0o644, oids[1])})
+    # Per object: a kind of up to 6 bytes, a size of up to 20 digits, three separators and a newline.
+    allowance = sum(len(oid) + len(b"commit") + 20 + 4 for oid in oids)
+    assert limits == [gitio.MAX_TOTAL + allowance]
+
+
+def test_tree_object_is_refused_where_a_blob_is_expected(tmp_path):
+    revision = _fixed_repo(tmp_path)
+    tree = git(tmp_path, "rev-parse", f"{revision}:dir")
+    with pytest.raises(ValueError, match="^invalid Git object$"):
+        gitio.read_blobs(tmp_path, {"dir": (0o644, tree.encode())})
+
+
+@pytest.mark.parametrize(
+    "content",
+    [b"0" * 40 + b" blob 3\nabc\n", b"x\n" + b"0" * 40 + b" missing\n", b"\n\n"],
+)
+def test_blob_content_shaped_like_batch_headers_reads_back_exactly(tmp_path, content):
+    git(tmp_path, "init", "-q")
+    git(tmp_path, "config", "user.name", "Test")
+    git(tmp_path, "config", "user.email", "test@example.test")
+    (tmp_path / "blob.bin").write_bytes(content)
+    revision = _commit_all(tmp_path)
+    oid = git(tmp_path, "rev-parse", f"{revision}:blob.bin")
+    assert gitio.read_blobs(tmp_path, {"blob.bin": (0o644, oid.encode())}) == {
+        "blob.bin": (0o644, content)
+    }
+
+
 def test_batch_output_past_the_limit_is_a_size_error(tmp_path, monkeypatch):
     revision = _fixed_repo(tmp_path)
     blob = git(tmp_path, "rev-parse", f"{revision}:a.txt")
