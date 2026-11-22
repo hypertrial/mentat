@@ -133,10 +133,11 @@ def _saved_record() -> Iterator[None]:
 
 
 def _saved_run(state: Path, run_id: str) -> tuple[Path, dict]:
-    """Read a saved run and validate its record before any field is used."""
+    """Read a saved run; a project verification is validated before any field is used."""
     with _saved_record():
         bundle, record = evidence.read_run(state, run_id)
-        evidence.validate_run_record(record)
+        if record.get("kind") == "project-verification":
+            evidence.validate_run_record(record)
     return bundle, record
 
 
@@ -444,6 +445,8 @@ def export_evidence(
             typer.echo(f"Source qualification  {record['source_qualification_status']}")
     except _USER_ERRORS as exc:
         _error(exc, output_json)
+    except (KeyError, TypeError, AttributeError):
+        _error(ValueError("Invalid saved verification record"), output_json)
 
 
 @evidence_app.command("render")

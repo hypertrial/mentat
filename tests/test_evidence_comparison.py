@@ -117,8 +117,7 @@ def test_compare_rejects_other_run_kinds_and_tampered_artifacts(compare):
     save(state, "b" * 32, kind="other")
     result = run("a" * 32, "b" * 32, "--json")
     assert result.exit_code == 2
-    # Saved records are validated before any field is read, so the validator refuses the kind.
-    assert "Unsupported saved verification record" in json.loads(result.output)["detail"]
+    assert "requires two project verification runs" in json.loads(result.output)["detail"]
 
     save(state, "c" * 32)
     (saved / "example.witness.json").write_text("tampered")

@@ -216,3 +216,32 @@ def test_export_of_missing_run_does_not_create_state(tmp_path):
     )
     assert result.exit_code == 2, result.output
     assert not state.exists()
+
+
+def test_export_of_saved_polaris_run_copies_its_bundle(tmp_path):
+    # Polaris verify saves a schema-1 "verification" record; export must keep accepting it.
+    state = evidence.state_directory(tmp_path / "state")
+    run_id = "d" * 32
+    evidence.save_run(
+        state,
+        {
+            "schema_version": 1,
+            "kind": "verification",
+            "run_id": run_id,
+            "status": "pass",
+            "revision": "c" * 40,
+            "contract_digest": "e" * 64,
+            "model_checks": [],
+            "cases": [],
+            "regressions": [],
+            "advisory_results": ["regressions"],
+            "reproduce": "mentat showcase polaris verify",
+        },
+        {},
+    )
+    out = tmp_path / "bundle"
+    result = CliRunner().invoke(
+        app, ["--state", str(state), "evidence", "export", run_id, "--out", str(out), "--json"]
+    )
+    assert result.exit_code == 0, result.output
+    assert (out / "manifest.json").is_file()
