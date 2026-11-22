@@ -86,5 +86,9 @@ def error(exc: Exception, output_json: bool) -> None:
 def operator_confirm(message: str) -> None:
     if not sys.stdin.isatty() or not sys.stdout.isatty():
         raise ValueError("Operator approval or acceptance requires an interactive terminal")
-    if not typer.confirm(message, default=False):
+    try:
+        confirmed = typer.confirm(message, default=False)
+    except typer.Abort:  # EOF or Ctrl-C at the prompt is a decline, not a crash
+        confirmed = False
+    if not confirmed:
         raise ValueError("The operator declined")
