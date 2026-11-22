@@ -387,6 +387,7 @@ def _toolchain(prefix, version=LEAN_VERSION):
         f'case "$1" in --version) echo "Lean (version {version})";; '
         f'--print-libdir) echo "{prefix}/lib/lean";; esac\n',
     )
+    _script(prefix / "bin/leanchecker", "exit 0\n")
     return prefix / "bin/lean"
 
 
