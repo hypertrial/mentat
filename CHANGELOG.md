@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Verified Git reads start one `git cat-file --batch` process instead of two, and the object
+  format is looked up once per repository per process instead of on every snapshot. Object size
+  limits and the integrity check keep their messages. A batch header that does not name its
+  object is now refused as `invalid Git object`. `gitio` is a verifier module, so the verifier
+  digest changes, and the Polaris pack digest changes too (it covers `gitio.py`). So approvals,
+  proof campaigns and pending acceptances must be renewed.
+
 - Fix defects found by a repository audit. No stored-format change; well-formed runs, records
   and contracts give the same results.
   - Lean formal checks re-check the compiled model with the toolchain's `leanchecker` before the
