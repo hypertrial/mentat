@@ -81,10 +81,11 @@ operator state.
 
 Preparation freezes every declared target and creates a new task directory outside
 the repository and operator state. Repeat `--target FORMAL_ID` to select a subset
-of obligations for one campaign. Task instructions and the manifest are review
-copies. A submission directory contains one or more selected target directories,
+of obligations for one campaign. The task directory holds the review copies
+`TASK.md` and `manifest.json` and a `targets/` folder with one directory per
+selected target. A submission directory contains one or more selected target directories,
 each containing only `Solution.lean`. Submit a separate directory containing those
-target directories, not the task root with its manifest and instructions. Extra
+target directories, such as a copy of `targets/`, not the task root. Extra
 files, compiled objects, toolchain/configuration files, symlinks and escaping paths
 are rejected. Proofs may add helper lemmas without changing approved statements
 or their supporting definitions.
