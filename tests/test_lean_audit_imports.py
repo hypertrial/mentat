@@ -1,3 +1,4 @@
+import os
 import subprocess
 from types import SimpleNamespace
 
@@ -9,6 +10,33 @@ from mentat import project_formal
 def audit(source, theorem, tools):
     check = SimpleNamespace(id="proof", claim="claim", source="Model.lean", theorem=theorem)
     return project_formal._run_lean(check, {"Model.lean": source.encode()}, tools)
+
+
+def fake_toolchain(tmp_path):
+    prefix = tmp_path / "toolchain"
+    (prefix / "bin").mkdir(parents=True)
+    (prefix / "lib/lean").mkdir(parents=True)
+    (prefix / "bin/lean").write_text("")
+    (prefix / "bin/leanchecker").write_text("")
+    tools = {"lean": {"version": project_formal.LEAN_VERSION, "executable": str(prefix / "bin/lean"),
+                      "libdir": str(prefix / "lib/lean")}}
+    return tools, prefix / "bin"
+
+
+def fake_lean(monkeypatch, checker_code):
+    # Record every trusted subprocess call without running Lean. Only the checker's exit code varies.
+    calls = []
+
+    def run(args, **kwargs):
+        calls.append((list(args), kwargs))
+        if str(args[0]).endswith("leanchecker"):
+            return subprocess.CompletedProcess(args, checker_code, "kernel says no", "")
+        if "--run" in args:
+            return subprocess.CompletedProcess(args, 0, "'verified' does not depend on any axioms\n", "")
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    monkeypatch.setattr(project_formal, "_run", run)
+    return calls
 
 
 @pytest.mark.parametrize(("source", "theorem"), [
@@ -133,3 +161,32 @@ def test_missing_leanchecker_is_incomplete(lean_tools, tmp_path):
     result = audit("theorem verified : True := trivial\n", "verified", tools)
     assert result["status"] == "incomplete", result
     assert "leanchecker" in result["detail"]
+
+
+def test_leanchecker_rechecks_model_between_compile_and_audit(tmp_path, monkeypatch):
+    tools, bindir = fake_toolchain(tmp_path)
+    calls = fake_lean(monkeypatch, 0)
+    result = audit("theorem verified : True := trivial\n", "verified", tools)
+    assert result["status"] == "pass", result
+    kinds = [
+        "compile" if "-o" in args else "checker" if str(args[0]).endswith("leanchecker")
+        else "audit" if "--run" in args else "deps"
+        for args, _ in calls
+    ]
+    assert kinds == ["deps", "compile", "checker", "audit"]
+    compile_kwargs = calls[1][1]
+    checker_args, checker_kwargs = calls[2]
+    assert checker_args == [str(bindir / "leanchecker"), "Model"]
+    assert checker_kwargs["cwd"] == compile_kwargs["cwd"]
+    assert checker_kwargs["env"]["LEAN_PATH"] == compile_kwargs["env"]["LEAN_PATH"]
+    assert checker_kwargs["env"]["PATH"].split(os.pathsep)[0] == str(bindir)
+
+
+def test_failed_leanchecker_recheck_blocks_the_audit(tmp_path, monkeypatch):
+    tools, _ = fake_toolchain(tmp_path)
+    calls = fake_lean(monkeypatch, 1)
+    result = audit("theorem verified : True := trivial\n", "verified", tools)
+    assert result["status"] == "incomplete", result
+    assert result["detail"] == "Lean kernel re-check failed"
+    assert "kernel says no" in result["evidence"]["kernel_output"]
+    assert not any("--run" in args for args, _ in calls)
