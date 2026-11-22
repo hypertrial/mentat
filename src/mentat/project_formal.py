@@ -305,6 +305,10 @@ def _run_lean(check, files, tools):
     if "error" in tool or tool.get("version") != LEAN_VERSION or not tool.get("executable"):
         result["detail"] = tool.get("error", f"Lean {LEAN_VERSION} tool information is missing")
         return result
+    checker = Path(tool["executable"]).with_name("leanchecker")
+    if not checker.is_file():
+        result["detail"] = f"leanchecker was not found next to Lean {LEAN_VERSION}"
+        return result
     if not LEAN_NAME_PATTERN.fullmatch(check.theorem):
         result["detail"] = "The theorem must be a plain qualified Lean identifier"
         return result
@@ -358,6 +362,17 @@ def _run_lean(check, files, tools):
             ]
             if compile_result.returncode:
                 result["detail"] = "Lean source did not compile"
+                return result
+            # The compiler can be told to skip kernel checks, so re-check every declaration
+            # in the compiled module. leanchecker re-runs `lean` from PATH to find its sysroot,
+            # so put the toolchain's own directory first to avoid an elan proxy under HOME.
+            checker_env = {**env, "PATH": f"{checker.parent}{os.pathsep}{env['PATH']}"}
+            kernel_result = _run([str(checker), "Model"], cwd=root, env=checker_env)
+            result["evidence"]["kernel_output"] = (kernel_result.stdout + kernel_result.stderr)[
+                -_OUTPUT_LIMIT:
+            ]
+            if kernel_result.returncode:
+                result["detail"] = "Lean kernel re-check failed"
                 return result
             # Parse trusted audit code before loading any model-defined syntax or extensions.
             audit = f"""import Lean.CoreM
