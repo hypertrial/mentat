@@ -58,6 +58,14 @@ identity. Reviewers check the observed ancestor and relevant changed content;
 a versioned specification does not need to embed its own resulting commit hash.
 Execution results and approvals still bind to the exact candidate head and base.
 
+When a run starts from a feature commit ahead of the remote base, its initial
+specification review covers that cumulative difference, including pre-authored
+CAS/FAS. Generation and capacity recovery keep the committed feature or approved
+repair as their actual input. Later batches use incremental bases only after a
+validated ancestral specification cohort; a feature commit alone establishes no
+review authority. Oversized or uninspectable initial content remains an explicit
+bounded gap.
+
 Later reviews carry bounded controller-validated evidence of earlier source
 correspondence reviews. It binds the reviewed records and source blobs to actual
 independent decisions; unchanged baseline records retain their unreviewed status.
