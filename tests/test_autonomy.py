@@ -1444,3 +1444,177 @@ def test_source_context_only_requires_diff_for_actual_proposal(repo, tmp_path):
     )
     assert "Review the complete proposal_diff against proposal_base" in context
     assert "proposal_diff" in json.loads(context.split("SOURCE_CONTEXT_JSON:\n", 1)[1])
+
+
+def test_large_fas_is_reserved_with_complete_lineage_and_review_diff(repo, tmp_path):
+    from mentat.autonomy import digest
+
+    record = {
+        "id": str(uuid.uuid4()),
+        "area": "product",
+        "origin": "uncertain",
+        "statement": "a" * 70_000,
+        "spec_path": "openspec/specs/app/spec.md",
+    }
+    fas = {"schema_version": 1, "requirements": [record], "claims": [], "surfaces": []}
+    path = repo / ".mentat/fas.json"
+    path.write_text(json.dumps(fas))
+    folder = repo / "src"
+    folder.mkdir()
+    for index in range(10):
+        (folder / f"file{index}.py").write_text("# " + "x" * 44990 + "\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-qm", "large fas")
+    base = git(repo, "rev-parse", "HEAD")
+    coordinator = Coordinator(repo, Store(tmp_path / "state/state.db"), Agent(), Worker(), GitHub())
+    text, omitted, included, deferred = coordinator._source_context(
+        base, {"payload": {"kind": "generate_spec"}}
+    )
+    context = json.loads(text.split("SOURCE_CONTEXT_JSON:\n", 1)[1])
+    assert context["files"][".mentat/fas.json"] == path.read_text()
+    assert context["prior_revision_index"][record["id"]] == {"digest": digest(record), "version": 1}
+    assert ".mentat/fas.json" in included and ".mentat/fas.json" not in omitted
+    assert ".mentat/workspace.json" in included
+    assert deferred
+    assert len(json.dumps(context, ensure_ascii=True)) <= 500_000
+
+    fas["requirements"][0]["statement"] = "b" * 70_000
+    path.write_text(json.dumps(fas))
+    git(repo, "add", ".mentat/fas.json")
+    git(repo, "commit", "-qm", "revise fas")
+    head = git(repo, "rev-parse", "HEAD")
+    text, _, _, _ = coordinator._source_context(
+        head, {"payload": {"kind": "review_spec", "proposal": {"parent": base}}}
+    )
+    context = json.loads(text.split("SOURCE_CONTEXT_JSON:\n", 1)[1])
+    assert context["files"][".mentat/fas.json"] == path.read_text()
+    assert len(context["proposal_diff"]) > 100_000
+    assert len(json.dumps(context, ensure_ascii=True)) <= 500_000
+
+
+def test_required_fas_over_capacity_fails_explicitly(repo, tmp_path):
+    path = repo / ".mentat/fas.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "requirements": [{"id": str(uuid.uuid4()), "statement": "a" * 240_000}],
+                "claims": [],
+                "surfaces": [],
+            }
+        )
+    )
+    git(repo, "add", ".mentat/fas.json")
+    git(repo, "commit", "-qm", "oversized fas")
+    head = git(repo, "rev-parse", "HEAD")
+    coordinator = Coordinator(repo, Store(tmp_path / "state/state.db"), Agent(), Worker(), GitHub())
+    with pytest.raises(ValueError, match="required FAS.*context capacity"):
+        coordinator._source_context(head, {"payload": {"kind": "generate_spec"}})
+
+
+@pytest.mark.parametrize("mandatory", [".mentat/workspace.json", "openspec/specs/app/spec.md"])
+def test_required_configuration_and_openspec_are_not_silently_omitted(repo, tmp_path, mandatory):
+    path = repo / mandatory
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("a" * 70_000)
+    git(repo, "add", ".")
+    git(repo, "commit", "-qm", "large required context")
+    head = git(repo, "rev-parse", "HEAD")
+    coordinator = Coordinator(repo, Store(tmp_path / "state/state.db"), Agent(), Worker(), GitHub())
+    text, omitted, included, _ = coordinator._source_context(
+        head, {"payload": {"kind": "generate_spec", "targetfiles": ["src.py"]}}
+    )
+    context = json.loads(text.split("SOURCE_CONTEXT_JSON:\n", 1)[1])
+    assert context["files"][mandatory] == path.read_text()
+    assert mandatory in included and mandatory not in omitted
+    path.write_text("a" * 240_001)
+    git(repo, "add", ".")
+    git(repo, "commit", "-qm", "oversized required context")
+    head = git(repo, "rev-parse", "HEAD")
+    with pytest.raises(ValueError, match="required configuration or OpenSpec.*capacity"):
+        coordinator._source_context(head, {"payload": {"kind": "generate_spec"}})
+
+
+def test_required_documents_over_budget_fail_before_optional_source(repo, tmp_path):
+    fas = {
+        "schema_version": 1,
+        "requirements": [{"id": str(uuid.uuid4()), "statement": "a" * 200_000}],
+        "claims": [],
+        "surfaces": [],
+    }
+    (repo / ".mentat/fas.json").write_text(json.dumps(fas))
+    spec = repo / "openspec/specs/app/spec.md"
+    spec.parent.mkdir(parents=True)
+    spec.write_text("s" * 170_000)
+    git(repo, "add", ".")
+    git(repo, "commit", "-qm", "required context exceeds budget")
+    head = git(repo, "rev-parse", "HEAD")
+    coordinator = Coordinator(repo, Store(tmp_path / "state/state.db"), Agent(), Worker(), GitHub())
+    with pytest.raises(ValueError, match="required configuration or OpenSpec.*capacity"):
+        coordinator._source_context(head, {"payload": {"kind": "generate_spec"}})
+
+
+def test_targeted_large_source_progress_and_unsupported_size(repo, tmp_path):
+    source = repo / "src.py"
+    source.write_text("# " + "x" * 112_000)
+    giant = repo / "too_large.py"
+    giant.write_text("# " + "x" * 240_001)
+    git(repo, "add", ".")
+    git(repo, "commit", "-qm", "large application sources")
+    head = git(repo, "rev-parse", "HEAD")
+    coordinator = Coordinator(repo, Store(tmp_path / "state/state.db"), Agent(), Worker(), GitHub())
+    text, omitted, _, deferred = coordinator._source_context(
+        head, {"payload": {"kind": "generate_spec"}}
+    )
+    context = json.loads(text.split("SOURCE_CONTEXT_JSON:\n", 1)[1])
+    assert "src.py" in omitted and "src.py" in deferred
+    assert "too_large.py" in omitted and "too_large.py" not in deferred
+    assert any(
+        item["path"] == "too_large.py" and "240000" in item["reason"] for item in context["omitted"]
+    )
+    text, _, included, _ = coordinator._source_context(
+        head, {"payload": {"kind": "generate_spec", "targetfiles": ["src.py"]}}
+    )
+    assert "src.py" in included
+    assert (
+        json.loads(text.split("SOURCE_CONTEXT_JSON:\n", 1)[1])["files"]["src.py"]
+        == source.read_text()
+    )
+    with pytest.raises(ValueError, match="cannot make progress within capacity"):
+        coordinator._source_context(
+            head, {"payload": {"kind": "generate_spec", "targetfiles": ["too_large.py"]}}
+        )
+    source.write_text(source.read_text() + "\n# reviewed change\n")
+    git(repo, "add", "src.py")
+    git(repo, "commit", "-qm", "change large source")
+    changed_head = git(repo, "rev-parse", "HEAD")
+    text, _, included, _ = coordinator._source_context(
+        changed_head, {"payload": {"kind": "review_fix", "proposal": {"parent": head}}}
+    )
+    assert "src.py" in included
+    assert (
+        json.loads(text.split("SOURCE_CONTEXT_JSON:\n", 1)[1])["files"]["src.py"]
+        == source.read_text()
+    )
+
+
+def test_targeted_chunk_without_remaining_capacity_fails_explicitly(repo, tmp_path):
+    fas = {
+        "schema_version": 1,
+        "requirements": [{"id": str(uuid.uuid4()), "statement": "a" * 200_000}],
+        "claims": [],
+        "surfaces": [],
+    }
+    (repo / ".mentat/fas.json").write_text(json.dumps(fas))
+    spec = repo / "openspec/specs/app/spec.md"
+    spec.parent.mkdir(parents=True)
+    spec.write_text("s" * 150_000)
+    (repo / "src.py").write_text("# " + "x" * 20_000)
+    git(repo, "add", ".")
+    git(repo, "commit", "-qm", "target has no remaining capacity")
+    head = git(repo, "rev-parse", "HEAD")
+    coordinator = Coordinator(repo, Store(tmp_path / "state/state.db"), Agent(), Worker(), GitHub())
+    with pytest.raises(ValueError, match="cannot make progress within capacity"):
+        coordinator._source_context(
+            head, {"payload": {"kind": "generate_spec", "targetfiles": ["src.py"]}}
+        )
