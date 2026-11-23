@@ -477,6 +477,21 @@ regression, boundary and configured static gate passed 107 tests; the fast gate
 and whitespace check also pass. Exact-commit reviews, completion gates and a
 renewed real workflow remain pending.
 
+Frozen citation candidate `a006c93783fe57479fd60f3ed51b481b2b757fb9`
+passed independent native and Linux completion (1,893 passed and 53 documented
+optional skips each), both package gates, Ruff, Pyright with the explicit
+candidate interpreter, complete 291-path inventory and all 45 protected fixtures
+without skips. The exact clean head and 228 source/script/test hashes matched
+before and after. An initial Pyright invocation selected the wrong interpreter
+and reported missing dependencies; its diagnostic log remains alongside the
+correct explicit-interpreter pass. Both independent reviews accepted the commit.
+
+Before another real run, generation guidance now recommends the supported
+structured revision citation for new local observations, preventing a fresh
+generator from choosing an unrecognized prose convention. Existing provenance
+remains unchanged. The final prompt candidate requires renewed exact-revision
+completion and real workflow evidence before readiness.
+
 The renewed real self-run from `cebafba` completed SCL, including substantive
 deadline/exception-cleanup corrections accepted by fresh reviewer pairs. The
 lockfile remained an explicit gap. Candidate
