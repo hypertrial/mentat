@@ -569,13 +569,14 @@ try:
         assert not os.path.lexists(modules)
         os.mkdir(modules)
     os.mkdir(os.path.join(work, ".venv"))
-    cache = os.path.join(work, ".mentat-uv-cache")
+    cache = os.path.join(folder, "uv-cache")
     assert not os.path.lexists(cache)
     shutil.copytree("/opt/mentat-tools/cache", cache, symlinks=True)
-    for root, dirs, files in os.walk(work, followlinks=False):
-        os.chown(root, 65534, 65534, follow_symlinks=False)
-        for name in files + dirs:
-            os.chown(os.path.join(root, name), 65534, 65534, follow_symlinks=False)
+    for tree in (work, cache):
+        for root, dirs, files in os.walk(tree, followlinks=False):
+            os.chown(root, 65534, 65534, follow_symlinks=False)
+            for name in files + dirs:
+                os.chown(os.path.join(root, name), 65534, 65534, follow_symlinks=False)
     # The wrapper is outside the sandbox and owns this marker directory; the
     # candidate only sees a separate /tmp. A systemd SIGTERM can otherwise be
     # reported as a clean service exit even though the command never finished.
@@ -589,8 +590,8 @@ try:
            "--", "/usr/bin/python3", "-I", "-B", "-c", COMPLETION_WRAPPER, marker, unit, "bwrap", "--die-with-parent", "--unshare-all", "--new-session",
            "--ro-bind", "/usr", "/usr", "--symlink", "usr/bin", "/bin",
            "--symlink", "usr/lib", "/lib", "--proc", "/proc", "--dev", "/dev",
-           "--tmpfs", "/tmp", "--bind", work, "/work", "--ro-bind", "/opt/mentat-tools", "/opt/mentat-tools", "--ro-bind", venv, "/work/.venv", "--chdir", "/work",
-           "--clearenv", "--setenv", "HOME", "/tmp", "--setenv", "PATH", "/tmp/mentat-package/bin:/work/.venv/bin:/opt/mentat-tools/bin:/opt/mentat-tools/node/bin:/usr/local/bin:/usr/bin:/bin", "--setenv", "PYTHONPATH", "/work/src:/tmp/mentat-package", "--setenv", "TEST_JOBS", "1", "--setenv", "UV_OFFLINE", "1", "--setenv", "UV_CACHE_DIR", "/work/.mentat-uv-cache", "--setenv", "PLAYWRIGHT_BROWSERS_PATH", "/opt/mentat-tools/browsers"]
+           "--tmpfs", "/tmp", "--bind", cache, "/tmp/mentat-uv-cache", "--bind", work, "/work", "--ro-bind", "/opt/mentat-tools", "/opt/mentat-tools", "--ro-bind", venv, "/work/.venv", "--chdir", "/work",
+           "--clearenv", "--setenv", "HOME", "/tmp", "--setenv", "PATH", "/tmp/mentat-package/bin:/work/.venv/bin:/opt/mentat-tools/bin:/opt/mentat-tools/node/bin:/usr/local/bin:/usr/bin:/bin", "--setenv", "PYTHONPATH", "/work/src:/tmp/mentat-package", "--setenv", "TEST_JOBS", "1", "--setenv", "UV_OFFLINE", "1", "--setenv", "UV_CACHE_DIR", "/tmp/mentat-uv-cache", "--setenv", "PLAYWRIGHT_BROWSERS_PATH", "/opt/mentat-tools/browsers"]
     if use_py314:
         cmd += ["--ro-bind", "/opt/mentat-tools/node-tools/node_modules", "/work/node_modules", "--setenv", "NODE_PATH", "/opt/mentat-tools/node-tools/node_modules"]
     if os.path.isdir("/opt/lean-4.35.0"):

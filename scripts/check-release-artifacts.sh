@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Validate the installed artifacts without importing the checkout or a caller's
+# Python environment. This affects only this script and its child processes.
+unset PYTHONPATH PYTHONHOME
+
 dist_dir=$(cd "${1:?Pass the directory containing the built wheel and sdist}" && pwd)
 repo_root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$repo_root"
-expected_version=$(uv run --locked --no-sync python -c \
+expected_version=$(uv run --locked --no-sync python -I -c \
   'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
 artifact_dir=$(mktemp -d)
 trap 'rm -rf -- "$artifact_dir"' EXIT
@@ -12,14 +16,14 @@ trap 'rm -rf -- "$artifact_dir"' EXIT
 for artifact in "$dist_dir/"*.whl "$dist_dir/"*.tar.gz; do
     [[ -f "$artifact" ]]
     if [[ "$artifact" == *.tar.gz ]]; then
-        tar -tzf "$artifact" | awk -F/ '
-            $2 == ".git" { found = 1 }
-            END {
-                if (found) {
-                    print "Source distribution contains Git metadata." > "/dev/stderr"
-                    exit 1
-                }
-            }'
+        python -I - "$artifact" <<'PY'
+import sys
+import tarfile
+
+with tarfile.open(sys.argv[1], "r:gz") as archive:
+    if any(member.name.split("/")[1:2] == [".git"] for member in archive):
+        sys.exit("Source distribution contains Git metadata.")
+PY
     fi
     venv="$artifact_dir/$(basename "$artifact").venv"
     UV_PROJECT_ENVIRONMENT="$venv" uv sync --locked --no-dev --no-install-project
@@ -28,7 +32,7 @@ for artifact in "$dist_dir/"*.whl "$dist_dir/"*.tar.gz; do
         cd "$artifact_dir"
         [[ $("$venv/bin/mentat" --version) == "mentat $expected_version" ]]
         "$venv/bin/mentat" showcase polaris --help > /dev/null
-        "$venv/bin/python" - "$expected_version" <<'PY'
+        "$venv/bin/python" -I - "$expected_version" <<'PY'
 from importlib.metadata import distribution
 from pathlib import Path
 import subprocess

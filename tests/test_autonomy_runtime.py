@@ -606,3 +606,120 @@ def test_patch_fas_rejects_malformed_existing_json(tmp_path):
         with pytest.raises((ValueError, OSError)):
             runtime.apply_changes(tmp_path, [_fas_change(patch)], kind='generate_spec')
         assert path.read_bytes() == raw
+
+
+def _exercise_guest_cache_layout(tmp_path, monkeypatch, version, inspect):
+    import base64
+    import io
+    import os
+    import shutil
+    import subprocess
+    import sys
+    import tarfile
+    import tempfile
+    from unittest.mock import Mock
+
+    source = io.BytesIO()
+    with tarfile.open(fileobj=source, mode='w') as archive:
+        for name, content in {
+            '.python-version': version.encode(),
+            'pyproject.toml': b'[build-system]\nrequires = ["hatchling==1.29.0"]\nbuild-backend = "hatchling.build"\n[project]\nname = "example"\nversion = "1.0"\n[tool.hatch.build.targets.wheel]\npackages = ["src/example"]\n',
+            'src/example/__init__.py': b'value = 1\n',
+        }.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(content)
+            archive.addfile(info, io.BytesIO(content))
+    envelope = io.BytesIO()
+    with tarfile.open(fileobj=envelope, mode='w') as archive:
+        for name, data in [('source.tar', source.getvalue()), ('source.bundle', b'bundle')]:
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            archive.addfile(info, io.BytesIO(data))
+    envelope.seek(0)
+    folder = tmp_path / 'guest'
+    original_copytree = shutil.copytree
+    def copytree(src, dst, **kwargs):
+        if src == '/opt/mentat-tools/cache':
+            src = tmp_path / 'tool-cache'
+        return original_copytree(src, dst, **kwargs)
+    (tmp_path / 'tool-cache').mkdir()
+    (tmp_path / 'tool-cache' / 'cache-marker').write_text('private cache')
+    captured = {}
+    def fake_run(argv, **kwargs):
+        if argv[0] == 'git':
+            Path(argv[-1]).mkdir()
+        else:
+            captured['cmd'] = argv
+            inspect(folder / 'work', folder / 'uv-cache')
+        return Mock(returncode=0)
+    monkeypatch.setattr(tempfile, 'mkdtemp', lambda **kwargs: str(folder))
+    folder.mkdir()
+    monkeypatch.setattr(shutil, 'copytree', copytree)
+    ownership = []
+    monkeypatch.setattr(os, 'chown', lambda path, uid, gid, **kwargs: ownership.append((str(path), uid, gid)))
+    monkeypatch.setattr(subprocess, 'run', fake_run)
+    monkeypatch.setattr(subprocess, 'check_output', lambda *args, **kwargs: b'fixed-head\n')
+    monkeypatch.setattr(sys, 'stdin', io.TextIOWrapper(envelope))
+    monkeypatch.setattr(sys, 'argv', ['guest', base64.b64encode(b'["true"]').decode(), '30', 'job', 'fixed-head'])
+    import pytest
+    with pytest.raises(SystemExit):
+        exec(runtime._GUEST_RUNNER, {})
+    assert not folder.exists()
+    assert (str(folder / 'uv-cache/cache-marker'), 65534, 65534) in ownership
+    assert (str(folder / 'work/pyproject.toml'), 65534, 65534) in ownership
+    return captured['cmd']
+
+
+def test_guest_cache_is_separate_bound_and_offline_for_both_python_versions(tmp_path, monkeypatch):
+    for version in ('3.12', '3.14'):
+        with monkeypatch.context() as patch:
+            case = tmp_path / version
+            case.mkdir()
+            def inspect(work, cache, expected_version=version):
+                assert (cache / 'cache-marker').read_text() == 'private cache'
+                assert not (work / '.mentat-uv-cache').exists()
+                assert not any(p.name == 'cache-marker' for p in work.rglob('*'))
+                assert (work / 'src/example/__init__.py').read_text() == 'value = 1\n'
+                assert (work / '.python-version').read_text() == expected_version
+            cmd = _exercise_guest_cache_layout(case, patch, version, inspect)
+            assert (case / 'tool-cache/cache-marker').read_text() == 'private cache'
+            assert cmd[cmd.index('--tmpfs') + 1] == '/tmp'
+            bind = cmd.index('/tmp/mentat-uv-cache')
+            assert cmd[bind - 2] == '--bind' and cmd[bind - 1] == str(case / 'guest/uv-cache')
+            assert cmd.index('--tmpfs') < bind
+            assert cmd[cmd.index('UV_CACHE_DIR') + 1] == '/tmp/mentat-uv-cache'
+            assert cmd[cmd.index('UV_OFFLINE') + 1] == '1'
+            assert '--unshare-all' in cmd and '--uid=nobody' in cmd
+            assert '--property=LimitFSIZE=256M' in cmd
+            expected = '/opt/mentat-tools/.venv-3.14' if version == '3.14' else '/opt/mentat-tools/.venv'
+            assert expected in cmd
+
+
+def test_guest_cache_marker_excluded_from_real_build_artifacts(tmp_path, monkeypatch):
+    import subprocess
+    import sys
+    import tarfile
+    import zipfile
+
+    original_run = subprocess.run
+    def inspect(work, cache):
+        assert (cache / 'cache-marker').is_file()
+        dist = tmp_path / 'dist'
+        original_run(['uv', 'build', '--offline', '--no-sources', '--no-python-downloads',
+                      '--python', sys.executable, '--out-dir', str(dist)],
+                     cwd=work, check=True, capture_output=True)
+        with tarfile.open(next(dist.glob('*.tar.gz'))) as artifact:
+            assert not any('cache-marker' in name for name in artifact.getnames())
+        with zipfile.ZipFile(next(dist.glob('*.whl'))) as artifact:
+            assert not any('cache-marker' in name for name in artifact.namelist())
+        assert not (work / '.mentat-uv-cache').exists()
+        old_cache = work / '.mentat-uv-cache'
+        old_cache.mkdir()
+        (old_cache / 'cache-marker').write_text('private cache')
+        control = tmp_path / 'control'
+        original_run(['uv', 'build', '--offline', '--no-sources', '--no-python-downloads',
+                      '--python', sys.executable, '--sdist', '--out-dir', str(control)],
+                     cwd=work, check=True, capture_output=True)
+        with tarfile.open(next(control.glob('*.tar.gz'))) as artifact:
+            assert any('cache-marker' in name for name in artifact.getnames())
+    _exercise_guest_cache_layout(tmp_path, monkeypatch, '3.12', inspect)

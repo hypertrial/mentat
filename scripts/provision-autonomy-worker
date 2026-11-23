@@ -49,6 +49,19 @@ uv pip install --python "$root/.venv-3.14/bin/python" --no-deps -r "$root/node-t
 npm ci --prefix "$root/node-tools" --ignore-scripts --no-audit --no-fund
 UV_PROJECT_ENVIRONMENT="$root/.venv" uv sync --project "$root/baseline" --locked --extra polaris --no-install-project
 uv pip install --python "$root/.venv/bin/python" 'playwright==1.65.2' 'hatchling==1.29.0'
+# Populate uv's resolver cache for isolated offline builds using only the pinned
+# Hatchling closure. Installing wheels with --no-deps does not cache metadata.
+build_requirements="$root/downloads/build-requirements.txt"
+resolved_requirements="$root/downloads/build-resolved.txt"
+for package in hatchling packaging pathspec pluggy trove-classifiers; do
+  grep -E "^${package}==[^[:space:]]+$" "$root/node-tools/requirements-314.txt"
+done | sort > "$build_requirements"
+[[ $(wc -l < "$build_requirements") -eq 5 ]] || { echo 'Invalid pinned build requirements' >&2; exit 1; }
+for python in "$root/.venv/bin/python" "$root/.venv-3.14/bin/python"; do
+  uv pip compile --python "$python" --no-header --no-annotate "$build_requirements" -o "$resolved_requirements"
+  sort -o "$resolved_requirements" "$resolved_requirements"
+  cmp -s "$build_requirements" "$resolved_requirements" || { echo 'Build dependency closure differs from pins' >&2; exit 1; }
+done
 "$root/.venv/bin/python" -m playwright install --with-deps chromium
 browser=$("$root/.venv/bin/python" -c 'from playwright.sync_api import sync_playwright; p=sync_playwright().start(); print(p.chromium.executable_path); p.stop()')
 [[ -x "$browser" ]] || { echo 'Chromium installation unavailable' >&2; exit 1; }
