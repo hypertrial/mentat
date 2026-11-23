@@ -34,6 +34,7 @@ PRESENTATION_MODULES = ("evidence_html", "claims_notion", "openspec")
 VERIFIER_MODULES = (
     "__init__",
     "source_verify",
+    "autonomy_state",
     "canonical",
     "claims",
     "cli",
