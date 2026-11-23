@@ -66,6 +66,10 @@ Changed-record repository citations may use path objects or path strings with
 supported line anchors. Missing, unsafe or malformed local citations fail explicitly;
 HTTP(S) references are identified as uninspected external metadata.
 
+New verification artifacts receive explicit unexamined inventory entries from the
+controller. This does not establish a requirement link or proof. The complete
+candidate inventory is validated again before publication.
+
 Specification corrections reserve the sources needed for the draft under review
 as well. A correction is not asked to edit a mapped observation without receiving
 the corresponding source; genuine capacity uses the same bounded recovery path.

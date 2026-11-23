@@ -1336,6 +1336,28 @@ class Coordinator:
                     or any(old_requirements.get(ref) != new_requirements.get(ref) for ref in refs)
                 ):
                     raise ValueError("unexamined source cannot support a changed formal contract")
+        if kind == "generate_verification":
+            # Verification artifacts are newly tracked surfaces too. The agent
+            # cannot edit FAS; append only controller-owned, unexamined entries
+            # after the normal staged-path authorization has passed.
+            tracked = [entry["path"] for entry in inventory(self.repo, parent)]
+            if FAS_PATH not in tracked:
+                raise ValueError("verification proposal requires an existing FAS inventory")
+            prior = json.loads(gitio.read_file(self.repo, parent, FAS_PATH))
+            fas = validate_specification(worktree, tracked=tracked, prior=prior)
+            candidate_paths = set(git(worktree, "ls-files", "--cached").splitlines())
+            surface_paths = {surface["path"] for surface in fas["surfaces"]}
+            added = sorted((set(staged) & candidate_paths) - set(tracked) - surface_paths)
+            if added:
+                fas["surfaces"].extend(
+                    {"path": path, "status": "unexamined", "requirement_ids": []} for path in added
+                )
+                (worktree / FAS_PATH).write_text(json.dumps(fas, indent=2) + "\n")
+                git(worktree, "add", "-f", "--", FAS_PATH)
+                staged = git(
+                    worktree, "diff", "--cached", "--name-only", "--no-renames"
+                ).splitlines()
+            validate_specification(worktree, tracked=sorted(candidate_paths), prior=prior)
         if self.stop.is_set() or self.clock() >= deadline:
             raise ValueError("session ended")
         if staged:
@@ -2929,6 +2951,9 @@ class Coordinator:
         worktree = Path(proposal["worktree"])
         if git(worktree, "rev-parse", "HEAD") != head or _changed_paths(worktree):
             raise ValueError("proposal changed before publication")
+        validate_specification(
+            worktree, tracked=[entry["path"] for entry in inventory(self.repo, head)]
+        )
         prior_events = self.store.snapshot(self.session_id)["events"]
         merge_started = any(
             e["kind"] == "merge_started" and e["payload"].get("head") == head for e in prior_events

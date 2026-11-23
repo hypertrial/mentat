@@ -3,16 +3,19 @@
 import hashlib
 import json
 import subprocess
+import uuid
 
 import pytest
 
 from mentat import autonomy_runtime
 from mentat.autonomy import (
+    AREAS,
     Coordinator,
     RemoteOutcomeUnknown,
     _diff,
     current_tool_identity,
     default_config,
+    validate_specification,
 )
 from mentat.autonomy_runtime import GitHub
 from mentat.autonomy_state import Store
@@ -30,6 +33,24 @@ def scenario(tmp_path, monkeypatch):
     git(repo, "config", "user.name", "Test")
     git(repo, "config", "user.email", "test@example.com")
     (repo / "file.txt").write_text("before\n")
+    spec_path = "openspec/specs/app/spec.md"
+    spec = repo / spec_path
+    spec.parent.mkdir(parents=True)
+    requirements = [
+        {"id": str(uuid.uuid5(uuid.NAMESPACE_URL, f"mentat-integration:{area}")),
+         "area": area, "origin": "uncertain", "statement": "Unspecified",
+         "spec_path": spec_path}
+        for area in AREAS
+    ]
+    spec.write_text("\n".join(record["id"] for record in requirements))
+    (repo / ".mentat").mkdir()
+    (repo / ".mentat/fas.json").write_text(json.dumps({
+        "schema_version": 1, "requirements": requirements, "claims": [],
+        "surfaces": [
+            {"path": path, "status": "gap", "requirement_ids": []}
+            for path in ("file.txt", ".mentat/fas.json", spec_path)
+        ],
+    }))
     git(repo, "add", ".")
     git(repo, "commit", "-qm", "base")
     base = git(repo, "rev-parse", "HEAD")
@@ -38,6 +59,10 @@ def scenario(tmp_path, monkeypatch):
     git(repo, "add", ".")
     git(repo, "commit", "-qm", "proposal")
     head = git(repo, "rev-parse", "HEAD")
+    tracked = git(repo, "ls-tree", "-r", "--name-only", head).splitlines()
+    validate_specification(repo, tracked=tracked)
+    assert git(repo, "ls-tree", "-r", "--name-only", base).splitlines() == tracked
+    assert git(repo, "diff", "--name-only", base, head).splitlines() == ["file.txt"]
     diff_digest = hashlib.sha256(_diff(repo, base, head)).hexdigest()
     store = Store(tmp_path / "state/state.db")
     config = default_config(repo)

@@ -186,3 +186,25 @@ the correction context treated the file as optional. Corrections now reserve
 the mapped/cited/contract sources of their unreviewed input before optional
 context, retaining the existing bounds and accepted-base recovery. New regression,
 independent-review and completion evidence remains required.
+
+## Inventory after verification generation
+
+The self-run at `40328f6` successfully exercised source-aware specification
+correction and bounded capacity recovery, completed SCL and entered IVL. Its
+candidate `341a0f7` introduced
+`.mentat/verification/check_eligibility_model.py` without a corresponding FAS
+surface. Exact candidate validation failed before publication, and the run was
+checkpointed without a completed precheck or readiness claim.
+
+The controller now validates the parent inventory and adds only newly staged
+verification artifacts as explicit unexamined surfaces with no requirement links.
+Existing semantic records and proof statuses remain unchanged. Both review stages
+see the complete FAS diff, and publication independently validates the exact clean
+candidate before GitHub interaction. Regressions cover a fresh session at the new
+candidate, unchanged claim digests, prohibited agent FAS edits, existing omissions
+and invalid-candidate rejection before remote side effects. Final exact-revision
+completion and renewed live-workflow evidence remain required. The first full
+gates exposed five real-boundary integration fixtures without the now-required
+FAS. The test owner added valid committed specifications while retaining adapter
+and publication assertions; 22 targeted integration/inventory checks passed.
+Full native and Linux reruns remain required on the revised commit.
