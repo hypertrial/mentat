@@ -37,6 +37,7 @@ VERIFIER_MODULES = (
     "autonomy_state",
     "autonomy_runtime",
     "autonomy_worker",
+    "autonomy_ui",
     "canonical",
     "claims",
     "cli",
