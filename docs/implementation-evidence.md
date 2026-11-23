@@ -246,3 +246,35 @@ sibling work is explicitly outside its composed assurance. A repaired source
 requires fresh source-aware SCL review before its binding can replace the old
 one. Controller-added unexamined rows remain inventory metadata across repairs.
 These findings require regression tests and renewed independent review.
+
+Frozen candidate `62fead6760a5a33e622b0d87190b1f0d9ffbe3c5` failed both
+native and Linux completion with the same 31 failures, 1,750 passes and 53
+documented optional skips. The independent verifier confirmed identical source
+manifests before and after. Both package gates and static analysis passed;
+the protected checker separately passed 45 tests with no skips. This candidate
+was not published or accepted. Twenty-six standalone context tests stopped at
+an unnecessary session assertion before their citation/capacity assertions;
+five real-adapter publication tests rejected source-only candidates because of
+a blanket generation-chain condition. The correction preserves standalone
+bounded context selection without inventing historical review authority, keeps
+strict composition in actual review jobs, and rechecks the precise accepted-work
+reconciliation invariant before publication. All masked tests, full local gates
+and independent reviews must be repeated on the corrected candidate.
+
+Adversarial review of the correction found that checking only sibling receipts
+missed a late accepted ancestor whose specification the candidate had reverted.
+Publication therefore reconstructs full composition whenever accepted SCL receipts
+exist. The compatibility path without receipts permits only byte-unchanged FAS/CAS
+from the session baseline and establishes no new specification-review authority.
+Tests must cover both late ancestor and sibling acceptance before remote calls.
+
+Security review found Git's quoted non-ASCII/control filenames could evade
+string-prefix checks on changed CAS paths. Path enumeration now uses bounded,
+NUL-delimited raw Git output with strict decoding and preserves exact leading
+whitespace. Inventory, staging, correspondence and publication selectors share
+this handling, retaining isolated Git configuration and execution safeguards.
+Non-ASCII/control-path regressions and a renewed security review are required.
+The review-diff command also explicitly disables Git text conversion so configured
+converters cannot run on the host while constructing review context or digests.
+A marker-converter regression must verify that the fixture would execute without
+the flag, then confirm raw source diff output without converter execution.

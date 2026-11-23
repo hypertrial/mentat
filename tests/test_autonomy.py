@@ -3320,8 +3320,19 @@ def test_both_review_stages_receive_every_check_after_twelfth(repo, tmp_path):
             assert 'extra-check' in prompt and '14' in prompt
 
 
-def test_chained_spec_reviews_reach_noop_verification_and_full_final_review(repo, tmp_path):
+@pytest.mark.parametrize("revert_prior_mapping", [False, True])
+def test_chained_spec_reviews_reach_noop_verification_and_full_final_review(repo, tmp_path, revert_prior_mapping):
     requirements, paths = _review_capacity_repo(repo)
+    if revert_prior_mapping:
+        unicode_cas = repo / 'openspec/specs/é/spec.md'
+        unicode_cas.parent.mkdir(parents=True)
+        unicode_cas.write_text('Existing unicode CAS\n')
+        fas_path = repo / '.mentat/fas.json'
+        fas = json.loads(fas_path.read_text())
+        fas['surfaces'].append({'path': 'openspec/specs/é/spec.md', 'status': 'gap',
+                                'requirement_ids': []})
+        fas_path.write_text(json.dumps(fas, ensure_ascii=False))
+        git(repo, 'add', '.')
     for path in paths:
         (repo / path).write_text('# ' + 'x' * 55_000 + '\n')
     git(repo, 'commit', '-qam', 'large optional source inventory')
@@ -3338,7 +3349,9 @@ def test_chained_spec_reviews_reach_noop_verification_and_full_final_review(repo
                 path = repo / '.mentat/fas.json'
                 fas = json.loads(path.read_text())
                 for surface in fas['surfaces']:
-                    if surface['path'] in paths and surface['path'] in context['files']:
+                    if revert_prior_mapping and payload.get('targetfiles') and surface['status'] == 'mapped':
+                        surface.update(status='gap', requirement_ids=[])
+                    elif surface['path'] in paths and surface['path'] in context['files']:
                         surface.update(status='mapped', requirement_ids=[requirements[0]['id']])
                 path.write_text(json.dumps(fas))
             if kind in {'generate_spec', 'generate_verification'}:
@@ -3418,6 +3431,35 @@ def test_chained_spec_reviews_reach_noop_verification_and_full_final_review(repo
         coordinator._publish({'payload': {'proposal': proposal, 'reviews': reviews}}, evidence)
     assert not github_spy.published and not github_spy.merged
 
+    if revert_prior_mapping:
+        # Replay a real accepted ancestor after final context construction.
+        # The candidate has since reverted that ancestor's mapped records.
+        late_ancestor = deepcopy(snapshot)
+        first = next(e for e in late_ancestor['events'] if e['seq'] == events[0]['seq'])
+        class LateSnapshot:
+            path = store.path
+            def snapshot(self, session_id):
+                return late_ancestor
+        coordinator.store = LateSnapshot()
+        git(repo, 'checkout', '-q', '--detach', candidate['head'])
+        candidate_proposal = {'head': candidate['head'], 'parent': snapshot['session']['base'],
+                              'worktree': str(repo), 'diff_digest': 'later-final'}
+        coordinator._source_context(candidate['head'], {'payload': {'kind': 'review_final',
+            'proposal': candidate_proposal, 'check_summary': {}}})
+        late_ancestor['events'].append(first)
+        key = coordinator._check_key(candidate['head'], [], [], None)
+        later_evidence = {'id': 'later-check', 'head': candidate['head'],
+                          'base': snapshot['session']['base'], 'check_key': key, 'checks': []}
+        later_reviews = [{'reviewer_id': reviewer, 'author_id': 'author', 'status': 'passed',
+            'head': candidate['head'], 'base': snapshot['session']['base'],
+            'diff_digest': 'later-final', 'review_cohort': 'later-cohort',
+            'check_evidence_id': 'later-check', 'check_key': key} for reviewer in ('one', 'two')]
+        with pytest.raises(ValueError):
+            coordinator._publish({'payload': {'proposal': candidate_proposal,
+                                  'reviews': later_reviews}}, later_evidence)
+        assert not github_spy.published and not github_spy.merged
+        coordinator.store = store
+
     # Reuse the actual persisted review events and decisions, then change one
     # reviewed input at a time. A copied receipt must not survive content drift.
     coordinator = Coordinator(repo, store, Agent(), Worker(), GitHub())
@@ -3431,13 +3473,14 @@ def test_chained_spec_reviews_reach_noop_verification_and_full_final_review(repo
         if drift == 'source':
             (repo / paths[0]).write_text('changed after review\n')
         elif drift == 'cas':
-            spec = repo / 'openspec/specs/application/spec.md'
+            spec = repo / ('openspec/specs/é/spec.md' if revert_prior_mapping
+                           else 'openspec/specs/application/spec.md')
             spec.write_text(spec.read_text() + '\nchanged after review\n')
         else:
             fas_path = repo / '.mentat/fas.json'
             fas = json.loads(fas_path.read_text())
             if drift == 'mapping':
-                next(row for row in fas['surfaces'] if row['path'] == paths[0])['requirement_ids'] = []
+                next(row for row in fas['surfaces'] if row['path'] == paths[0])['status'] = 'unsupported'
             elif drift == 'requirement':
                 fas['requirements'][0]['statement'] = 'changed after review'
             elif drift == 'deleted_surface':
@@ -3451,8 +3494,14 @@ def test_chained_spec_reviews_reach_noop_verification_and_full_final_review(repo
             fas_path.write_text(json.dumps(fas))
         git(repo, 'add', '-A')
         git(repo, 'commit', '-qm', 'post-review drift')
+        changed = git(repo, 'rev-parse', 'HEAD')
         with pytest.raises(ValueError):
-            coordinator._review_composition(git(repo, 'rev-parse', 'HEAD'))
+            coordinator._review_composition(changed)
+        coordinator.config = default_config(repo)
+        with pytest.raises(ValueError):
+            coordinator._source_context(changed, {'payload': {'kind': 'review_final',
+                'proposal': {'head': changed, 'parent': snapshot['session']['base']},
+                'check_summary': {}}})
         git(repo, 'reset', '--hard', '-q', candidate['head'])
 
     # Tamper with persisted identities while retaining the real Git history.
@@ -3546,3 +3595,68 @@ def test_review_receipt_binds_same_cited_file_reviewers_saw(repo, tmp_path, exac
     git(repo, 'commit', '-qm', 'change reviewed citation')
     with pytest.raises(ValueError):
         coordinator._review_composition(git(repo, 'rev-parse', 'HEAD'))
+
+
+def test_standalone_spec_context_has_no_review_authority_and_dispatch_requires_session(repo, tmp_path):
+    import time
+
+    head = git(repo, 'rev-parse', 'HEAD')
+    store = Store(tmp_path / 'state/state.db')
+    github = GitHub()
+    coordinator = Coordinator(repo, store, Agent(), Worker(), github)
+    coordinator.config = default_config(repo)
+    proposal = {'parent': head, 'head': head, 'diff_digest': 'unused', 'author_id': 'author'}
+    job = {'id': 'unbound', 'attempt': 1, 'item_id': 'unbound', 'loop': 'scl',
+           'payload': {'kind': 'review_spec', 'proposal': proposal}}
+    text, _, _, _ = coordinator._source_context(head, job)
+    context = json.loads(text.split('SOURCE_CONTEXT_JSON:\n', 1)[1])
+    assert 'reviewed_specification' not in context
+    assert 'trusted_source_verifier' not in context
+    assert not context.get('correspondence_refresh')
+    with pytest.raises((AssertionError, ValueError)):
+        coordinator._execute(job, time.time() + 60)
+    with pytest.raises((AssertionError, ValueError)):
+        coordinator._request_reviews(job, proposal, 'review_spec')
+    with pytest.raises((AssertionError, ValueError)):
+        coordinator._publish({'payload': {'proposal': proposal, 'reviews': []}}, {})
+    assert not github.published and not github.merged
+
+
+def test_review_diff_never_executes_configured_git_textconv(repo, tmp_path):
+    import hashlib
+    import shlex
+
+    from mentat.autonomy import _diff
+
+    marker = tmp_path / 'converter-ran'
+    converter = tmp_path / 'textconv.sh'
+    converter.write_text(f'printf ran > {shlex.quote(str(marker))}\ncat "$1"\n')
+    git(repo, 'config', 'diff.marker.textconv', f'sh {shlex.quote(str(converter))}')
+    (repo / '.gitattributes').write_text('*.dat diff=marker\n')
+    source = repo / 'source.dat'
+    source.write_text('original source\n')
+    git(repo, 'add', '.')
+    git(repo, 'commit', '-qm', 'configure text conversion')
+    base = git(repo, 'rev-parse', 'HEAD')
+    source.write_text('changed source\n')
+    git(repo, 'commit', '-qam', 'change source')
+    head = git(repo, 'rev-parse', 'HEAD')
+
+    # Establish that the repository-local fixture executes under Git's old flags.
+    subprocess.check_output(['git', '-C', str(repo), 'diff', '--binary', '--no-ext-diff', base, head])
+    assert marker.read_text() == 'ran'
+    marker.unlink()
+
+    expected_diff = subprocess.check_output(['git', '-C', str(repo), 'diff', '--binary',
+                                             '--no-ext-diff', '--no-textconv', base, head])
+    raw_diff = _diff(repo, base, head)
+    assert raw_diff == expected_diff
+    assert b'-original source' in raw_diff and b'+changed source' in raw_diff
+    assert not marker.exists()
+    coordinator = Coordinator(repo, Store(tmp_path / 'state/state.db'), Agent(), Worker(), GitHub())
+    text, _, _, _ = coordinator._source_context(head, {'payload': {'kind': 'review_spec',
+        'proposal': {'head': head, 'parent': base}}})
+    context = json.loads(text.split('SOURCE_CONTEXT_JSON:\n', 1)[1])
+    assert context['proposal_diff'].encode() == raw_diff
+    assert hashlib.sha256(context['proposal_diff'].encode()).digest() == hashlib.sha256(expected_diff).digest()
+    assert not marker.exists()
