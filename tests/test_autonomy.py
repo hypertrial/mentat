@@ -2545,9 +2545,12 @@ def test_changed_citations_fail_closed(repo, tmp_path, record_kind, citation, er
     git(repo, 'commit', '-qm', 'changed citation')
     head = git(repo, 'rev-parse', 'HEAD')
     coordinator = Coordinator(repo, Store(tmp_path / 'state/state.db'), Agent(), Worker(), GitHub())
-    with pytest.raises(ValueError, match=error):
+    from mentat.autonomy import ReviewContextCapacity
+
+    with pytest.raises(ValueError, match=error) as exc:
         coordinator._source_context(head, {'payload': {
             'kind': 'review_spec', 'proposal': {'parent': base}}})
+    assert not isinstance(exc.value, ReviewContextCapacity)
 
 
 @pytest.mark.parametrize('citations', [None, 'src.py', {'path': 'src.py'}])
@@ -2626,3 +2629,217 @@ def test_unchanged_historical_citation_does_not_block_unrelated_review(repo, tmp
     context, _, _, _ = coordinator._source_context(head, {'payload': {
         'kind': 'review_spec', 'proposal': {'parent': base}}})
     assert 'proposal_diff' in context
+
+
+def _review_capacity_repo(repo):
+    requirements = [
+        {'id': str(uuid.uuid4()), 'area': area, 'origin': 'uncertain',
+         'statement': 'Existing intent', 'spec_path': 'openspec/specs/application/spec.md'}
+        for area in AREAS
+    ]
+    spec = repo / 'openspec/specs/application/spec.md'
+    spec.parent.mkdir(parents=True)
+    spec.write_text('\n'.join(row['id'] for row in requirements))
+    paths = [f'src/file{i}.py' for i in range(8)]
+    (repo / 'src').mkdir()
+    for path in paths:
+        (repo / path).write_text('# ' + 'x' * 34_000 + '\n')
+    surfaces = [{'path': path, 'status': 'gap', 'requirement_ids': []} for path in [
+        'src.py', '.mentat/workspace.json', '.mentat/fas.json',
+        'openspec/specs/application/spec.md', *paths]]
+    (repo / '.mentat/fas.json').write_text(json.dumps({
+        'schema_version': 1, 'requirements': requirements, 'claims': [], 'surfaces': surfaces}))
+    git(repo, 'add', '.')
+    git(repo, 'commit', '-qm', 'prior reviewed specification')
+    git(repo, 'update-ref', 'refs/remotes/origin/main', git(repo, 'rev-parse', 'HEAD'))
+    return requirements, paths
+
+
+def test_review_capacity_splits_draft_and_reviews_each_accepted_mapping(repo, tmp_path):
+    requirements, paths = _review_capacity_repo(repo)
+    base = git(repo, 'rev-parse', 'HEAD')
+    calls = []
+
+    class CapacityAgent(Agent):
+        def run(self, repo, job, output, *, timeout_seconds):
+            payload = job['payload']
+            kind = payload['kind']
+            context = json.loads(payload['prompt'].split('SOURCE_CONTEXT_JSON:\n', 1)[1])
+            calls.append((kind, payload, context, git(repo, 'rev-parse', 'HEAD')))
+            if kind == 'generate_spec':
+                path = repo / '.mentat/fas.json'
+                fas = json.loads(path.read_text())
+                if not payload.get('round') and not payload.get('targetfiles'):
+                    assert all(p in context['files'] for p in paths)
+                    for surface in fas['surfaces']:
+                        if surface['path'] in paths:
+                            surface.update(status='mapped', requirement_ids=[requirements[0]['id']],
+                                           note='x' * 12_000)
+                elif payload.get('round') == 1:
+                    assert git(repo, 'rev-parse', 'HEAD') == base
+                    assert set(paths) <= set(payload['revisit_files'])
+                    surface = next(row for row in fas['surfaces'] if row['path'] == paths[0])
+                    surface.update(status='mapped', requirement_ids=[requirements[0]['id']])
+                else:
+                    for surface in fas['surfaces']:
+                        if surface['path'] in payload.get('targetfiles', []) and surface['path'] in paths:
+                            surface.update(status='mapped', requirement_ids=[requirements[0]['id']])
+                path.write_text(json.dumps(fas))
+                return {'status': 'succeeded', 'session_id': job['id'], 'result': {
+                    'decision': 'accept', 'summary': 'partial mapping', 'findings': [],
+                    'verification_requests': []}}
+            return super().run(repo, job, output, timeout_seconds=timeout_seconds)
+
+    snapshot, _, github = run(repo, tmp_path, agent=CapacityAgent())
+    generators = [x for x in calls if x[0] == 'generate_spec']
+    retries = [x for x in generators if x[1].get('round') == 1]
+    assert retries, [(j['payload']['kind'], j['status'], j.get('outcome')) for j in snapshot['jobs']]
+    retry = retries[0]
+    assert retry[3] == base
+    assert set(paths) <= set(retry[1]['revisit_files'])
+    feedback = retry[1]['feedback']
+    rejected = feedback['rejected_head']
+    assert feedback['review_base'] == base
+    assert set(paths) <= set(feedback['required_paths'])
+    rejected_fas = json.loads(git(repo, 'show', f'{rejected}:.mentat/fas.json'))
+    assert all(next(s for s in rejected_fas['surfaces'] if s['path'] == p)['status'] == 'mapped' for p in paths)
+    assert all(x[1]['proposal']['head'] != rejected for x in calls if x[0] == 'review_spec')
+    assert any(set(paths[1:]) & set(x[1].get('targetfiles') or []) for x in generators)
+    reviews = [x for x in calls if x[0] == 'review_spec']
+    first_reviews = [x for x in reviews if x[1]['proposal'].get('round') == 1]
+    assert len(first_reviews) == 2
+    for _, payload, context, _ in first_reviews:
+        assert context['files'][paths[0]] == (repo / paths[0]).read_text()
+        assert '.mentat/fas.json' in context['files']
+        assert '.mentat/fas.json' in context['proposal_diff']
+        assert payload['proposal']['parent'] == base
+    reviewed = json.loads(git(repo, 'show', f"{first_reviews[0][1]['proposal']['head']}:.mentat/fas.json"))
+    assert reviewed['requirements'] == requirements
+    assert github.published, snapshot
+    assert any(x[0] == 'generate_verification' for x in calls)
+    assert any('capacity' in f.get('summary', '').lower() for f in snapshot['findings'])
+
+
+def test_review_capacity_exhaustion_is_bounded_across_resume(repo, tmp_path):
+    requirements, paths = _review_capacity_repo(repo)
+    base = git(repo, 'rev-parse', 'HEAD')
+    calls = []
+
+    class OversizedAgent(Agent):
+        def run(self, repo, job, output, *, timeout_seconds):
+            payload = job['payload']
+            calls.append((payload['kind'], payload.get('round', 0)))
+            if payload['kind'] == 'generate_spec':
+                assert git(repo, 'rev-parse', 'HEAD') == base
+                path = repo / '.mentat/fas.json'
+                fas = json.loads(path.read_text())
+                for surface in fas['surfaces']:
+                    if surface['path'] in paths:
+                        surface.update(status='mapped', requirement_ids=[requirements[0]['id']],
+                                       note='x' * 12_000)
+                path.write_text(json.dumps(fas))
+                return {'status': 'succeeded', 'session_id': job['id'], 'result': {
+                    'decision': 'accept', 'summary': 'oversized', 'findings': [],
+                    'verification_requests': []}}
+            return super().run(repo, job, output, timeout_seconds=timeout_seconds)
+
+    agent = OversizedAgent()
+    snapshot, worker, github = run(repo, tmp_path, agent=agent)
+    assert [n for kind, n in calls if kind == 'generate_spec'] == [0, 1, 2]
+    assert not [kind for kind, _ in calls if kind == 'review_spec']
+    assert not github.published
+    assert any(f['status'] == 'inconclusive' and 'capacity' in f['summary'].lower()
+               for f in snapshot['findings'])
+    before = list(calls)
+    store = Store(tmp_path / 'state/state.db')
+    coordinator = Coordinator(repo, store, agent, worker, github)
+    coordinator.run(resume=snapshot['session']['id'])
+    assert calls == before
+
+
+@pytest.mark.parametrize('trusted', ['valid', 'missing', 'invalid'])
+def test_capacity_retry_keeps_newer_accepted_specification(repo, tmp_path, trusted):
+    requirements, paths = _review_capacity_repo(repo)
+    base = git(repo, 'rev-parse', 'HEAD')
+    path = repo / '.mentat/fas.json'
+    fas = json.loads(path.read_text())
+    accepted_record = {**requirements[0], 'id': str(uuid.uuid4()), 'statement': 'Accepted later'}
+    fas['requirements'].append(accepted_record)
+    path.write_text(json.dumps(fas))
+    git(repo, 'commit', '-qam', 'independently reviewed specification')
+    accepted = git(repo, 'rev-parse', 'HEAD')
+    (repo / 'src.py').write_text('def value(): return 42  # approved fix\n')
+    git(repo, 'commit', '-qam', 'approved application fix')
+    fixed = git(repo, 'rev-parse', 'HEAD')
+    for surface in fas['surfaces']:
+        if surface['path'] in paths:
+            surface.update(status='mapped', requirement_ids=[accepted_record['id']], note='x' * 12_000)
+    path.write_text(json.dumps(fas))
+    git(repo, 'commit', '-qam', 'oversized unreviewed proposal')
+    rejected = git(repo, 'rev-parse', 'HEAD')
+    store = Store(tmp_path / 'state/state.db')
+    config = default_config(repo)
+    coordinator = Coordinator(repo, store, Agent(), Worker(), GitHub())
+    coordinator.config = config
+    coordinator.session_id = store.new_session(str(repo), base, base, config, 1, 100)
+    coordinator._event('fas_reviewed', {'head': accepted})
+    job = {'id': 'generation', 'item_id': 'cas.inventory', 'loop': 'scl',
+           'payload': {'kind': 'generate_spec', 'accepted_spec_base': fixed}}
+    proposal = {'head': rejected, 'parent': base, 'author_id': 'generator', 'round': 0,
+                'accepted_spec_base': fixed}
+    if trusted == 'missing':
+        del job['payload']['accepted_spec_base']
+        del proposal['accepted_spec_base']
+    elif trusted == 'invalid':
+        job['payload']['accepted_spec_base'] = proposal['accepted_spec_base'] = '0' * 40
+    coordinator._request_reviews(job, proposal, 'review_spec')
+    snapshot = store.snapshot(coordinator.session_id)
+    retries = [j for j in snapshot['jobs'] if j['payload']['kind'] == 'generate_spec']
+    if trusted != 'valid':
+        assert not retries
+        assert not [j for j in snapshot['jobs'] if j['payload']['kind'] == 'review_spec']
+        assert any(f['status'] == 'inconclusive' for f in snapshot['findings'])
+        return
+    assert len(retries) == 1
+    retry = retries[0]['payload']
+    assert retry['target_head'] == retry['review_base'] == fixed
+    assert retry['feedback']['rejected_head'] == rejected
+    restored = json.loads(git(repo, 'show', f"{retry['target_head']}:.mentat/fas.json"))
+    assert accepted_record in restored['requirements']
+    assert git(repo, 'show', f"{retry['target_head']}:src.py") == 'def value(): return 42  # approved fix'
+    assert all(s['status'] == 'gap' for s in restored['surfaces'] if s['path'] in paths)
+    assert not [j for j in snapshot['jobs'] if j['payload']['kind'] == 'review_spec']
+
+
+def test_noop_spec_proposal_uses_observed_accepted_head_as_review_base(repo, tmp_path):
+    import time
+
+    requirements, _ = _review_capacity_repo(repo)
+    base = git(repo, 'rev-parse', 'HEAD')
+    path = repo / '.mentat/fas.json'
+    fas = json.loads(path.read_text())
+    extra = {**requirements[0], 'id': str(uuid.uuid4()), 'statement': 'Accepted later'}
+    fas['requirements'].append(extra)
+    path.write_text(json.dumps(fas))
+    spec = repo / 'openspec/specs/application/spec.md'
+    spec.write_text(spec.read_text() + '\n' + extra['id'])
+    git(repo, 'commit', '-qam', 'later accepted spec')
+    accepted = git(repo, 'rev-parse', 'HEAD')
+
+    class NoOpAgent(Agent):
+        def run(self, repo, job, output, *, timeout_seconds):
+            return {'status': 'succeeded', 'session_id': job['id'], 'result': {
+                'decision': 'accept', 'summary': 'no edits', 'findings': [],
+                'verification_requests': []}}
+
+    store = Store(tmp_path / 'state/state.db')
+    config = default_config(repo)
+    coordinator = Coordinator(repo, store, NoOpAgent(), Worker(), GitHub())
+    coordinator.config = config
+    coordinator.session_id = store.new_session(str(repo), base, base, config, 1, 100)
+    job = {'id': 'noop', 'attempt': 1, 'item_id': 'cas.inventory', 'loop': 'scl',
+           'payload': {'kind': 'generate_spec', 'target_head': accepted}}
+    outcome = coordinator._execute(job, time.time() + 60)
+    assert outcome['head'] == accepted
+    assert outcome['parent'] == accepted
+    assert outcome['observed_source_revision'] == accepted

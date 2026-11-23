@@ -60,6 +60,13 @@ Changed-record repository citations may use path objects or path strings with
 supported line anchors. Missing, unsafe or malformed local citations fail explicitly;
 HTTP(S) references are identified as uninspected external metadata.
 
+When a specification proposal exceeds review capacity, the controller records
+the constraint and gives the generator bounded split/revise feedback from the last
+accepted code and specification base. Recovery must retain approved application fixes;
+ambiguous older state does not authorize a rollback. Rejected drafts remain in history and unreviewed
+source paths remain pending. This consumes the existing round budget and creates
+no reviewer approval; fitting proposals still require fresh independent reviews.
+
 When work is stable, deferred, cancelled, or out of budget, the controller checkpoints. Resumption preserves attempt counts and fences old workers. Changed source or policy makes prior evidence stale; it must not be displayed as current assurance. Review material fixes again and rerun the required local gate at the final candidate revision.
 
 ## Direct Python source evidence
