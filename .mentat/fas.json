@@ -1746,6 +1746,15 @@
       "reason": "Awaiting independently reviewed source correspondence."
     },
     {
+      "path": "tests/test_autonomy_proof_sources.py",
+      "status": "mapped",
+      "requirement_ids": [
+        "dda11903-8c6a-5849-8fc3-cbedfcfd3ab2",
+        "80c41572-1639-5ca6-99d9-538bb20e1de5"
+      ],
+      "note": "Regression coverage for complete candidate-bound source context of active proof requirements and independent review; mapping is not a formal proof."
+    },
+    {
       "path": "tests/test_autonomy_runtime.py",
       "status": "gap",
       "requirement_ids": [],
