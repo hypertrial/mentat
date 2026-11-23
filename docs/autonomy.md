@@ -25,6 +25,12 @@ Install Lima on the controller before provisioning. The managed Ubuntu ARM64 VM 
 
 Git operations use the existing SSH remote. PR and merge operations use existing `gh` authentication. Missing CLI authentication, unreadable branch rules, stale checks, or unavailable worker tools prevent the corresponding operation; they never cause a fallback to an unguarded merge or host execution. Provision the application's development dependencies in the trusted worker environment before requiring its checks.
 
+Writable build caches stay outside the application checkout. Provisioning seeds
+the pinned isolated-build dependency closure before freezing the trusted cache.
+Installed-artifact checks ignore inherited Python import overrides so that they
+validate the installed artifact. A changed worker profile requires explicit trusted
+initialization; an old session is not silently repinned or presented as resumed.
+
 ## Run and resume
 
 ```sh

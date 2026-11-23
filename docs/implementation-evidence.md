@@ -143,3 +143,32 @@ older metadata stops recovery without a guessed reset. Focused tests retain the
 approved fix and established IDs, preserve rejected drafts and pending paths,
 exercise two actual reviewers and IVL continuation, and retain the three-round
 limit across resume. Full completion and renewed real-run evidence remain pending.
+
+## Isolated worker packaging
+
+The real self-run at `b60e1ba` completed all SCL source batches, exercised bounded
+capacity recovery, and entered IVL. Candidate `7b8665c` passed 1,754 native tests
+with 53 documented skips and all 45 protected checker fixtures with zero skips.
+Two source checks proved the same single clamp obligation; these are not two
+distinct properties. Packaging remained incomplete and final review/publication
+were not reached. A graceful checkpoint preserved the session and its retry ledger.
+
+The package gate exposed missing uv resolver metadata despite cached pinned wheel
+archives, then a writable cache inside `/work` being included in the source
+distribution and exceeding the 256 MiB file limit. The corrected runner binds its
+per-job cache outside the source checkout. Artifact validation also clears inherited
+Python import overrides and uses Python archive inspection rather than an undeclared
+`awk` dependency. A disposable fixture based on that candidate with the artifact
+script correction passed the exact real package gate through the corrected runner;
+separate real wheel/sdist inspection excluded the cache marker, while the old-layout
+control included it. This is fixture evidence, not integrated-candidate acceptance.
+
+Provisioning now resolves only the existing five pinned Hatchling dependencies
+through public uv commands. A clean-cache guest probe first reproduced offline
+resolution failure, then produced both artifacts as `nobody` with Python 3.12 and
+3.14 after seeding; selected pins remained unchanged. Nine focused regressions
+passed without new skips. Independent review, integrated full checks and explicit
+fresh-worker/profile initialization remain required. Independent security review
+additionally found checkout module shadowing in Python archive inspection. All
+inline artifact checks now use isolated Python, and a hostile `tarfile.py` regression
+rejects Git metadata without executing the checkout module.
