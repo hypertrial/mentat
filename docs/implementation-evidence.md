@@ -208,3 +208,41 @@ gates exposed five real-boundary integration fixtures without the now-required
 FAS. The test owner added valid committed specifications while retaining adapter
 and publication assertions; 22 targeted integration/inventory checks passed.
 Full native and Linux reruns remain required on the revised commit.
+
+The revised exact commit `65ac32bb59674dc84a8a3be9b8006c7a51ebe5d4`
+subsequently passed native and isolated Linux completion (1,773 passed, 53
+documented optional skips on each), native and Linux installed-package checks,
+and static analysis. Independent code and security review accepted the change;
+PR #61 merged as `ed3b872b299663cecff7fb87429c8b0342cf5fb4`.
+
+## Composition across specification and verification reviews
+
+The real self-run at `ed3b872` completed its independently reviewed specification
+batches and generated no additional verification files. For candidate
+`a2c704a09fb7fb0060830a8fdc96666c08fad03c`, fresh isolated checks passed:
+1,773 tests with 53 documented optional skips, installed-package validation,
+and all 45 protected checker fixtures with no skips. The configured and FAS
+clamp checks covered the same one conditional source obligation, with satisfiable
+preconditions and an unsatisfiable violation query.
+
+Both verification reviewers deferred because their no-op proposal used the entire
+session-base specification diff while omitting previously reviewed application
+sources and the current proof frontend. Earlier source-review decisions were
+stored but absent from the later review context. Session
+`f0b8c08b2b974a24967952528b815e5e` ended blocked before final review or publication;
+this is not a completed workflow or Titanic readiness result. The next change
+preserves the cumulative final diff, supplies exact current proof context and
+composes validated, unchanged correspondence reviews as process evidence. It
+must not convert that evidence into a mathematical proof or silently inherit
+unreviewed baseline records. Independent review, completion checks and a renewed
+real self-run remain required.
+
+Independent review additionally identified citation normalization that could bind
+a filename ending in a line-anchor pattern to another tracked file. The shared
+resolver must preserve exact tracked filenames before interpreting anchors.
+Repair-chain tests also exposed sibling SCL history and source bindings changed
+by approved IIL fixes. Only ancestral reviews may contribute to the candidate;
+sibling work is explicitly outside its composed assurance. A repaired source
+requires fresh source-aware SCL review before its binding can replace the old
+one. Controller-added unexamined rows remain inventory metadata across repairs.
+These findings require regression tests and renewed independent review.

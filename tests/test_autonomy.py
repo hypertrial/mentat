@@ -120,7 +120,7 @@ class GitHub:
         return {"status": "succeeded"}
 
 
-def run(repo, tmp_path, agent=None, worker=None):
+def run(repo, tmp_path, agent=None, worker=None, concurrency=3):
     worker = worker or Worker()
     github = GitHub()
     store = Store(tmp_path / "state/state.db")
@@ -133,7 +133,7 @@ def run(repo, tmp_path, agent=None, worker=None):
         "reasoning_effort": "high",
         "auto_merge": True,
         "session_seconds": 7200,
-        "concurrency": 3,
+        "concurrency": concurrency,
         "max_attempts": 3,
     }
     (store.path.parent / "policy.json").write_text(json.dumps(policy))
@@ -192,13 +192,15 @@ def test_inventory_rejects_missing_surface(repo, tmp_path):
     [
         (False, "accept"),
         (True, "accept"),
+        (True, "chained_refresh"),
+        (True, "ancestral_refresh"),
         (True, "repair_retry"),
         (True, "verification_repair_retry"),
         (True, "out_of_domain"),
         (True, "rebound"),
     ],
 )
-def test_counterexample_requires_protected_reproduction(repo, tmp_path, protected, domain):
+def test_counterexample_requires_protected_reproduction(repo, tmp_path, protected, domain, monkeypatch):
     requirements = [
         {
             "id": str(uuid.uuid4()),
@@ -235,6 +237,8 @@ def test_counterexample_requires_protected_reproduction(repo, tmp_path, protecte
     )
     config_path = repo / ".mentat/workspace.json"
     config = json.loads(config_path.read_text())
+    if domain in {"chained_refresh", "ancestral_refresh"}:
+        config["concurrency"] = 1
     config["source_checks"] = [
         {
             "path": "src.py",
@@ -251,9 +255,15 @@ def test_counterexample_requires_protected_reproduction(repo, tmp_path, protecte
     git(repo, "update-ref", "refs/remotes/origin/main", git(repo, "rev-parse", "HEAD"))
 
     fix_review_prompts = []
+    spec_review_contexts = []
+    final_contexts = []
 
     class FixAgent(Agent):
         def run(self, repo, job, output, *, timeout_seconds):
+            if domain in {"chained_refresh", "ancestral_refresh"} and job["payload"]["kind"] in {"review_spec", "review_final"}:
+                context = json.loads(job["payload"]["prompt"].split("SOURCE_CONTEXT_JSON:\n", 1)[1])
+                (spec_review_contexts if job["payload"]["kind"] == "review_spec" else final_contexts).append(
+                    (job["payload"], context))
             if job["payload"]["kind"] in {"review_fix", "review_verification", "review_final"}:
                 if job["payload"]["kind"] == "review_fix":
                     fix_review_prompts.append(job["payload"]["prompt"])
@@ -272,6 +282,12 @@ def test_counterexample_requires_protected_reproduction(repo, tmp_path, protecte
                     assert any(item["command"] == ["sidecar-check"] for item in summary["checks"])
                 assert '"check_summary"' in job["payload"]["prompt"]
             if job["payload"]["kind"] == "generate_spec":
+                if domain in {"chained_refresh", "ancestral_refresh"} and not job["payload"].get("repair"):
+                    path = repo / ".mentat/fas.json"
+                    fas = json.loads(path.read_text())
+                    next(row for row in fas["surfaces"] if row["path"] == "src.py").update(
+                        status="mapped", requirement_ids=[requirements[0]["id"]])
+                    path.write_text(json.dumps(fas))
                 if job["payload"].get("repair"):
                     path = repo / ".mentat/fas.json"
                     fas = json.loads(path.read_text())
@@ -287,7 +303,7 @@ def test_counterexample_requires_protected_reproduction(repo, tmp_path, protecte
                     "status": "succeeded",
                     "session_id": job["id"],
                     "result": {
-                        "decision": "accept" if job["payload"].get("repair") else "defer",
+                        "decision": "accept" if job["payload"].get("repair") or domain in {"chained_refresh", "ancestral_refresh"} else "defer",
                         "summary": "inventory reviewed"
                         if job["payload"].get("repair")
                         else "inventory needs work",
@@ -303,7 +319,7 @@ def test_counterexample_requires_protected_reproduction(repo, tmp_path, protecte
                     "session_id": job["id"],
                     "result": {
                         "decision": "accept"
-                        if domain in {"accept", "repair_retry", "verification_repair_retry"}
+                        if domain in {"accept", "chained_refresh", "ancestral_refresh", "repair_retry", "verification_repair_retry"}
                         else "defer",
                         "summary": "domain reviewed",
                         "findings": [],
@@ -393,21 +409,41 @@ def test_counterexample_requires_protected_reproduction(repo, tmp_path, protecte
                 "tools": {"harness": "test"},
             }
 
+    if domain == "ancestral_refresh":
+        # Model a scheduler that starts the fix from the already reviewed SCL
+        # checkpoint. All generator/reviewer jobs and their events remain real.
+        enqueue = Coordinator._enqueue
+
+        def start_fix_at_reviewed_checkpoint(coordinator, loop, role, item, payload):
+            if payload.get("kind") == "investigate_defect":
+                events = coordinator.store.snapshot(coordinator.session_id)["events"]
+                checkpoint = [e["payload"]["head"] for e in events if e["kind"] == "fas_reviewed"][-1]
+                payload = {**payload, "target_head": checkpoint}
+            return enqueue(coordinator, loop, role, item, payload)
+
+        monkeypatch.setattr(Coordinator, "_enqueue", start_fix_at_reviewed_checkpoint)
     snapshot, worker, github = run(
-        repo, tmp_path, agent=FixAgent(), worker=ProtectedWorker() if protected else Worker()
+        repo, tmp_path, agent=FixAgent(), worker=ProtectedWorker() if protected else Worker(),
+        concurrency=1 if domain in {"chained_refresh", "ancestral_refresh"} else 3,
     )
     assert any(j["payload"]["kind"] == "adjudicate_defect" for j in snapshot["jobs"])
     assert any(j["payload"]["kind"] == "reproduce_defect" for j in snapshot["jobs"])
-    fix_expected = protected and domain in {"accept", "repair_retry", "verification_repair_retry"}
+    fix_expected = protected and domain in {"accept", "chained_refresh", "ancestral_refresh", "repair_retry", "verification_repair_retry"}
     assert any(j["payload"]["kind"] == "adjudicate_domain" for j in snapshot["jobs"]) is protected
     assert (
         any(j["payload"]["kind"] == "investigate_defect" for j in snapshot["jobs"]) is fix_expected
     )
+    if domain == "chained_refresh":
+        assert not github.published
+        assert snapshot["session"]["status"] == "blocked"
+        assert any("reconciliation" in finding.get("summary", "").lower()
+                   for finding in snapshot["findings"])
+        return
     if fix_expected:
         assert github.published and worker.revisions[-1] == github.published[0], snapshot[
             "findings"
         ]
-        if domain != "verification_repair_retry":
+        if domain not in {"verification_repair_retry", "chained_refresh", "ancestral_refresh"}:
             assert len(worker.revisions) == (5 if domain == "repair_retry" else 3)
             assert worker.commands.count(["check"]) == (3 if domain == "repair_retry" else 2)
             assert worker.commands.count(["sidecar-check"]) == 1
@@ -430,6 +466,22 @@ def test_counterexample_requires_protected_reproduction(repo, tmp_path, protecte
             j["payload"]["kind"] == "generate_verification" and j["payload"].get("repair")
             for j in snapshot["jobs"]
         )
+        if domain in {"chained_refresh", "ancestral_refresh"}:
+            import hashlib
+
+            assert len(spec_review_contexts) >= 4
+            fresh = [(payload, context) for payload, context in spec_review_contexts
+                     if "return x + 1" in context["files"].get("src.py", "")]
+            assert len(fresh) == 2
+            for payload, context in fresh:
+                assert payload["proposal"]["head"] == context["revision"]
+                assert payload["correspondence_refresh"]["source_paths"] == ["src.py"]
+                assert payload["correspondence_refresh"]["checkpoint"] != context["revision"]
+                assert context["files"]["src.py"] == "def f(x):\n    return x + 1\n"
+            assert len(final_contexts) == 2
+            expected = hashlib.sha256(b"def f(x):\n    return x + 1\n").hexdigest()
+            for _, context in final_contexts:
+                assert context["reviewed_specification"]["source_blobs_sha256"]["src.py"] == expected
         assert any(
             e.get("repair_check", {}).get("status") == "passed"
             for e in snapshot["evidence"]
@@ -668,8 +720,14 @@ def test_reviewed_claim_projects_real_final_source_proof(repo, tmp_path):
     git(repo, "commit", "-qm", "declare source check")
     git(repo, "update-ref", "refs/remotes/origin/main", git(repo, "rev-parse", "HEAD"))
 
+    proof_reviews = []
+
     class ClaimAgent(Agent):
         def run(self, repo, job, output, *, timeout_seconds):
+            if job["payload"]["kind"] in {"review_verification", "review_final"}:
+                payload = job["payload"]
+                context = json.loads(payload["prompt"].split("SOURCE_CONTEXT_JSON:\n", 1)[1])
+                proof_reviews.append((payload["kind"], payload, context))
             result = super().run(repo, job, output, timeout_seconds=timeout_seconds)
             if job["payload"]["kind"] == "generate_spec":
                 path = repo / ".mentat/fas.json"
@@ -693,6 +751,19 @@ def test_reviewed_claim_projects_real_final_source_proof(repo, tmp_path):
     assert claim["status"] == "established-within-scope", snapshot
     assert claim["proof_scope"]["revision"] == github.published[0] == worker.revisions[0]
     assert claim["evidence_ids"]
+    for kind in ("review_verification", "review_final"):
+        pair = [(payload, context) for stage, payload, context in proof_reviews if stage == kind]
+        assert len(pair) == 2
+        for payload, context in pair:
+            assert context["files"]["src.py"] == "def f(x):\n    return x + 1\n"
+            assert any(check["path"] == "src.py" and check["ensures"] == contract["ensures"]
+                       for check in context["mandatory_source_contracts"])
+            assert "exact typed input" in context["files"][".mentat/fas.json"]
+            assert context["trusted_source_verifier"]["source"]
+            assert context["trusted_source_verifier"]["identity"]["frontend_sha256"]
+            assert payload["check_summary"]["head"] == context["revision"]
+            assert any(proof.get("source_identity", {}).get("path") == "src.py"
+                       for proof in payload["check_summary"]["source"])
 
 
 def test_toolchain_change_invalidates_resume(repo, tmp_path, monkeypatch):
@@ -3187,3 +3258,291 @@ def _valid_publication_spec(repo):
     git(repo, 'add', '.')
     git(repo, 'commit', '-qm', 'reviewed publication fixture')
     git(repo, 'update-ref', 'refs/remotes/origin/main', git(repo, 'rev-parse', 'HEAD'))
+
+
+@pytest.mark.parametrize('explicit_base', [False, True])
+def test_noop_verification_uses_input_base_unless_retry_base_is_explicit(repo, tmp_path, explicit_base):
+    import time
+
+    _review_capacity_repo(repo)
+    base = git(repo, 'rev-parse', 'HEAD')
+    (repo / 'src.py').write_text('def value(): return 42  # accepted change\n')
+    git(repo, 'commit', '-qam', 'accepted source change')
+    accepted = git(repo, 'rev-parse', 'HEAD')
+
+    class NoOpAgent(Agent):
+        def run(self, repo, job, output, *, timeout_seconds):
+            return {'status': 'succeeded', 'session_id': job['id'], 'result': {
+                'decision': 'accept', 'summary': 'no edits', 'findings': [],
+                'verification_requests': []}}
+
+    store = Store(tmp_path / 'state/state.db')
+    config = default_config(repo)
+    coordinator = Coordinator(repo, store, NoOpAgent(), Worker(), GitHub())
+    coordinator.config = config
+    coordinator.session_id = store.new_session(str(repo), base, base, config, 1, 100)
+    payload = {'kind': 'generate_verification', 'target_head': accepted}
+    if explicit_base:
+        payload['review_base'] = base
+    job = {'id': 'noop-verification', 'attempt': 1, 'item_id': 'verification.inventory',
+           'loop': 'ivl', 'payload': payload}
+    outcome = coordinator._execute(job, time.time() + 60)
+    assert outcome['head'] == accepted
+    assert outcome['observed_source_revision'] == accepted
+    assert outcome['parent'] == (base if explicit_base else accepted)
+
+
+def test_both_review_stages_receive_every_check_after_twelfth(repo, tmp_path):
+    reviews = []
+    commands = [['extra-check', str(index)] for index in range(15)]
+
+    class ManyChecksAgent(Agent):
+        def run(self, repo, job, output, *, timeout_seconds):
+            payload = job['payload']
+            if payload['kind'] in {'review_verification', 'review_final'}:
+                reviews.append((payload['kind'], payload['check_summary'], payload['prompt']))
+            result = super().run(repo, job, output, timeout_seconds=timeout_seconds)
+            if payload['kind'] == 'generate_verification':
+                result['result']['verification_requests'] = [
+                    {'argv': command, 'claim_ids': [], 'method': 'test'} for command in commands
+                ]
+            return result
+
+    snapshot, _, github = run(repo, tmp_path, agent=ManyChecksAgent())
+    assert github.published, snapshot
+    for kind in ('review_verification', 'review_final'):
+        pair = [(summary, prompt) for stage, summary, prompt in reviews if stage == kind]
+        assert len(pair) == 2
+        for summary, prompt in pair:
+            assert summary['checks_omitted'] == 0
+            assert {tuple(item['command']) for item in summary['checks']} >= {
+                tuple(command) for command in commands}
+            assert 'extra-check' in prompt and '14' in prompt
+
+
+def test_chained_spec_reviews_reach_noop_verification_and_full_final_review(repo, tmp_path):
+    requirements, paths = _review_capacity_repo(repo)
+    for path in paths:
+        (repo / path).write_text('# ' + 'x' * 55_000 + '\n')
+    git(repo, 'commit', '-qam', 'large optional source inventory')
+    git(repo, 'update-ref', 'refs/remotes/origin/main', git(repo, 'rev-parse', 'HEAD'))
+    calls = []
+
+    class ChainedAgent(Agent):
+        def run(self, repo, job, output, *, timeout_seconds):
+            payload = job['payload']
+            kind = payload['kind']
+            context = json.loads(payload['prompt'].split('SOURCE_CONTEXT_JSON:\n', 1)[1])
+            calls.append((kind, payload, context))
+            if kind == 'generate_spec':
+                path = repo / '.mentat/fas.json'
+                fas = json.loads(path.read_text())
+                for surface in fas['surfaces']:
+                    if surface['path'] in paths and surface['path'] in context['files']:
+                        surface.update(status='mapped', requirement_ids=[requirements[0]['id']])
+                path.write_text(json.dumps(fas))
+            if kind in {'generate_spec', 'generate_verification'}:
+                return {'status': 'succeeded', 'session_id': job['id'], 'result': {
+                    'decision': 'accept', 'summary': 'reviewable change', 'findings': [],
+                    'verification_requests': []}}
+            return super().run(repo, job, output, timeout_seconds=timeout_seconds)
+
+    snapshot, _, github = run(repo, tmp_path, agent=ChainedAgent())
+    assert github.published, snapshot
+    events = [e for e in snapshot['events'] if e['kind'] == 'fas_reviewed']
+    assert len(events) >= 2
+    decisions = {d['id']: d for d in snapshot['decisions']}
+    for event in events:
+        ids = event['payload']['decision_ids']
+        assert len(ids) >= 2
+        assert len({decisions[identity]['reviewer_id'] for identity in ids}) >= 2
+        assert all(decisions[identity]['decision'] == 'accept' for identity in ids)
+    generation = next(j for j in snapshot['jobs'] if j['payload']['kind'] == 'generate_verification')
+    candidate = generation['outcome']
+    assert candidate['head'] == candidate['observed_source_revision'] == candidate['parent']
+    for kind in ('review_verification', 'review_final'):
+        pair = [(payload, context) for stage, payload, context in calls if stage == kind]
+        assert len(pair) == 2
+        for payload, context in pair:
+            composition = context['reviewed_specification']
+            assert 'unreviewed' in composition['baseline'].lower()
+            assert composition['checkpoint'] == candidate['head']
+            assert len(composition['cohorts']) >= 2
+            assert {identity for cohort in composition['cohorts'] for identity in cohort['decision_ids']} >= {
+                identity for event in events for identity in event['payload']['decision_ids']}
+            assert set(paths) <= set(composition['source_blobs_sha256'])
+            assert context['revision'] == candidate['head']
+            assert payload['check_summary']['head'] == candidate['head']
+            if kind == 'review_final':
+                assert context['proposal_base'] == snapshot['session']['base']
+                assert '"mapped"' in context['proposal_diff']
+
+    # A later SCL cohort can complete between final context construction and
+    # publication. Recreate that ordering using these real persisted cohorts.
+    from copy import deepcopy
+
+    from mentat.autonomy import current_tool_identity
+
+    store = Store(tmp_path / 'state/state.db')
+    first_head = events[0]['payload']['head']
+    earlier = deepcopy(snapshot)
+    earlier['events'] = [event for event in earlier['events']
+                         if event['kind'] != 'fas_reviewed' or event['seq'] == events[0]['seq']]
+
+    class EarlierSnapshot:
+        def snapshot(self, session_id):
+            return earlier
+
+    github_spy = GitHub()
+    coordinator = Coordinator(repo, store, Agent(), Worker(), github_spy)
+    coordinator.session_id = snapshot['session']['id']
+    coordinator.config = default_config(repo)
+    coordinator.tool_identity = current_tool_identity()
+    coordinator.authority_digest = next(e['payload']['digest'] for e in snapshot['events']
+                                        if e['kind'] == 'authority_pinned')
+    coordinator.store = EarlierSnapshot()
+    proposal = {'head': first_head, 'parent': snapshot['session']['base'],
+                'worktree': str(repo), 'diff_digest': 'final-diff'}
+    coordinator._source_context(first_head, {'payload': {'kind': 'review_final',
+        'proposal': proposal, 'check_summary': {}}})
+    coordinator.store = store
+    git(repo, 'checkout', '-q', '--detach', first_head)
+    key = coordinator._check_key(first_head, [], [], None)
+    evidence = {'id': 'check', 'head': first_head, 'base': snapshot['session']['base'],
+                'check_key': key, 'checks': []}
+    reviews = [{'reviewer_id': reviewer, 'author_id': 'author', 'status': 'passed',
+                'head': first_head, 'base': snapshot['session']['base'],
+                'diff_digest': 'final-diff', 'review_cohort': 'final-cohort',
+                'check_evidence_id': 'check', 'check_key': key} for reviewer in ('one', 'two')]
+    with pytest.raises(ValueError, match='specification|correspondence|ancestor|reconciliation'):
+        coordinator._publish({'payload': {'proposal': proposal, 'reviews': reviews}}, evidence)
+    assert not github_spy.published and not github_spy.merged
+
+    # Reuse the actual persisted review events and decisions, then change one
+    # reviewed input at a time. A copied receipt must not survive content drift.
+    coordinator = Coordinator(repo, store, Agent(), Worker(), GitHub())
+    coordinator.session_id = snapshot['session']['id']
+    coordinator.tool_identity = current_tool_identity()
+    coordinator.authority_digest = next(e['payload']['digest'] for e in snapshot['events']
+                                        if e['kind'] == 'authority_pinned')
+    coordinator._review_composition(candidate['head'])
+    git(repo, 'checkout', '-q', '--detach', candidate['head'])
+    for drift in ('source', 'cas', 'mapping', 'requirement', 'deleted_surface', 'forged_inventory'):
+        if drift == 'source':
+            (repo / paths[0]).write_text('changed after review\n')
+        elif drift == 'cas':
+            spec = repo / 'openspec/specs/application/spec.md'
+            spec.write_text(spec.read_text() + '\nchanged after review\n')
+        else:
+            fas_path = repo / '.mentat/fas.json'
+            fas = json.loads(fas_path.read_text())
+            if drift == 'mapping':
+                next(row for row in fas['surfaces'] if row['path'] == paths[0])['requirement_ids'] = []
+            elif drift == 'requirement':
+                fas['requirements'][0]['statement'] = 'changed after review'
+            elif drift == 'deleted_surface':
+                fas['surfaces'] = [row for row in fas['surfaces'] if row['path'] != paths[0]]
+            else:
+                artifact = repo / 'verification/forged.py'
+                artifact.parent.mkdir(exist_ok=True)
+                artifact.write_text('forged = True\n')
+                fas['surfaces'].append({'path': 'verification/forged.py', 'status': 'unexamined',
+                                        'requirement_ids': []})
+            fas_path.write_text(json.dumps(fas))
+        git(repo, 'add', '-A')
+        git(repo, 'commit', '-qm', 'post-review drift')
+        with pytest.raises(ValueError):
+            coordinator._review_composition(git(repo, 'rev-parse', 'HEAD'))
+        git(repo, 'reset', '--hard', '-q', candidate['head'])
+
+    # Tamper with persisted identities while retaining the real Git history.
+    from copy import deepcopy
+
+    original = store.snapshot(coordinator.session_id)
+    receipt = next(e for e in original['events'] if e['kind'] == 'fas_reviewed')
+    first_id = receipt['payload']['decision_ids'][0]
+
+    class SnapshotStore:
+        def __init__(self, data):
+            self.data = data
+
+        def snapshot(self, session_id):
+            return self.data
+
+    for field in ('cohort', 'head', 'diff', 'reviewer', 'missing'):
+        altered = deepcopy(original)
+        decision = next(d for d in altered['decisions'] if d['id'] == first_id)
+        if field == 'cohort':
+            decision['review_cohort'] = 'forged'
+        elif field == 'head':
+            decision['head'] = altered['session']['base']
+        elif field == 'diff':
+            decision['diff_digest'] = 'forged'
+        elif field == 'reviewer':
+            decision['reviewer_id'] = decision['author_id']
+        else:
+            altered['decisions'] = [d for d in altered['decisions'] if d['id'] != first_id]
+        coordinator.store = SnapshotStore(altered)
+        with pytest.raises(ValueError):
+            coordinator._review_composition(candidate['head'])
+    coordinator.store = store
+    store.append_event(coordinator.session_id, 'fas_reviewed', {
+        'head': candidate['head'], 'decision_ids': ['forged-decision']})
+    with pytest.raises(ValueError):
+        coordinator._review_composition(candidate['head'])
+
+
+@pytest.mark.parametrize('exact_path_exists', [False, True])
+def test_review_receipt_binds_same_cited_file_reviewers_saw(repo, tmp_path, exact_path_exists):
+    citation = 'evidence.py#L1'
+    (repo / 'evidence.py').write_text('plain source\n')
+    if exact_path_exists:
+        (repo / citation).write_text('literal hash filename\n')
+    git(repo, 'add', '.')
+    git(repo, 'commit', '-qm', 'citation sources')
+    git(repo, 'update-ref', 'refs/remotes/origin/main', git(repo, 'rev-parse', 'HEAD'))
+    target = citation if exact_path_exists else 'evidence.py'
+    captured = []
+
+    class CitationAgent(Agent):
+        def run(self, repo, job, output, *, timeout_seconds):
+            kind = job['payload']['kind']
+            if kind in {'review_spec', 'review_final'}:
+                context = json.loads(job['payload']['prompt'].split('SOURCE_CONTEXT_JSON:\n', 1)[1])
+                captured.append((kind, context))
+            if kind == 'generate_verification':
+                return {'status': 'succeeded', 'session_id': job['id'], 'result': {
+                    'decision': 'accept', 'summary': 'no edits', 'findings': [],
+                    'verification_requests': []}}
+            result = super().run(repo, job, output, timeout_seconds=timeout_seconds)
+            if kind == 'generate_spec':
+                fas_path = repo / '.mentat/fas.json'
+                fas = json.loads(fas_path.read_text())
+                fas['requirements'][0]['citations'] = [citation]
+                fas_path.write_text(json.dumps(fas))
+            return result
+
+    snapshot, _, github = run(repo, tmp_path, agent=CitationAgent())
+    assert github.published, snapshot
+    reviews = [context for kind, context in captured if kind == 'review_spec']
+    finals = [context for kind, context in captured if kind == 'review_final']
+    assert len(reviews) == len(finals) == 2
+    for context in reviews:
+        assert context['files'][target] == (repo / target).read_text()
+    for context in finals:
+        assert target in context['reviewed_specification']['source_blobs_sha256']
+    head = github.published[0]
+    store = Store(tmp_path / 'state/state.db')
+    coordinator = Coordinator(repo, store, Agent(), Worker(), GitHub())
+    coordinator.session_id = snapshot['session']['id']
+    from mentat.autonomy import current_tool_identity
+    coordinator.tool_identity = current_tool_identity()
+    coordinator.authority_digest = next(e['payload']['digest'] for e in snapshot['events']
+                                        if e['kind'] == 'authority_pinned')
+    coordinator._review_composition(head)
+    git(repo, 'checkout', '-q', '--detach', head)
+    (repo / target).write_text('changed cited evidence\n')
+    git(repo, 'add', '.')
+    git(repo, 'commit', '-qm', 'change reviewed citation')
+    with pytest.raises(ValueError):
+        coordinator._review_composition(git(repo, 'rev-parse', 'HEAD'))
