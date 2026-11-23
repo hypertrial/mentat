@@ -1618,3 +1618,356 @@ def test_targeted_chunk_without_remaining_capacity_fails_explicitly(repo, tmp_pa
         coordinator._source_context(
             head, {"payload": {"kind": "generate_spec", "targetfiles": ["src.py"]}}
         )
+
+
+@pytest.mark.parametrize("revise", [False, True])
+def test_deferred_partial_spec_continues_and_revisits_uncommitted_batch(repo, tmp_path, revise):
+    folder = repo / "src"
+    folder.mkdir()
+    for index in range(10):
+        (folder / f"file{index}.py").write_text("# " + "x" * 44990 + "\n")
+    (repo / "too_large.py").write_text("# " + "x" * 240_001)
+    git(repo, "add", ".")
+    git(repo, "commit", "-qm", "large source inventory")
+    git(repo, "update-ref", "refs/remotes/origin/main", git(repo, "rev-parse", "HEAD"))
+
+    class DeferredAgent(Agent):
+        def run(self, repo, job, output, *, timeout_seconds):
+            payload = job["payload"]
+            if payload["kind"] == "generate_spec" and not payload.get("targetfiles"):
+                return {
+                    "status": "succeeded",
+                    "session_id": job["id"],
+                    "result": {
+                        "decision": "defer",
+                        "summary": "omitted files need batches",
+                        "findings": [],
+                        "verification_requests": [],
+                    },
+                }
+            if payload["kind"] == "generate_spec" and (repo / ".mentat/fas.json").is_file():
+                path = repo / ".mentat/fas.json"
+                fas = json.loads(path.read_text())
+                existing = {surface["path"] for surface in fas["surfaces"]}
+                for surface in payload["surfaces"]:
+                    if surface["path"] not in existing:
+                        fas["surfaces"].append(
+                            {"path": surface["path"], "status": "gap", "requirement_ids": []}
+                        )
+                path.write_text(json.dumps(fas))
+                return {
+                    "status": "succeeded",
+                    "session_id": job["id"],
+                    "result": {
+                        "decision": "accept",
+                        "summary": "reviewed partial inventory",
+                        "findings": [],
+                        "verification_requests": [],
+                    },
+                }
+            result = super().run(repo, job, output, timeout_seconds=timeout_seconds)
+            if (
+                revise
+                and payload["kind"] == "review_spec"
+                and payload.get("chunk") == 1
+                and payload["proposal"].get("round") == 0
+            ):
+                result["result"]["decision"] = "revise"
+                result["result"]["findings"] = [{"summary": "Clarify this batch"}]
+            return result
+
+    snapshot, _, github = run(repo, tmp_path, agent=DeferredAgent())
+    jobs = [j for j in snapshot["jobs"] if j["payload"]["kind"] == "generate_spec"]
+    assert len(jobs) >= 3, snapshot
+    assert jobs[0]["outcome"]["result"]["decision"] == "defer"
+    assert jobs[1]["payload"]["targetfiles"]
+    assert jobs[1]["payload"]["revisit_files"]
+    assert "too_large.py" in jobs[1]["payload"]["unavailable_files"]
+    if revise:
+        retries = [j for j in jobs if j["payload"].get("round") == 1]
+        assert retries
+        for key in ("targetfiles", "chunk", "batch_limit", "revisit_files", "unavailable_files"):
+            assert retries[0]["payload"][key] == jobs[1]["payload"][key]
+    revisited = set(jobs[1]["payload"]["revisit_files"])
+    later_targets = set().union(*(set(j["payload"].get("targetfiles", [])) for j in jobs[2:]))
+    assert revisited <= later_targets
+    assert any(f["status"] == "awaiting-context" for f in snapshot["findings"])
+    assert (
+        sum(
+            j["payload"]["kind"] == "review_spec" and j["status"] == "succeeded"
+            for j in snapshot["jobs"]
+        )
+        >= 2
+    )
+    assert github.published, snapshot
+
+
+@pytest.mark.parametrize("pending", [[], ["src.py"]])
+def test_deferred_spec_without_new_context_is_explicitly_inconclusive(repo, tmp_path, pending):
+    store = Store(tmp_path / "state/state.db")
+    config = default_config(repo)
+    coordinator = Coordinator(repo, store, Agent(), Worker(), GitHub())
+    coordinator.config = config
+    head = git(repo, "rev-parse", "HEAD")
+    coordinator.session_id = store.new_session(str(repo), head, head, config, 1, 100)
+    job = {
+        "id": "deferred",
+        "item_id": "cas.inventory",
+        "loop": "scl",
+        "payload": {
+            "kind": "generate_spec",
+            "targetfiles": ["src.py"],
+            "chunk": 1,
+            "batch_limit": 3,
+        },
+    }
+    outcome = {
+        "head": head,
+        "context_pending": pending,
+        "context_included": [],
+        "result": {"decision": "defer", "summary": "unsupported capability", "findings": []},
+    }
+    coordinator._advance(job, outcome)
+    snapshot = store.snapshot(coordinator.session_id)
+    assert not snapshot["jobs"]
+    assert len(snapshot["findings"]) == 1
+    assert snapshot["findings"][0]["status"] == "inconclusive"
+
+
+def test_spec_prompts_allow_reviewed_incremental_batches(repo, tmp_path):
+    coordinator = Coordinator(repo, Store(tmp_path / "state/state.db"), Agent(), Worker(), GitHub())
+    session = {"head": "head", "base": "base"}
+    draft = coordinator._prompt({"loop": "scl", "payload": {"kind": "generate_spec"}}, session)
+    review = coordinator._prompt({"loop": "scl", "payload": {"kind": "review_spec"}}, session)
+    assert "Do not defer the whole batch solely because files are omitted" in draft
+    assert "keep omitted surfaces unexamined or gap" in draft
+    assert "Accept a defensible partial draft" in review
+    assert "Reject fabricated mappings" in review
+
+
+def test_deferred_spec_stops_at_fixed_batch_limit(repo, tmp_path):
+    store = Store(tmp_path / "state/state.db")
+    config = default_config(repo)
+    coordinator = Coordinator(repo, store, Agent(), Worker(), GitHub())
+    coordinator.config = config
+    head = git(repo, "rev-parse", "HEAD")
+    coordinator.session_id = store.new_session(str(repo), head, head, config, 1, 100)
+    job = {
+        "id": "deferred-limit",
+        "item_id": "cas.inventory",
+        "loop": "scl",
+        "payload": {
+            "kind": "generate_spec",
+            "targetfiles": ["src.py", "other.py"],
+            "chunk": 2,
+            "batch_limit": 2,
+        },
+    }
+    outcome = {
+        "head": head,
+        "context_pending": ["src.py"],
+        "context_included": ["other.py"],
+        "result": {"decision": "defer", "summary": "needs context", "findings": []},
+    }
+    coordinator._advance(job, outcome)
+    snapshot = store.snapshot(coordinator.session_id)
+    assert not snapshot["jobs"]
+    assert snapshot["findings"][0]["status"] == "inconclusive"
+    assert "bounded progress" in snapshot["findings"][0]["summary"]
+
+
+@pytest.mark.parametrize(
+    "mutation", ["unchanged", "surface", "requirement", "new_mapping", "unsupported"]
+)
+def test_budget_deferred_prior_mapping_requires_unchanged_lineage_and_is_revisited(
+    repo, tmp_path, mutation
+):
+    from mentat.autonomy import digest
+
+    folder = repo / "src"
+    folder.mkdir()
+    for index in range(10):
+        (folder / f"file{index}.py").write_text("# " + "x" * 44990 + "\n")
+    (folder / "z_mapped.py").write_text(
+        "# " + "z" * (240_001 if mutation == "unsupported" else 44990) + "\ndef known(): return 1\n"
+    )
+    requirements = [
+        {
+            "id": str(uuid.uuid4()),
+            "area": area,
+            "origin": "uncertain",
+            "statement": "existing intent",
+            "spec_path": "openspec/specs/app/spec.md",
+        }
+        for area in AREAS
+    ]
+    spec = repo / "openspec/specs/app/spec.md"
+    spec.parent.mkdir(parents=True)
+    spec.write_text("\n".join(r["id"] for r in requirements))
+    paths = [
+        ".mentat/workspace.json",
+        ".mentat/fas.json",
+        "src.py",
+        "openspec/specs/app/spec.md",
+        *[f"src/file{i}.py" for i in range(10)],
+        "src/z_mapped.py",
+    ]
+    surfaces = [
+        {
+            "path": path,
+            "status": "mapped" if path == "src/z_mapped.py" else "gap",
+            "requirement_ids": [requirements[0]["id"]] if path == "src/z_mapped.py" else [],
+        }
+        for path in paths
+    ]
+    (repo / ".mentat/fas.json").write_text(
+        json.dumps(
+            {"schema_version": 1, "requirements": requirements, "claims": [], "surfaces": surfaces}
+        )
+    )
+    git(repo, "add", ".")
+    git(repo, "commit", "-qm", "mapped prior source")
+    git(repo, "update-ref", "refs/remotes/origin/main", git(repo, "rev-parse", "HEAD"))
+
+    class MappingAgent(Agent):
+        def run(self, repo, job, output, *, timeout_seconds):
+            payload = job["payload"]
+            if payload["kind"] == "generate_spec":
+                path = repo / ".mentat/fas.json"
+                fas = json.loads(path.read_text())
+                if not payload.get("targetfiles"):
+                    context = json.loads(payload["prompt"].split("SOURCE_CONTEXT_JSON:\n", 1)[1])
+                    assert any(
+                        item["path"] == "src/z_mapped.py"
+                        and item["reason"]
+                        == (
+                            "file exceeds supported 240000-byte limit"
+                            if mutation == "unsupported"
+                            else "context budget exhausted"
+                        )
+                        for item in context["omitted"]
+                    )
+                    if mutation == "surface":
+                        next(item for item in fas["surfaces"] if item["path"] == "src/z_mapped.py")[
+                            "note"
+                        ] = "changed"
+                    elif mutation == "new_mapping":
+                        entry = next(
+                            item for item in fas["surfaces"] if item["path"] == "src/file9.py"
+                        )
+                        entry.update(status="mapped", requirement_ids=[requirements[0]["id"]])
+                    elif mutation == "requirement":
+                        old = dict(fas["requirements"][0])
+                        fas["requirements"][0]["statement"] = "changed intent"
+                        fas["requirements"][0]["revision"] = {
+                            "version": 2,
+                            "previous_digest": digest(old),
+                            "reason": "edit",
+                            "evidence": ["source"],
+                        }
+                    path.write_text(json.dumps(fas))
+                    spec = repo / "openspec/specs/app/spec.md"
+                    spec.write_text(spec.read_text() + "\nclarification\n")
+                return {
+                    "status": "succeeded",
+                    "session_id": job["id"],
+                    "result": {
+                        "decision": "accept",
+                        "summary": "draft",
+                        "findings": [],
+                        "verification_requests": [],
+                    },
+                }
+            return super().run(repo, job, output, timeout_seconds=timeout_seconds)
+
+    snapshot, _, github = run(repo, tmp_path, agent=MappingAgent())
+    generators = [j for j in snapshot["jobs"] if j["payload"]["kind"] == "generate_spec"]
+    if mutation == "unchanged":
+        assert any("src/z_mapped.py" in j["payload"].get("targetfiles", []) for j in generators), (
+            snapshot
+        )
+        assert github.published, snapshot
+    else:
+        assert not github.published
+        assert any(
+            "unexamined source cannot be marked mapped" in f.get("summary", "")
+            for f in snapshot["findings"]
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "first", "second"),
+    [
+        ("batch_limit", 3, 4),
+        ("revisit_files", ["one.py"], ["two.py"]),
+        ("unavailable_files", ["a.py"], ["b.py"]),
+    ],
+)
+def test_review_batch_scope_changes_never_pool_approvals(
+    repo, tmp_path, monkeypatch, field, first, second
+):
+    store = Store(tmp_path / "state/state.db")
+    config = default_config(repo)
+    config["local_checks"] = [["check"]]
+    coordinator = Coordinator(repo, store, Agent(), Worker(), GitHub())
+    coordinator.config = config
+    coordinator.tool_identity = {"frontend": "trusted"}
+    coordinator.authority_digest = "policy"
+    coordinator.session_id = store.new_session(str(repo), "base", "head", config, 1, 100)
+    published = []
+    monkeypatch.setattr(
+        coordinator, "_publish", lambda job, evidence: published.append((job, evidence))
+    )
+    key = coordinator._check_key("head", [], [], None)
+    evidence = {
+        "id": "checked",
+        "status": "passed",
+        "head": "head",
+        "base": "base",
+        "check_key": key,
+        "checks": [
+            {"command": ["check"], "status": "passed", "returncode": 0, "tools": {"python": "test"}}
+        ],
+        "source": [],
+    }
+    store.put_record(coordinator.session_id, "evidence", evidence)
+    proposal = {
+        "head": "head",
+        "diff_digest": "same-diff",
+        "author_id": "author",
+        "root_item": "verify",
+        "round": 0,
+        "commands": [],
+        "source_checks": [],
+        "repair": None,
+    }
+    for value in (first, second):
+        generator = {
+            "id": "generator",
+            "item_id": "verify",
+            "loop": "ivl",
+            "payload": {"source_checks": [], "targetfiles": ["same.py"], "chunk": 1, field: value},
+        }
+        coordinator._enqueue_reviewers(generator, proposal, "review_final", evidence)
+    jobs = store.snapshot(coordinator.session_id)["jobs"]
+    one = [j for j in jobs if j["payload"][field] == first]
+    two = [j for j in jobs if j["payload"][field] == second]
+    assert len(one) == len(two) == 2
+    assert one[0]["payload"]["review_cohort"] != two[0]["payload"]["review_cohort"]
+
+    def accept(job):
+        coordinator._advance(
+            job,
+            {
+                "author_id": job["id"],
+                "head": "head",
+                "diff_digest": "same-diff",
+                "result": {"decision": "accept", "summary": "accepted", "findings": []},
+            },
+        )
+
+    accept(one[0])
+    accept(two[0])
+    assert not published
+    accept(one[1])
+    assert len(published) == 1

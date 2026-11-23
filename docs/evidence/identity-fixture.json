@@ -1,0 +1,108 @@
+{
+  "controller_revision": "1663c83bbe4690ffbf158b76995c476930a6b4e1",
+  "baseline_revision": "ad4b817979cca46316944debcfe4ff98abc9caf1",
+  "candidate_revision": "984efb54bcae1f9c7aaf21702b9ba8bca7b08369",
+  "model": {
+    "name": "gpt-6.1-terra",
+    "reasoning_effort": "high"
+  },
+  "seed_replay": {
+    "input": {
+      "value": 0
+    },
+    "observed": 1,
+    "violation": true,
+    "status": "passed"
+  },
+  "candidate_replay": {
+    "input": {
+      "value": 0
+    },
+    "observed": 0,
+    "postcondition": true,
+    "status": "passed"
+  },
+  "native_checks": [
+    {
+      "command": [
+        ".venv/bin/python",
+        "-B",
+        "-m",
+        "unittest",
+        "discover",
+        "-v"
+      ],
+      "status": "passed",
+      "returncode": 0
+    }
+  ],
+  "source_proof": {
+    "check_count": 3,
+    "unique_contract_count": 1,
+    "source_identity": {
+      "blob_oid": "d42e8464e25472a891a8844367fdb7ed3f83cc2c",
+      "function": "identity",
+      "path": "app.py",
+      "revision": "984efb54bcae1f9c7aaf21702b9ba8bca7b08369",
+      "source_sha256": "edaaeb1663f87186a7d2b9942f72c68fdfb45038cadc123c80897872606d0c10"
+    },
+    "contract": {
+      "ensures": "result == value",
+      "inputs": {
+        "value": "int"
+      },
+      "requires": "True"
+    },
+    "contract_sha256": "90def38bec7213362cbe573300444e1324a63a7f2cbd1cbaa998de50b58f37d0",
+    "method": "source-proof",
+    "status": "proved",
+    "precondition": "sat",
+    "violation": "unsat",
+    "assumptions": [
+      "The selected function is called with exact Python int and bool values as declared.",
+      "The committed function is the function bound and called; module execution, imports, decorators elsewhere, and callers are outside this proof.",
+      "The source translator, Python runtime, Z3 solver, and Git object verification are trusted.",
+      "String literals are limited to printable ASCII without backslashes."
+    ],
+    "tool_identity": {
+      "python_version": "3.12.16",
+      "python_implementation": "CPython",
+      "solver_library_sha256": "752e7241ea570da619daf1fd4e5974c2638f5e83a2c19977ac2aa622bcc139c2",
+      "solver_version": "4.16.0",
+      "solver_binding_sha256": "423650223f6ac435f67512da556c286196f435af27bcbd6244d0317d417e3348",
+      "frontend_sha256": "b1a7614b5c542bcd95bc12012e2a66019ca6c15b8b3a00207dd54ca396a115ce"
+    }
+  },
+  "review_cohorts": {
+    "review_fix": {
+      "review_count": 2,
+      "cohort_digest": "40e521b2e777a34739067cd73420e0450e5db33caab54dc4205c867db98ae0d4",
+      "decision": "accept",
+      "independent_reviewers_and_authors": true
+    },
+    "review_spec": {
+      "review_count": 2,
+      "cohort_digest": "eaf2a3b727190e975a644647321cad408704dc822fc85d9c9b0205c359bd341e",
+      "decision": "accept",
+      "independent_reviewers_and_authors": true
+    },
+    "review_verification": {
+      "review_count": 2,
+      "cohort_digest": "ea8a15244d82273efd823283e9118d45dd0331398313e5efc4214ce525df282d",
+      "decision": "accept",
+      "independent_reviewers_and_authors": true
+    },
+    "review_final": {
+      "review_count": 2,
+      "cohort_digest": "e10192ad05b2521c680d3e6e860f96694e6a091721571f953294d7d8f40e7efe",
+      "decision": "accept",
+      "independent_reviewers_and_authors": true
+    }
+  },
+  "publication": {
+    "status": "failed",
+    "expected_reason": "No configured origin remote",
+    "session_status": "paused"
+  },
+  "scope": "Proof covers selected committed function under stated assumptions; module execution, binding, imports, and callers are outside proof."
+}

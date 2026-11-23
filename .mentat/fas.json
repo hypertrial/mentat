@@ -416,6 +416,16 @@
       "reason": "Awaiting independently reviewed source correspondence."
     },
     {
+      "path": "docs/evidence/identity-fixture.json",
+      "status": "mapped",
+      "requirement_ids": [
+        "b4085f53-5591-5dbf-8718-d21877944bf5",
+        "2752c9c0-b068-5aa5-9337-84a64a08478d",
+        "32c5a5b9-002e-5163-9ded-6a55f9e46250"
+      ],
+      "note": "One disposable live workflow instance with conditional source proof; this mapping is not a proof of the entire product."
+    },
+    {
       "path": "docs/iceberg-go.md",
       "status": "gap",
       "requirement_ids": [],
