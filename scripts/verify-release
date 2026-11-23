@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")/.."
+: "${MENTAT_NANOID_SOURCE:?Set MENTAT_NANOID_SOURCE to a local Nano ID mirror}"
+: "${MENTAT_ICEBERG_GO_SOURCE:?Set MENTAT_ICEBERG_GO_SOURCE to a local Iceberg Go mirror}"
+[[ -d "$MENTAT_NANOID_SOURCE" && -d "$MENTAT_ICEBERG_GO_SOURCE" ]]
+for tool in lean node go; do command -v "$tool" >/dev/null || { echo "Missing $tool" >&2; exit 1; }; done
+uv sync --locked --extra polaris
+uv run --locked --no-sync ruff check .
+uv run --locked --no-sync mentat claims check --repo . --base "$(git rev-parse HEAD)"
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/mentat-release.XXXXXXXX")
+trap 'rm -rf -- "$tmp"' EXIT
+export MENTAT_ICEBERG_FORMAL_TRACE="$tmp/iceberg-formal-trace.jsonl"
+platform_args=()
+case $(uname -s) in
+    Linux) export MENTAT_REQUIRE_PROOF_CHECKER=1 ;;
+    Darwin) platform_args+=(--ignore=tests/test_proof_checker.py) ;;
+    *) echo 'Release verification requires Linux or macOS' >&2; exit 1 ;;
+esac
+uv run --locked --no-sync --extra polaris pytest -q -rs -n 0 "${platform_args[@]}" | tee "$tmp/pytest.log"
+if grep -q '^SKIPPED ' "$tmp/pytest.log"; then
+    echo 'Release prerequisites must cover the complete suite; skipped tests are not allowed.' >&2
+    exit 1
+fi
+uv build --no-sources --out-dir "$tmp/dist"
+scripts/check-release-artifacts.sh "$tmp/dist"
