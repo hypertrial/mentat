@@ -442,6 +442,45 @@ new policy; real Mentat publication and whole-workflow readiness remain pending.
 
 ## Current self-run acceptance gap
 
+Final bounded-context candidate `e5b6becb5d00d5cb4df14f27d8b007166e3e8f39`
+passed both independent reviews before final completion: native and Linux each
+1,899 passed with 53 documented optional skips, both package gates, Ruff/Pyright,
+complete 292-path inventory and all 45 protected fixtures without skips. All 229
+source/script/test hashes and the clean head matched before and after. The
+independent verifier reconstructed both saved final-review inputs at 482,850
+characters without dropping required material or creating decisions. PR #67's
+hosted check passed in eight seconds and merged as
+`6b4d08ba17a1ba6bc3ed10a5c2db7e4500fc7d83`.
+
+Fresh session `64995fd381564d18adde7bb0c0124a75` completed eleven accepted
+SCL cohorts and recorded one model-capability deferral explicitly. Verification
+candidate `12cac44a685ff8b6e68bdc46cf7b3f875a12572a` passed the configured
+suite (1,899 passed, 53 documented skips), packaging and all 45 protected fixtures
+without skips. Its scoped positive clamp proof and actual negative solver case
+plus protected CPython replay passed with matching source/candidate/evidence.
+
+Verification reviewers split accept/defer because the current declared
+`examples/source-proof/contract.json` was omitted. Read-only inspection confirmed
+that its three logical fields exactly match the configured and FAS contracts,
+and FAS maps the file to the active requirement. Existing proof selection only
+required the implementation and control paths. The requirement's mapped and cited
+source fits existing limits (approximately 160,634 characters of mandatory files,
+279,306 for complete context with other sources explicitly omitted). The session
+ended blocked before final review or publication. No approval is inferred from
+the matching artifact or passing checks. General active-proof source selection,
+independent reviews/completion and renewed real workflow remain pending.
+
+The scoped selection correction now reserves active proof requirements' mapped
+surfaces and local citations, with exact contract and identity checks. Both saved
+v5 verification-review payloads reconstruct from a disposable backup at 476,509
+characters, including the previously omitted declaration and mapped test, all
+eleven cohorts and required proof/control material. No live records or decisions
+were changed. Independent test development passed 29 new regressions; the old
+code fails the missing-contract case. Existing source-case (68), context/citation
+(21), and context-budget (6) tests also pass. The fast gate, 92 boundary/static
+checks and whitespace check pass. Exact-commit independent review and completion
+remain pending.
+
 The final citation candidate `d22041b1b2811b6541177bea2e95baa61eca5694`
 passed independent completion: native and Linux each 1,893 passed with 53
 documented optional skips, both package gates, Ruff/Pyright, complete 291-path

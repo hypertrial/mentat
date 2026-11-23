@@ -51,6 +51,26 @@ def _citation_path(citation: str, paths: set[str]) -> str:
     )
 
 
+def _review_citation_path(citation: object, paths: set[str]) -> str | None:
+    """Normalize a local review citation; external citations remain metadata."""
+    if isinstance(citation, dict):
+        citation = citation.get("path", citation.get("url"))
+    if not isinstance(citation, str) or not citation:
+        raise ValueError("invalid review citation; revise the specification proposal")
+    if citation.startswith(("https://", "http://")):
+        if not re.match(r"^https?://[^/\s?#]+(?:[/?#]|$)", citation) or any(
+            char.isspace() for char in citation
+        ):
+            raise ValueError("invalid external review citation; revise the specification proposal")
+        return None
+    path = _citation_path(citation, paths)
+    try:
+        safe_relative_path(path)
+    except ValueError as exc:
+        raise ValueError("unsafe review citation; revise the specification proposal") from exc
+    return path
+
+
 def _cited_source_entry(repo: Path, revision: str, path: str) -> tuple[str, str]:
     """Read a regular file through verified Git objects and return its mode and blob ID."""
     safe_relative_path(path)
@@ -2466,26 +2486,9 @@ class Coordinator:
                 if not isinstance(citations, list):
                     raise ValueError("invalid review citations; revise the specification proposal")
                 for citation in citations:
-                    if isinstance(citation, dict):
-                        citation = citation.get("path", citation.get("url"))
-                    if not isinstance(citation, str) or not citation:
-                        raise ValueError("invalid review citation; revise the specification proposal")
-                    if citation.startswith(("https://", "http://")):
-                        if not re.match(r"^https?://[^/\s?#]+(?:[/?#]|$)", citation) or any(
-                            char.isspace() for char in citation
-                        ):
-                            raise ValueError(
-                                "invalid external review citation; revise the specification proposal"
-                            )
-                        continue  # External metadata is not represented as inspected source.
-                    path = _citation_path(citation, inventory_paths)
-                    try:
-                        safe_relative_path(path)
-                    except ValueError as exc:
-                        raise ValueError(
-                            "unsafe review citation; revise the specification proposal"
-                        ) from exc
-                    required_source.add(path)
+                    path = _review_citation_path(citation, inventory_paths)
+                    if path is not None:
+                        required_source.add(path)
             old_surfaces = {s["path"]: s for s in prior_fas.get("surfaces", [])}
             for surface in current_fas.get("surfaces", []):
                 path = surface["path"]
@@ -2554,6 +2557,59 @@ class Coordinator:
                     raise ValueError("invalid mandatory source proof target")
                 required_source.add(check["path"])
                 required_source.update(case["path"] for case in check.get("counterexample_cases", []))
+            if FAS_PATH in included:
+                requirements = {record["id"]: record for record in fas["requirements"]}
+                claims = {record["id"]: record for record in fas["claims"]}
+                active_claims: set[str] = set()
+                active_requirements: set[str] = set()
+                contract_fields = ("path", "function", "inputs", "requires", "ensures")
+                for check in checks:
+                    claim_id = check.get("claim_id")
+                    requirement_id = check.get("requirement_id")
+                    if "claim_id" in check and (not isinstance(claim_id, str) or claim_id not in claims):
+                        raise ValueError("unknown mandatory source proof claim")
+                    if "requirement_id" in check and (
+                        not isinstance(requirement_id, str) or requirement_id not in requirements
+                    ):
+                        raise ValueError("unknown mandatory source proof requirement")
+                    contract = {key: check.get(key) for key in contract_fields}
+                    if claim_id is not None:
+                        claim = claims[claim_id]
+                        if claim.get("formal_contract") != contract:
+                            raise ValueError("mandatory source proof claim contract mismatch")
+                        if requirement_id is not None and requirement_id not in claim.get("requirement_ids", []):
+                            raise ValueError("mandatory source proof requirement does not match claim")
+                        selected = [claim]
+                    else:
+                        selected = [
+                            claim for claim in claims.values()
+                            if claim.get("formal_contract") == contract
+                            and (requirement_id is None or requirement_id in claim.get("requirement_ids", []))
+                        ]
+                    if requirement_id is not None:
+                        active_requirements.add(requirement_id)
+                    for claim in selected:
+                        refs = claim.get("requirement_ids")
+                        if not isinstance(refs, list) or not refs or any(
+                            not isinstance(ref, str) or ref not in requirements for ref in refs
+                        ):
+                            raise ValueError("invalid mandatory source proof claim requirements")
+                        active_claims.add(claim["id"])
+                        active_requirements.update(refs)
+                for record in [*(requirements[key] for key in sorted(active_requirements)),
+                               *(claims[key] for key in sorted(active_claims))]:
+                    citations = record.get("citations", [])
+                    if not isinstance(citations, list):
+                        raise ValueError("invalid review citations; revise the specification proposal")
+                    for citation in citations:
+                        path = _review_citation_path(citation, inventory_paths)
+                        if path is not None:
+                            required_source.add(path)
+                for surface in fas["surfaces"]:
+                    if surface.get("status") == "mapped" and active_requirements.intersection(
+                        surface.get("requirement_ids", [])
+                    ):
+                        required_source.add(surface["path"])
             for path in sorted(required_source - set(included)):
                 try:
                     safe_relative_path(path)
