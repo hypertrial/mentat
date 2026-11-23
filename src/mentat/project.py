@@ -35,6 +35,8 @@ VERIFIER_MODULES = (
     "__init__",
     "source_verify",
     "autonomy_state",
+    "autonomy_runtime",
+    "autonomy_worker",
     "canonical",
     "claims",
     "cli",
@@ -622,7 +624,7 @@ def safe_git_path(raw_path: bytes) -> str:
         raise ValueError("non-UTF-8 tree path") from exc
 
 
-def _tree_entries(
+def tree_entries(
     records: Iterable[bytes], *, allow_links: bool = False
 ) -> dict[str, tuple[int, bytes]]:
     entries = {}
@@ -658,7 +660,7 @@ def _tree_entries(
 def _tree(root: Path, revision: str, *, approved: bool) -> dict[str, tuple[int, bytes]]:
     records, scopes, top = _tree_records(root, revision, approved=approved)
     verify_listing(root, revision, records, scopes, top)
-    return read_blobs(root, _tree_entries(records, allow_links=not approved))
+    return read_blobs(root, tree_entries(records, allow_links=not approved))
 
 
 def tree_digest(files: dict[str, tuple[int, bytes]]) -> str:
