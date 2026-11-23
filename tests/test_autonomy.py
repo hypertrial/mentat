@@ -2213,3 +2213,145 @@ def test_revision_cannot_drop_previously_added_surface(repo, tmp_path):
         j["payload"]["kind"] == "review_spec" and j["payload"]["proposal"].get("round") == 1
         for j in snapshot["jobs"]
     )
+
+
+def test_structured_fas_patch_keeps_lineage_and_reaches_both_reviewers(repo, tmp_path):
+    import hashlib
+
+    from mentat.autonomy import digest
+    from mentat.autonomy_state import record_digest
+
+    requirements = [
+        {'id': str(uuid.uuid4()), 'area': area, 'origin': 'uncertain',
+         'statement': 'Unknown', 'spec_path': 'openspec/specs/application/spec.md'}
+        for area in AREAS
+    ]
+    spec = repo / 'openspec/specs/application/spec.md'
+    spec.parent.mkdir(parents=True)
+    spec.write_text('\n'.join(r['id'] for r in requirements))
+    paths = ['src.py', '.mentat/workspace.json', '.mentat/fas.json',
+             'openspec/specs/application/spec.md']
+    surfaces = [{'path': path, 'status': 'gap', 'requirement_ids': []} for path in paths]
+    initial = {'schema_version': 1, 'requirements': requirements, 'claims': [], 'surfaces': surfaces}
+    path = repo / '.mentat/fas.json'
+    path.write_text(json.dumps(initial))
+    git(repo, 'add', '.')
+    git(repo, 'commit', '-qm', 'prior specification')
+    git(repo, 'update-ref', 'refs/remotes/origin/main', git(repo, 'rev-parse', 'HEAD'))
+    prompts = []
+
+    class PatchAgent(Agent):
+        def run(self, repo, job, output, *, timeout_seconds):
+            payload = job['payload']
+            if payload['kind'] == 'generate_spec':
+                current = (repo / '.mentat/fas.json').read_bytes()
+                context = json.loads(payload['prompt'].split('SOURCE_CONTEXT_JSON:\n', 1)[1])
+                old = json.loads(current)['requirements'][0]
+                assert context['fas_sha256'] == hashlib.sha256(current).hexdigest()
+                assert context['patch_record_digest_index']['requirements'][old['id']] == record_digest(old)
+                assert context['patch_record_digest_index']['surfaces']['src.py'] == record_digest(surfaces[0])
+                updated = {**old, 'statement': 'Clarified', 'revision': {
+                    'version': 2, 'previous_digest': digest(old),
+                    'reason': 'Reviewed source', 'evidence': ['src.py']}}
+                patch = {'schema_version': 1, 'expected_sha256': context['fas_sha256'], 'edits': [{
+                    'collection': 'requirements', 'key': old['id'],
+                    'expected_digest': record_digest(old), 'record': updated}]}
+                return {'status': 'succeeded', 'session_id': job['id'], 'result': {
+                    'decision': 'accept', 'summary': 'refined', 'findings': [],
+                    'verification_requests': [], 'changes': [{
+                        'path': '.mentat/fas.json', 'operation': 'patch_fas',
+                        'content': json.dumps(patch)}]}}
+            if payload['kind'] == 'review_spec':
+                prompts.append(payload['prompt'])
+            return super().run(repo, job, output, timeout_seconds=timeout_seconds)
+
+    snapshot, _, github = run(repo, tmp_path, agent=PatchAgent())
+    updated = next(r for r in snapshot['requirements'] if r['id'] == requirements[0]['id'])
+    assert updated['statement'] == 'Clarified', snapshot
+    assert any(e['kind'] == 'record_revised' for e in snapshot['events'])
+    assert len(prompts) == 2
+    for prompt in prompts:
+        context = json.loads(prompt.split('SOURCE_CONTEXT_JSON:\n', 1)[1])
+        assert '.mentat/fas.json' in context['proposal_diff']
+        assert 'Clarified' in context['proposal_diff']
+    review = next(j for j in snapshot['jobs'] if j['payload']['kind'] == 'review_spec')
+    candidate = json.loads(git(repo, 'show', f"{review['payload']['proposal']['head']}:.mentat/fas.json"))
+    assert candidate['requirements'][1:] == requirements[1:]
+    assert candidate['surfaces'] == surfaces
+    assert github.published
+
+
+def test_spec_provenance_tracks_observed_input_across_review_retries(repo, tmp_path):
+    generations = []
+    reviews = []
+
+    class ProvenanceAgent(Agent):
+        def run(self, repo, job, output, *, timeout_seconds):
+            payload = job['payload']
+            kind = payload['kind']
+            if kind == 'generate_spec':
+                context = json.loads(payload['prompt'].split('SOURCE_CONTEXT_JSON:\n', 1)[1])
+                generations.append((payload, context, git(repo, 'rev-parse', 'HEAD')))
+                if payload.get('round') == 1:
+                    spec = repo / 'openspec/specs/application/spec.md'
+                    spec.write_text(spec.read_text() + '\nReviewed clarification\n')
+                    return {'status': 'succeeded', 'session_id': job['id'], 'result': {
+                        'decision': 'accept', 'summary': 'revised', 'findings': [],
+                        'verification_requests': []}}
+            if kind == 'review_spec':
+                context = json.loads(payload['prompt'].split('SOURCE_CONTEXT_JSON:\n', 1)[1])
+                reviews.append((payload, context, git(repo, 'rev-parse', 'HEAD')))
+            result = super().run(repo, job, output, timeout_seconds=timeout_seconds)
+            if kind == 'review_spec' and payload['proposal'].get('round') == 0:
+                result['result']['decision'] = 'revise'
+                result['result']['findings'] = [{'summary': 'Clarify'}]
+            return result
+
+    snapshot, _, _ = run(repo, tmp_path, agent=ProvenanceAgent())
+    assert len(generations) == 2
+    assert len(reviews) == 4
+    first_input = generations[0][2]
+    retry_input = generations[1][2]
+    assert first_input == snapshot['session']['base']
+    assert retry_input != first_input
+    for payload, context, checkout in generations:
+        assert context['revision'] == checkout
+        prompt = payload['prompt']
+        assert f'task input revision {checkout}' in prompt
+        assert f"Session head {snapshot['session']['base']}" in prompt
+        assert 'observed file blobs or content' in prompt
+        assert 'never require a document to cite its own resulting commit hash' in prompt
+    for round_number, observed in [(0, first_input), (1, retry_input)]:
+        pair = [(p, c, h) for p, c, h in reviews if p['proposal'].get('round') == round_number]
+        assert len(pair) == 2
+        for payload, context, checkout in pair:
+            proposal = payload['proposal']
+            assert proposal['observed_source_revision'] == observed
+            assert context['observed_source_revision'] == observed
+            assert context['revision'] == context['proposal_head'] == proposal['head'] == checkout
+            assert context['proposal_base'] == proposal['parent'] == first_input
+            assert context['proposal_diff']
+            assert set(context['source_changes_since_observation']) == set(
+                git(repo, 'diff', '--name-only', '--no-renames', observed, checkout).splitlines()
+            )
+            assert 'openspec/specs/application/spec.md' in context['source_changes_since_observation']
+            assert 'src.py' not in context['source_changes_since_observation']
+            prompt = payload['prompt']
+            assert 'file blobs or content and scope remain unchanged' in prompt
+            assert 'flag actual drift and defer' in prompt
+            assert 'Never require a versioned document to cite its own resulting commit hash' in prompt
+
+
+def test_review_context_rejects_observation_from_unrelated_candidate(repo, tmp_path):
+    base = git(repo, 'rev-parse', 'HEAD')
+    (repo / 'src.py').write_text('first branch\n')
+    git(repo, 'commit', '-qam', 'first')
+    observed = git(repo, 'rev-parse', 'HEAD')
+    git(repo, 'checkout', '-q', '--detach', base)
+    (repo / 'src.py').write_text('second branch\n')
+    git(repo, 'commit', '-qam', 'second')
+    candidate = git(repo, 'rev-parse', 'HEAD')
+    coordinator = Coordinator(repo, Store(tmp_path / 'state/state.db'), Agent(), Worker(), GitHub())
+    with pytest.raises(ValueError, match='ancestor'):
+        coordinator._source_context(candidate, {'payload': {'kind': 'review_spec', 'proposal': {
+            'parent': base, 'head': candidate, 'observed_source_revision': observed}}})

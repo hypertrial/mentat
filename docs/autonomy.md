@@ -38,6 +38,20 @@ Run from a clean committed tree. `run` starts a bounded controller and displays 
 
 SCL maintains all six CAS areas and records observed, intended, inferred, and uncertain requirements. IVL separately records formal obligations, models, implementation connections, executable checks, and unsupported scope. IIL handles evidenced violations of established requirements. Each generator is independently reviewed; consequential checker, CI, acceptance, and guarantee changes require two independent reviews. Application rewrites solely to ease verification are excluded.
 
+Specification generators can propose small FAS record upserts with `patch_fas`
+instead of reconstructing the whole file. This data-only operation binds to the
+exact previous file SHA-256 and existing record digests; inserts require an absent
+stable identifier or surface path. It cannot delete records or edit another file.
+The controller validates the complete resulting FAS, lineage and candidate inventory,
+then gives independent reviewers the full committed diff. Existing full-file
+write/delete proposals remain supported.
+
+Source observations cite the immutable revision or file blob the generator
+inspected. The proposal produced from those observations has a separate commit
+identity. Reviewers check the observed ancestor and relevant changed content;
+a versioned specification does not need to embed its own resulting commit hash.
+Execution results and approvals still bind to the exact candidate head and base.
+
 When work is stable, deferred, cancelled, or out of budget, the controller checkpoints. Resumption preserves attempt counts and fences old workers. Changed source or policy makes prior evidence stale; it must not be displayed as current assurance. Review material fixes again and rerun the required local gate at the final candidate revision.
 
 ## Direct Python source evidence

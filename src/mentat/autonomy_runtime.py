@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from . import autonomy_worker, gitio, process, project
+from .autonomy_state import record_digest
 
 # Refuse to attest code that changed after this process imported its implementation.
 _LOADED_EXECUTION_SOURCES = (Path(__file__).read_bytes(), Path(autonomy_worker.__file__).read_bytes())
@@ -56,7 +57,7 @@ _ITEM_FIELDS: dict[str, dict[str, dict[str, Any]]] = {
     "findings": {"id": {"type": "string"}, "summary": {"type": "string"}, "requirement_ids": {"type": "array", "items": {"type": "string"}}, "severity": {"type": "string"}},
     "verification_requests": {"argv": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}, "claim_ids": {"type": "array", "items": {"type": "string"}}, "method": {"type": "string"}},
     "defects": {"id": {"type": "string"}, "requirement_id": {"type": "string"}, "evidence_id": {"type": "string"}, "summary": {"type": "string"}},
-    "changes": {"path": {"type": "string"}, "operation": {"type": "string", "enum": ["write", "delete"]}, "content": {"type": "string"}},
+    "changes": {"path": {"type": "string"}, "operation": {"type": "string", "enum": ["write", "delete", "patch_fas"]}, "content": {"type": "string"}},
 }
 _SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -156,9 +157,101 @@ def _validate_result(value: Any) -> dict:
     changes = value["changes"]
     if len(changes) > 128 or sum(len(item["content"].encode("utf-8")) for item in changes) > 300_000:
         raise ValueError("agent changes exceed limits")
-    if any(item["operation"] not in {"write", "delete"} or (item["operation"] == "delete" and item["content"]) for item in changes):
+    if any(item["operation"] not in {"write", "delete", "patch_fas"} or (item["operation"] == "delete" and item["content"]) for item in changes):
         raise ValueError("invalid file change operation")
     return value
+
+
+def _strict_json(data: str | bytes) -> Any:
+    def pairs(items: list[tuple[str, Any]]) -> dict:
+        result: dict[str, Any] = {}
+        for key, value in items:
+            if key in result:
+                raise ValueError("duplicate JSON key")
+            result[key] = value
+        return result
+
+    def invalid_constant(value: str) -> None:
+        raise ValueError(f"invalid JSON constant: {value}")
+
+    try:
+        return json.loads(data, object_pairs_hook=pairs, parse_constant=invalid_constant)
+    except (UnicodeError, RecursionError) as exc:
+        raise ValueError("invalid JSON") from exc
+
+
+def _fas_key(collection: str, record: Any) -> str:
+    if not isinstance(record, dict):
+        raise ValueError("invalid FAS record")
+    key = record.get("path" if collection == "surfaces" else "id")
+    if not isinstance(key, str):
+        raise ValueError("invalid FAS record key")
+    if collection == "surfaces":
+        project.safe_relative_path(key)
+    else:
+        try:
+            uuid.UUID(key)
+        except ValueError as exc:
+            raise ValueError("invalid FAS record UUID") from exc
+    return key
+
+
+def _patch_fas(raw: bytes, content: str) -> str:
+    if len(raw) > 1_000_000:
+        raise ValueError("FAS base exceeds size limit")
+    base = _strict_json(raw)
+    patch = _strict_json(content)
+    collections = ("requirements", "claims", "surfaces")
+    if (not isinstance(base, dict) or set(base) != {"schema_version", *collections}
+            or type(base["schema_version"]) is not int or base["schema_version"] != 1):
+        raise ValueError("invalid FAS base")
+    indexes: dict[str, dict[str, int]] = {}
+    ids: set[str] = set()
+    for collection in collections:
+        records = base[collection]
+        if not isinstance(records, list) or len(records) > 4096:
+            raise ValueError("invalid FAS base inventory")
+        indexes[collection] = {}
+        for i, record in enumerate(records):
+            key = _fas_key(collection, record)
+            if key in indexes[collection] or (collection != "surfaces" and key in ids):
+                raise ValueError("duplicate FAS base record")
+            indexes[collection][key] = i
+            if collection != "surfaces":
+                ids.add(key)
+    if (not isinstance(patch, dict) or set(patch) != {"schema_version", "expected_sha256", "edits"}
+            or type(patch["schema_version"]) is not int or patch["schema_version"] != 1
+            or not isinstance(patch["expected_sha256"], str)
+            or patch["expected_sha256"] != hashlib.sha256(raw).hexdigest()
+            or not isinstance(patch["edits"], list) or not 1 <= len(patch["edits"]) <= 128):
+        raise ValueError("invalid or stale FAS patch")
+    seen: set[tuple[str, str]] = set()
+    for edit in patch["edits"]:
+        if not isinstance(edit, dict) or set(edit) != {"collection", "key", "expected_digest", "record"}:
+            raise ValueError("invalid FAS edit")
+        collection = edit["collection"]
+        key = edit["key"]
+        if (not isinstance(collection, str) or collection not in collections
+                or not isinstance(key, str) or _fas_key(collection, edit["record"]) != key
+                or (collection, key) in seen):
+            raise ValueError("invalid or duplicate FAS edit")
+        seen.add((collection, key))
+        index = indexes[collection].get(key)
+        expected = edit["expected_digest"]
+        if index is None:
+            if expected is not None or (collection != "surfaces" and key in ids):
+                raise ValueError("FAS insertion conflicts with existing record")
+            base[collection].append(edit["record"])
+            if collection != "surfaces":
+                ids.add(key)
+        else:
+            if not isinstance(expected, str) or expected != record_digest(base[collection][index]):
+                raise ValueError("stale FAS record")
+            base[collection][index] = edit["record"]
+    try:
+        return json.dumps(base, indent=2, ensure_ascii=True, allow_nan=False) + "\n"
+    except (ValueError, TypeError, RecursionError) as exc:
+        raise ValueError("invalid FAS result") from exc
 
 
 def apply_changes(repo: Path, changes: list[dict], *, kind: str, protected_paths: set[str] | None = None) -> list[str]:
@@ -193,7 +286,9 @@ def apply_changes(repo: Path, changes: list[dict], *, kind: str, protected_paths
             allowed = not (lower.startswith(("openspec/", ".mentat/", "verification/", "scripts/", ".github/")) or lower in {"agents.md", "contributing.md", "pyproject.toml", "uv.lock", "makefile", "package.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "tox.ini", "pytest.ini", "setup.cfg", "setup.py", "verify.py"} or parts[-1].startswith(("requirements", "conftest")))
         if not allowed or lower in protected or any(lower.startswith(p + "/") for p in protected):
             raise ValueError("file outside permitted job scope")
-        if change["operation"] not in {"write", "delete"} or (change["operation"] == "delete" and change["content"]):
+        if (change["operation"] not in {"write", "delete", "patch_fas"}
+                or (change["operation"] == "delete" and change["content"])
+                or (change["operation"] == "patch_fas" and (kind != "generate_spec" or path != ".mentat/fas.json"))):
             raise ValueError("invalid file change operation")
         total += len(change["content"].encode("utf-8"))
     if total > 300_000:
@@ -220,26 +315,37 @@ def apply_changes(repo: Path, changes: list[dict], *, kind: str, protected_paths
             os.close(fd)
             raise
     try:
-        # Validate all existing targets before modifying anything.
-        for change in changes:
+        # Validate all existing targets and materialize patches before modifying anything.
+        materialized = [dict(change) for change in changes]
+        for change in materialized:
             parts = change["path"].split("/")
             fd = parent_fd(parts[:-1], create=False)
             if fd is None:
-                if change["operation"] == "delete":
-                    raise ValueError("cannot delete missing file")
+                if change["operation"] in {"delete", "patch_fas"}:
+                    raise ValueError("cannot modify missing file")
                 continue
             try:
                 try:
                     info = os.stat(parts[-1], dir_fd=fd, follow_symlinks=False)
                 except FileNotFoundError:
-                    if change["operation"] == "delete":
-                        raise ValueError("cannot delete missing file") from None
+                    if change["operation"] in {"delete", "patch_fas"}:
+                        raise ValueError("cannot modify missing file") from None
                     continue
                 if not stat.S_ISREG(info.st_mode):
                     raise ValueError("file change target must be regular")
+                if change["operation"] == "patch_fas":
+                    file_fd = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW, dir_fd=fd)
+                    with os.fdopen(file_fd, "rb") as source:
+                        if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
+                            raise ValueError("file change target must be regular")
+                        raw = source.read(1_000_001)
+                    change["content"] = _patch_fas(raw, change["content"])
+                    change["operation"] = "write"
             finally:
                 os.close(fd)
-        for change in changes:
+        if sum(len(change["content"].encode("utf-8")) for change in materialized) > 300_000:
+            raise ValueError("materialized file changes exceed size limit")
+        for change in materialized:
             parts = change["path"].split("/")
             fd = parent_fd(parts[:-1], create=change["operation"] == "write")
             if fd is None:

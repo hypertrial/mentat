@@ -525,7 +525,7 @@ def _allowed_path(kind: str, path: str) -> bool:
     )
 
 
-_OUTPUT_INSTRUCTIONS = """Return the structured result required by the output schema. You have no execution or filesystem tools. Return complete file contents in changes as {path, operation, content}; use operation write or delete (empty content for delete). Reviewers must return an empty changes list. Your agreement is not proof. Never modify an established requirement to hide an application defect. Never commit, push, merge, edit controller state, or use credentials. Execution of candidate or generated verification programs belongs in the configured isolated worker, not the host. Record ambiguity and missing capabilities explicitly and continue unrelated work."""
+_OUTPUT_INSTRUCTIONS = """Return the structured result required by the output schema. You have no execution or filesystem tools. Return file changes as {path, operation, content}; use operation write or delete (empty content for delete). Reviewers must return an empty changes list. Your agreement is not proof. Never modify an established requirement to hide an application defect. Never commit, push, merge, edit controller state, or use credentials. Execution of candidate or generated verification programs belongs in the configured isolated worker, not the host. Record ambiguity and missing capabilities explicitly and continue unrelated work."""
 
 
 class Coordinator:
@@ -1314,6 +1314,7 @@ class Coordinator:
             "head": head,
             "parent": review_base,
             "inventory_head": head,
+            "observed_source_revision": parent,
             "context_pending": deferred_paths,
             "context_unavailable": sorted(omitted_paths - set(deferred_paths)),
             "diff_digest": hashlib.sha256(_diff(worktree, review_base, head)).hexdigest(),
@@ -1378,6 +1379,8 @@ class Coordinator:
         omitted: list[dict[str, str]] = []
         used = 0
         index: dict[str, dict] = {}
+        patch_index: dict[str, dict[str, str]] = {}
+        fas_sha256 = ""
         # Reserve the complete FAS and its lineage index before admitting other files.
         if FAS_PATH in paths:
             try:
@@ -1385,6 +1388,7 @@ class Coordinator:
                 if len(raw) > 240_000:
                     raise ValueError("required FAS exceeds context capacity")
                 contents = raw.decode("utf-8")
+                fas_sha256 = hashlib.sha256(raw).hexdigest()
                 fas = json.loads(contents)
                 if not isinstance(fas, dict):
                     raise ValueError("invalid required FAS")
@@ -1406,13 +1410,27 @@ class Coordinator:
                             "digest": digest(record),
                             "version": revision_data.get("version", 1),
                         }
+                for collection in ("requirements", "claims", "surfaces"):
+                    records = fas.get(collection)
+                    if not isinstance(records, list):
+                        raise ValueError("invalid required FAS records")
+                    entries: dict[str, str] = {}
+                    for record in records:
+                        field = "path" if collection == "surfaces" else "id"
+                        if not isinstance(record, dict) or not isinstance(record.get(field), str):
+                            raise ValueError("invalid required FAS record")
+                        key = record[field]
+                        if key in entries:
+                            raise ValueError("duplicate required FAS record")
+                        entries[key] = record_digest(record)
+                    patch_index[collection] = entries
                 used = len(json.dumps({FAS_PATH: contents}, ensure_ascii=True))
                 included[FAS_PATH] = contents
             except (OSError, ValueError, UnicodeError, TypeError, AttributeError) as exc:
                 raise ValueError(
                     f"required FAS unavailable or exceeds context capacity: {exc}"
                 ) from exc
-        reserved = len(json.dumps(index, ensure_ascii=True))
+        reserved = len(json.dumps(index, ensure_ascii=True)) + len(json.dumps(patch_index, ensure_ascii=True)) + len(fas_sha256)
         if diff is not None:
             reserved += len(json.dumps(diff, ensure_ascii=True))
         # Keep room for field names and omission metadata; the final bound is checked below.
@@ -1464,10 +1482,26 @@ class Coordinator:
         context = {"revision": revision, "files": included, "omitted": omitted}
         if FAS_PATH in included:
             context["prior_revision_index"] = index
+            context["fas_sha256"] = fas_sha256
+            context["patch_record_digest_index"] = patch_index
         if isinstance(proposal, dict):
             if changed & {item["path"] for item in omitted}:
                 raise ValueError("review cannot inspect a changed file")
             context["proposal_base"] = proposal["parent"]
+            context["proposal_head"] = revision
+            observed = proposal.get("observed_source_revision")
+            if observed is not None:
+                if not isinstance(observed, str):
+                    raise ValueError("invalid observed source revision")
+                # The generation input must be an ancestor of the reviewed candidate.
+                if git(self.repo, "merge-base", observed, revision) != observed:
+                    raise ValueError("observed source revision is not a candidate ancestor")
+                context["observed_source_revision"] = observed
+                context["source_changes_since_observation"] = [
+                    path for path in git(
+                        self.repo, "diff", "--name-only", "--no-renames", "-z", observed, revision
+                    ).split("\0") if path
+                ]
             context["proposal_diff"] = diff
         encoded = json.dumps(context, ensure_ascii=True)
         if len(encoded) > 500_000:
@@ -1495,7 +1529,8 @@ class Coordinator:
 
     def _prompt(self, job: dict, session: dict) -> str:
         kind = job["payload"]["kind"]
-        common = f"Mentat {job['loop'].upper()} {kind}. Repository head {session['head']}; base {session['base']}. {_OUTPUT_INSTRUCTIONS}\nTask: {json.dumps(job['payload'])}\n"
+        input_revision = job["payload"].get("target_head", session["head"])
+        common = f"Mentat {job['loop'].upper()} {kind}. Session head {session['head']}; session base {session['base']}; task input revision {input_revision}. {_OUTPUT_INSTRUCTIONS}\nTask: {json.dumps(job['payload'])}\n"
         if kind in {"generate_spec", "generate_verification", "investigate_defect"}:
             common += (
                 "The controller automatically runs configured completion gates and configured or reviewed FAS source contracts before acceptance reviews. "
@@ -1507,12 +1542,12 @@ class Coordinator:
         if kind == "generate_spec":
             return (
                 common
-                + f"Work incrementally on the INCLUDED files in this batch. Preserve all existing records and IDs; map only facts supported by included files and keep omitted surfaces unexamined or gap. Do not defer the whole batch solely because files are omitted: the controller queues remaining batches. Write OpenSpec CAS documents under openspec/specs/*/spec.md and {FAS_PATH}. FAS JSON exact keys schema_version=1, requirements, claims, surfaces. Every requirement has persistent UUID id, area in {AREAS}, nonempty statement, origin observed/intended/inferred/uncertain, citations, spec_path containing the UUID in an HTML comment. Preserve existing IDs and lineage. For every changed existing requirement or claim, add revision {{version: previous version plus one (initial version 1), previous_digest: SHA-256 canonical digest of previous JSON record, reason: nonempty explanation, evidence: nonempty citations}}; do not remove prior IDs or weaken established intent. Every claim has UUID id, requirement_ids, statement, assumptions, status (unattempted/unsupported/inconclusive only; the controller derives proof status), formal_meaning. Every surface has path, status mapped/gap/unsupported/unexamined and requirement_ids. Account for all six areas, including unknown requirements explicitly. Do not change application code. Flag actual established defects separately; uncertainty is not a defect."
+                + f"Cite the immutable task input revision and actual observed file blobs or content for observations. A resulting proposal commit is created after generation, so never require a document to cite its own resulting commit hash. Work incrementally on the INCLUDED files in this batch. Preserve all existing records and IDs; map only facts supported by included files and keep omitted surfaces unexamined or gap. Do not defer the whole batch solely because files are omitted: the controller queues remaining batches. Write OpenSpec CAS documents under openspec/specs/*/spec.md and {FAS_PATH}. For small FAS edits, optionally use operation patch_fas at exactly {FAS_PATH}, with content a JSON string containing {{schema_version: 1, expected_sha256: fas_sha256, edits: [{{collection: requirements/claims/surfaces, key: UUID or exact surface path, expected_digest: null for insertion or patch_record_digest_index digest for update, record: complete replacement object}}]}}. Include only changed records, at most 128 edits; no deletions. The complete resulting FAS and all changes together must fit 300000 bytes. Use prior_revision_index for requirement and claim revision lineage (its digest differs from patch_record_digest_index). FAS JSON exact keys schema_version=1, requirements, claims, surfaces. Every requirement has persistent UUID id, area in {AREAS}, nonempty statement, origin observed/intended/inferred/uncertain, citations, spec_path containing the UUID in an HTML comment. Preserve existing IDs and lineage. For every changed existing requirement or claim, add revision {{version: previous version plus one (initial version 1), previous_digest: SHA-256 canonical digest of previous JSON record, reason: nonempty explanation, evidence: nonempty citations}}; do not remove prior IDs or weaken established intent. Every claim has UUID id, requirement_ids, statement, assumptions, status (unattempted/unsupported/inconclusive only; the controller derives proof status), formal_meaning. Every surface has path, status mapped/gap/unsupported/unexamined and requirement_ids. Account for all six areas, including unknown requirements explicitly. Do not change application code. Flag actual established defects separately; uncertainty is not a defect."
             )
         if kind == "review_spec":
             return (
                 common
-                + "Review this incremental specification draft against the included source and proposal diff. Accept a defensible partial draft when omitted surfaces remain explicitly unexamined or gaps; do not require unsupported completeness. Reject fabricated mappings or weakened established requirements. Remaining batches and final verification remain required."
+                + "Review this incremental specification draft against the included source and proposal diff. The context revision and proposal_head identify the reviewed candidate; observed_source_revision is the generator input and proposal_base is the cumulative review baseline. An observation may cite an ancestor if the relevant file blobs or content and scope remain unchanged through the candidate; flag actual drift and defer when equivalence cannot be established from available evidence. source_changes_since_observation lists changed paths since the generator input when supplied. Never require a versioned document to cite its own resulting commit hash. Accept a defensible partial draft when omitted surfaces remain explicitly unexamined or gaps; do not require unsupported completeness. Reject fabricated mappings or weakened established requirements. Remaining batches and final verification remain required."
             )
         if kind == "generate_verification":
             return (
