@@ -39,5 +39,7 @@ Before source changes: `scripts/verify` completed with 1,479 passed and 53 skipp
 
 ## Decisions
 
+- 2026-11-23: every specification candidate inventories its complete staged Git tree. The controller may append deterministic `unexamined` surfaces with no requirement links only for newly introduced paths absent from the immediate parent's inventory. Missing existing surfaces, malformed records and duplicate rows remain errors. These metadata changes are committed and independently reviewed; they establish no correspondence or proof. Review retries retain the original cumulative review base, while record lineage is validated against the immediate parent. Regressions must cover new sidecars, omitted existing paths, rejected drafts, CAS-only corrections and allowed deletions. Staging must handle already-staged deletions without dropping allowed-path checks.
+
 - 2026-11-23: the user removed external work-tracking requirements from this repository. Repository specifications and evidence own implementation intent and handoffs.
 - 2026-11-23: the user explicitly simplified Git integration to SSH and existing `gh` authentication, local records and independent reviews. No new signer, signed receipt, or bootstrap workflow is part of this implementation.
