@@ -2671,17 +2671,27 @@ class Coordinator:
                 )
             context["proposal_diff"] = diff
         encoded = json.dumps(context, ensure_ascii=True)
+        encoded_size = len(encoded)
+        included_targets = len(requested_targets & set(included))
         # Late metadata (especially the complete omission list) is not known
         # when optional files are admitted. Keep all mandatory evidence and
         # evict only optional contents in deterministic reverse priority order.
         for path in reversed(optional_files):
-            if len(encoded) <= 500_000:
+            if encoded_size <= 500_000:
                 break
-            if path in requested_targets and len(requested_targets & set(included)) == 1:
+            if path in requested_targets and included_targets == 1:
                 continue
+            file_size = len(json.dumps({path: included[path]}, ensure_ascii=True))
+            removal = file_size if len(included) > 1 else file_size - 2
+            omission = {"path": path, "reason": "context budget exhausted"}
+            addition = len(json.dumps(omission, ensure_ascii=True)) + (2 if omitted else 0)
             del included[path]
-            omitted.append({"path": path, "reason": "context budget exhausted"})
-            encoded = json.dumps(context, ensure_ascii=True)
+            omitted.append(omission)
+            encoded_size += addition - removal
+            if path in requested_targets:
+                included_targets -= 1
+        # Check the actual serialization even if the incremental accounting is wrong.
+        encoded = json.dumps(context, ensure_ascii=True)
         if requested_targets and not (requested_targets & set(included)):
             target_omissions = [item for item in omitted if item["path"] in requested_targets]
             if all(item["reason"] in {

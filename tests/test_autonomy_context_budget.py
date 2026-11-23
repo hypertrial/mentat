@@ -163,3 +163,45 @@ def test_targeted_generation_keeps_progress_and_records_evicted_frontier(budget_
     assert omitted == {item['path'] for item in data['omitted']}
     assert set(optional[:3]) & omitted <= set(deferred)
     assert any(path in omitted for path in optional[:3])
+
+
+@pytest.mark.parametrize('mandatory_growth,should_fit', [(80_000, True), (425_000, False)])
+def test_many_tiny_evictions_serialize_full_context_at_most_twice(
+    budget_history, tmp_path, monkeypatch, mandatory_growth, should_fit
+):
+    repo, config, check, record, _, _, optional, oversized = budget_history
+    tiny = []
+    for i in range(400):
+        path = f'z_tiny_{i:04}.py'
+        (repo / path).write_text('é"\\\n')
+        tiny.append(path)
+    base = commit(repo, 'many tiny optional files')
+    spec = repo / 'openspec/specs/app/spec.md'
+    spec.write_text(spec.read_text() + 'Further change\n')
+    head = commit(repo, 'final candidate')
+    history = (repo, config, check, record, base, head, optional, oversized)
+
+    original_dumps = json.dumps
+    full_context_serializations = []
+
+    def counted_dumps(value, *args, **kwargs):
+        result = original_dumps(value, *args, **kwargs)
+        if isinstance(value, dict) and {'revision', 'files', 'omitted'} <= value.keys():
+            full_context_serializations.append(len(result))
+        return result
+
+    monkeypatch.setattr(json, 'dumps', counted_dumps)
+    if should_fit:
+        data, omitted, included, _, _, _, _ = final_context(
+            history, tmp_path, monkeypatch, mandatory_growth=mandatory_growth)
+        assert len(original_dumps(data, ensure_ascii=True)) <= 500_000
+        assert len(set(tiny) & omitted) >= 100
+        assert set(tiny) <= omitted | included
+        assert omitted == {item['path'] for item in data['omitted']}
+        assert data['files']['subject.py'] == (repo / 'subject.py').read_text()
+        assert data['files']['bad.py'] == (repo / 'bad.py').read_text()
+        assert data['proposal_head'] == head
+    else:
+        with pytest.raises(ReviewContextCapacity):
+            final_context(history, tmp_path, monkeypatch, mandatory_growth=mandatory_growth)
+    assert 1 <= len(full_context_serializations) <= 2

@@ -482,6 +482,23 @@ overflow, paired final-review workflow and retained targeted-source progress
 with an accurate omission frontier. The fast gate and 92 boundary/static checks
 pass. Exact-revision independent review and completion remain pending.
 
+Development candidate `abb248f4a9025e04c9ba2ceef25757ccb2732cac`
+passed native and Linux suites (1,897 passed, 53 documented optional skips each),
+both package checks, Ruff/Pyright, complete 292-path inventory and all 45 protected
+fixtures without skips. The clean head and all 229 source/script/test hashes
+remained unchanged. Code review accepted its evidence-preservation logic, but
+independent security review identified repeated full-context serialization as an
+availability issue. These are development gate results, not final acceptance.
+The follow-up uses exact linear size accounting and incrementally maintained
+target counts, with an actual final serialization and unchanged capacity guard.
+Six focused tests now pass, including 400 tiny files with escaped Unicode in
+both fitting and genuine-overflow contexts. They permit at most two complete
+context serializations; an isolated prelinear implementation performed 402 and
+failed the regression. Both saved real review inputs still reconstruct at
+482,850 characters with all mandatory content. Existing source-context/citation
+feedback passed 21 tests. The fast gate, 92 boundary/static checks and whitespace
+check pass. Exact-commit independent review and final completion remain pending.
+
 The source-case candidate `9ee0df3d1c49204c939555f462c43adf4d0a3a49`
 passed independent completion: 1,878 native and Linux tests each with 53
 documented optional skips, both package checks, Ruff/Pyright and 91 boundary
