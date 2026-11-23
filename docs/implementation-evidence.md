@@ -120,3 +120,26 @@ Two independent reviews additionally found that string-form or missing repositor
 citations could be skipped. The owner added explicit local-citation resolution and
 failure handling, with external URLs labeled uninspected. Both reviewers confirmed
 their findings closed; full completion and renewed real-run checks remain pending.
+
+## Bounded recovery from review capacity
+
+The subsequent real self-run at `9faf4e1` completed three independently reviewed
+SCL batches. Its fourth proposal newly mapped ten sources and changed no
+requirements or claims. All ten sources were required, but their full contents
+exceeded the review file-content budget. Both review jobs retried the same
+oversized input until exhaustion; no agent approved it, and IVL/final publication
+were not reached. The correction preflights specification-review capacity and
+returns a controller constraint to a bounded generator revision from the last
+accepted base. It preserves rejected drafts, established specification identities
+and the remaining source frontier. Missing or malformed evidence is not reclassified
+as capacity. New regression, independent-review and completion evidence remains
+required before another real readiness run.
+
+Independent review found that inferring recovery from an older FAS checkpoint
+could discard a later approved application fix. The regression reproduced that
+rollback. Recovery now carries a controller-owned accepted code/specification base
+through every SCL continuation and validates its ancestry; missing or invalid
+older metadata stops recovery without a guessed reset. Focused tests retain the
+approved fix and established IDs, preserve rejected drafts and pending paths,
+exercise two actual reviewers and IVL continuation, and retain the three-round
+limit across resume. Full completion and renewed real-run evidence remain pending.
