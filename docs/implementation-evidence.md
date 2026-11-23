@@ -481,6 +481,20 @@ code fails the missing-contract case. Existing source-case (68), context/citatio
 checks and whitespace check pass. Exact-commit independent review and completion
 remain pending.
 
+Independent security review found that explicit claim/requirement IDs bypassed
+association validation when FAS was absent. The correction must require FAS for
+identified proof contexts while preserving ID-less standalone behavior. No final
+completion run was started before this review; the guard and regressions require
+renewed exact-commit review first.
+
+The absent-FAS guard and all nine identity/context combinations are now covered;
+the expanded proof-source file passes 38 tests, and the isolated pre-guard code
+fails the new case. ID-less standalone behavior remains covered. Both real v5
+contexts still reconstruct unchanged at 476,509 characters with the required
+declaration and mapped test. All 68 source-case compatibility tests, the fast
+gate and 92 boundary/static checks pass after the guard. Exact-commit independent
+review and final completion remain pending.
+
 The final citation candidate `d22041b1b2811b6541177bea2e95baa61eca5694`
 passed independent completion: native and Linux each 1,893 passed with 53
 documented optional skips, both package gates, Ruff/Pyright, complete 291-path

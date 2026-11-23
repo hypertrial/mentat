@@ -2557,6 +2557,10 @@ class Coordinator:
                     raise ValueError("invalid mandatory source proof target")
                 required_source.add(check["path"])
                 required_source.update(case["path"] for case in check.get("counterexample_cases", []))
+            if FAS_PATH not in included and any(
+                "claim_id" in check or "requirement_id" in check for check in checks
+            ):
+                raise ValueError("mandatory source proof identity requires FAS")
             if FAS_PATH in included:
                 requirements = {record["id"]: record for record in fas["requirements"]}
                 claims = {record["id"]: record for record in fas["claims"]}

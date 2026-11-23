@@ -181,7 +181,10 @@ def test_no_fas_keeps_standalone_proof_source(proof_repo, tmp_path, monkeypatch)
     repo = proof_repo[0]
     (repo / '.mentat/fas.json').unlink()
     head = commit(repo, 'standalone source')
-    data, _, _ = context((*proof_repo[:-1], head), tmp_path, monkeypatch, 'review_final')
+    config = deepcopy(proof_repo[1])
+    config['source_checks'][0].pop('requirement_id')
+    config['source_checks'][0].pop('claim_id')
+    data, _, _ = context((*proof_repo[:-1], head), tmp_path, monkeypatch, 'review_final', config=config)
     assert data['files']['subject.py'] == (repo / 'subject.py').read_text()
     assert data['files']['bad.py'] == (repo / 'bad.py').read_text()
 
@@ -266,3 +269,18 @@ def test_combined_required_sources_over_budget_fail_closed(proof_repo, tmp_path,
     head = commit(repo, 'indivisible required sources')
     with pytest.raises(ValueError, match='capacity'):
         context((*proof_repo[:-2], head, head), tmp_path, monkeypatch, 'review_final')
+
+
+@pytest.mark.parametrize('kind', ['generate_verification', 'review_verification', 'review_final'])
+@pytest.mark.parametrize('identity', ['requirement', 'claim', 'both'])
+def test_explicit_proof_identity_requires_fas(proof_repo, tmp_path, monkeypatch, kind, identity):
+    repo, original_config, _, _, _, _, _, _ = proof_repo
+    (repo / '.mentat/fas.json').unlink()
+    head = commit(repo, 'remove specification inventory')
+    config = deepcopy(original_config)
+    if identity == 'requirement':
+        config['source_checks'][0].pop('claim_id')
+    elif identity == 'claim':
+        config['source_checks'][0].pop('requirement_id')
+    with pytest.raises(ValueError):
+        context((*proof_repo[:-1], head), tmp_path, monkeypatch, kind, config=config)
