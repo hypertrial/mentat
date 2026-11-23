@@ -617,6 +617,17 @@ class Coordinator:
     def _enqueue(self, loop: str, role: str, item: str, payload: dict) -> str:
         assert self.session_id
         snapshot = self.store.snapshot(self.session_id)
+        session = snapshot["session"]
+        if (
+            payload.get("kind") == "generate_spec"
+            and "review_base" not in payload
+            and session["head"] != session["base"]
+        ):
+            target = payload.get("target_head", session["head"])
+            if git(self.repo, "merge-base", session["head"], target) != session["head"]:
+                raise ValueError("specification target does not retain the session head")
+            if not self._has_ancestral_spec_review(target, snapshot):
+                payload = {**payload, "target_head": target, "review_base": session["base"]}
         inputs = {
             "head": snapshot["session"]["head"],
             "policy": self.config,
@@ -626,6 +637,22 @@ class Coordinator:
             "payload": payload,
         }
         return self.store.enqueue_job(self.session_id, loop, role, item, digest(inputs), payload)
+
+    def _has_ancestral_spec_review(self, target: str, snapshot: dict) -> bool:
+        """Only a validated ancestral cohort can establish initial correspondence."""
+        heads = [event["payload"].get("head") for event in snapshot["events"]
+                 if event["kind"] == "fas_reviewed"]
+        if any(not isinstance(head, str) or not head for head in heads):
+            raise ValueError("invalid specification review checkpoint")
+        ancestral = [head for head in heads
+                     if git(self.repo, "merge-base", head, target) == head]
+        if not ancestral:
+            return False
+        checkpoint = ancestral[-1]
+        composition = self._review_composition(checkpoint)
+        if composition["checkpoint"] != checkpoint:
+            raise ValueError("ancestral specification review is not validated")
+        return True
 
     def _event(self, kind: str, payload: dict) -> None:
         assert self.session_id
@@ -809,7 +836,8 @@ class Coordinator:
                     "implementer",
                     "cas.inventory",
                     {"kind": "generate_spec", "surfaces": surfaces,
-                     "accepted_spec_base": self.store.snapshot(self.session_id)["session"]["head"]},
+                     "accepted_spec_base": head,
+                     **({"target_head": head, "review_base": base} if head != base else {})},
                 )
                 for index, check in enumerate(self.config["source_checks"]):
                     self._enqueue(
@@ -3359,6 +3387,18 @@ class Coordinator:
             except (ValueError, OSError, RuntimeError, subprocess.SubprocessError):
                 valid_base = False
         retry = next_round < self.config["max_attempts"] and valid_base
+        snapshot = self.store.snapshot(self.session_id)
+        session = snapshot["session"]
+        recovery_review_base = accepted_base
+        if (
+            retry
+            and isinstance(accepted_base, str)
+            and accepted_base
+            and session["head"] != session["base"]
+            and proposal["parent"] == session["base"]
+            and not self._has_ancestral_spec_review(accepted_base, snapshot)
+        ):
+            recovery_review_base = proposal["parent"]
         required_paths = exc.paths
         if not required_paths:
             # Capacity may be exceeded before FAS source dependencies can
@@ -3377,7 +3417,7 @@ class Coordinator:
                 "established records and leave remaining surfaces as gaps."
             ),
             "rejected_head": proposal["head"],
-            "review_base": accepted_base,
+            "review_base": recovery_review_base,
             "required_paths": required_paths,
         }
         self.store.put_record(
@@ -3408,7 +3448,7 @@ class Coordinator:
                     },
                     "kind": "generate_spec",
                     "target_head": accepted_base,
-                    "review_base": accepted_base,
+                    "review_base": recovery_review_base,
                     "accepted_spec_base": accepted_base,
                     "root_item": proposal.get("root_item", job["item_id"]),
                     "round": next_round,

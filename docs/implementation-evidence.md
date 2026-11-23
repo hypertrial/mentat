@@ -333,3 +333,56 @@ contract, forged-review and incomparable-checkpoint boundaries. Two independent
 reviews accepted this scoped change. Rebase onto the PR #62 merge preserved the
 exact production and test SHA-256 values. Independent full exact-revision
 completion and renewed real workflow evidence remain pending.
+
+Lifecycle candidate `4bbc364a8f61901016f792b57fb60b08256037a6` subsequently
+passed independent completion: 1,805 passed and 53 documented optional skips on
+both native and Linux, both package checks and static analysis, and 45 protected
+checker fixtures without skips. All 226 source hashes stayed unchanged. Two
+independent reviews accepted the exact commit; PR #63's hosted check passed in
+seven seconds and merged as `cebafba1f3eabe1fdf4572ea16b06bd120dfd1c7`.
+
+## Reviewing pre-authored initial feature specifications
+
+Titanic preflight found that a feature head already containing CAS/FAS could pass
+incremental source reviews yet fail composition against the remote base, because
+the initial review omitted the pre-authored records. The first cumulative review
+now retains the remote base while generation and recovery retain the actual
+feature or approved repair checkpoint. Explicit correction bases remain intact;
+later incremental batches require a fully validated ancestral review cohort.
+Regressions cover no-op and corrected proposals, real capacity recovery, a repair
+before initial convergence, forged authority and missing sources. Combined
+development feedback was 163 passes and one invalid legacy fixture using literal
+`base`/`head` instead of Git objects. The test owner replaced those placeholders
+with real commits while retaining the consumed-once assertions; six affected
+cases then passed. Independent exact-revision completion remains pending.
+
+Frozen `dab7e5805be64416246a1868dab19e2f1e8d1deb` failed the static type
+gate: Pyright could not narrow an optional recovery checkpoint through the
+separate validity booleans. This was the sole failure in both full suites
+(1,809 passed and 53 documented optional skips on each). Both package checks
+and all 45 protected fixtures passed; source hashes remained unchanged. The
+debugger added an explicit nonempty-string guard, retaining the existing
+inconclusive path for missing/invalid checkpoints. Full Ruff, the configured
+Pyright test and ten targeted capacity/initial-review tests pass after the fix.
+Renewed exact-revision completion remains required before publication.
+
+## Current self-run acceptance gap
+
+The renewed real self-run from `cebafba` completed SCL, including substantive
+deadline/exception-cleanup corrections accepted by fresh reviewer pairs. The
+lockfile remained an explicit gap. Candidate
+`ee6679563395e964377992c2f540de56ac9b1b44` passed complete inventory validation,
+1,805 native tests with 53 documented skips, packaging and all 45 protected
+fixtures without skips. Both clamp checks represented one conditional obligation,
+with satisfiable preconditions and unsatisfiable violation queries.
+
+Both independent IVL reviewers deferred because acceptance requirement
+`2bcfa241-162e-5b32-8b37-79deae3acd37` also requires a faulty clamp candidate
+to produce a replayable counterexample. The existing mutant test obtains an
+actual solver counterexample but does not replay it; the replay unit test uses
+a fabricated identity witness. The current evidence does not establish their
+composition. Session `cd44c20820d94478a6a0614044afdd4a` ended blocked after
+48 jobs, before final review/publication. This is not operational readiness.
+A controller-owned, candidate-bound counterexample case with trusted isolated
+replay and complete reviewer evidence is required. Prior fixture results remain
+historical; no application-wide or translator-correctness theorem is claimed.

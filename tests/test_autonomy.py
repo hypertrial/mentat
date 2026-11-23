@@ -599,7 +599,11 @@ def test_feedback_is_consumed_once(repo, tmp_path):
     config = default_config(repo)
     coordinator = Coordinator(repo, store, Agent(), Worker(), GitHub())
     coordinator.config = config
-    coordinator.session_id = store.new_session(str(repo), "base", "head", config, 1, 10)
+    base = git(repo, "rev-parse", "HEAD")
+    (repo / "src.py").write_text("def value(): return 2\n")
+    git(repo, "commit", "-qam", "feature source")
+    head = git(repo, "rev-parse", "HEAD")
+    coordinator.session_id = store.new_session(str(repo), base, head, config, 1, 10)
     store.append_event(
         coordinator.session_id, "human_feedback", {"message": "Review this requirement"}
     )
@@ -608,6 +612,8 @@ def test_feedback_is_consumed_once(repo, tmp_path):
     snapshot = store.snapshot(coordinator.session_id)
     assert sum(e["kind"] == "feedback_consumed" for e in snapshot["events"]) == 1
     assert len(snapshot["jobs"]) == 1
+    assert snapshot["jobs"][0]["payload"]["target_head"] == head
+    assert snapshot["jobs"][0]["payload"]["review_base"] == base
 
 
 def test_changed_external_authority_invalidates_resume(repo, tmp_path):
@@ -3941,3 +3947,227 @@ def test_repair_checkpoint_validates_reviewed_history_and_witness_context(repo, 
         outcome = coordinator._execute(job, time.time() + 60)
         assert outcome['status'] == 'succeeded' and outcome.get('repair_checkpoint_gap')
         assert not github.published and not github.merged
+
+
+@pytest.mark.parametrize('correction', [False, True])
+def test_initial_feature_specification_is_reviewed_from_remote_base(repo, tmp_path, correction):
+    base = git(repo, 'rev-parse', 'HEAD')
+    (repo / 'src.py').write_text('def value(): return 1  # feature source\n')
+    requirements = [{'id': str(uuid.uuid4()), 'area': area, 'origin': 'observed',
+                     'statement': 'Observed feature behavior', 'citations': ['src.py'],
+                     'spec_path': 'openspec/specs/application/spec.md'} for area in AREAS]
+    spec = repo / 'openspec/specs/application/spec.md'
+    spec.parent.mkdir(parents=True)
+    spec.write_text('\n'.join(row['id'] for row in requirements) + '\nManual feature specification\n')
+    claim = {'id': str(uuid.uuid4()), 'requirement_ids': [requirements[0]['id']],
+             'statement': 'value returns one', 'assumptions': [], 'status': 'unattempted',
+             'formal_contract': {'path': 'src.py', 'function': 'value', 'inputs': {},
+                                 'requires': 'True', 'ensures': 'result == 1'}}
+    tracked = ['src.py', '.mentat/workspace.json', '.mentat/fas.json',
+               'openspec/specs/application/spec.md']
+    surfaces = [{'path': path, 'status': 'mapped' if path == 'src.py' else 'unexamined',
+                 'requirement_ids': [requirements[0]['id']] if path == 'src.py' else []}
+                for path in tracked]
+    (repo / '.mentat/fas.json').write_text(json.dumps({'schema_version': 1,
+        'requirements': requirements, 'claims': [claim], 'surfaces': surfaces}))
+    git(repo, 'add', '.')
+    git(repo, 'commit', '-qm', 'manual feature specification')
+    feature = git(repo, 'rev-parse', 'HEAD')
+    assert git(repo, 'ls-tree', '-r', '--name-only', base, '--', '.mentat/fas.json') == ''
+    observed = []
+
+    class FeatureAgent(Agent):
+        def run(self, repo, job, output, *, timeout_seconds):
+            payload = job['payload']
+            kind = payload['kind']
+            context = json.loads(payload['prompt'].split('SOURCE_CONTEXT_JSON:\n', 1)[1])
+            observed.append((kind, payload, context, git(repo, 'rev-parse', 'HEAD')))
+            if kind == 'generate_spec' and payload.get('round') == 1:
+                path = repo / 'openspec/specs/application/spec.md'
+                path.write_text(path.read_text() + 'Reviewed correction\n')
+            if kind in {'generate_spec', 'generate_verification'}:
+                return {'status': 'succeeded', 'session_id': job['id'], 'result': {
+                    'decision': 'accept', 'summary': 'feature specification', 'findings': [],
+                    'verification_requests': []}}
+            result = super().run(repo, job, output, timeout_seconds=timeout_seconds)
+            if kind == 'review_spec' and correction and not payload['proposal'].get('round'):
+                result['result']['decision'] = 'revise'
+                result['result']['findings'] = [{'summary': 'Clarify manual specification'}]
+            return result
+
+    snapshot, worker, github = run(repo, tmp_path, agent=FeatureAgent())
+    generations = [entry for entry in observed if entry[0] == 'generate_spec']
+    assert len(generations) == (2 if correction else 1), snapshot
+    assert generations[0][3] == feature
+    assert generations[0][1]['accepted_spec_base'] == feature
+    if correction:
+        assert generations[1][1]['review_base'] == base
+        assert generations[1][3] == feature
+    reviews = [entry for entry in observed if entry[0] == 'review_spec']
+    assert len(reviews) == (4 if correction else 2)
+    for _, payload, context, checkout in reviews:
+        assert payload['proposal']['parent'] == context['proposal_base'] == base
+        assert payload['proposal']['observed_source_revision'] == feature
+        assert context['proposal_head'] == checkout
+        assert '.mentat/fas.json' in context['proposal_diff']
+        assert 'Manual feature specification' in context['proposal_diff']
+        assert '+def value(): return 1  # feature source' in context['proposal_diff']
+        assert context['files']['src.py'] == (repo / 'src.py').read_text()
+        assert json.loads(context['files']['.mentat/fas.json'])['requirements'] == requirements
+    assert github.published, snapshot
+    for kind in ('review_verification', 'review_final'):
+        pair = [(payload, context) for stage, payload, context, _ in observed if stage == kind]
+        assert len(pair) == 2
+        for payload, context in pair:
+            receipt = context['reviewed_specification']
+            assert set(receipt['covered_records']['requirements']) == {r['id'] for r in requirements}
+            assert claim['id'] in receipt['covered_records']['claims']
+            assert 'src.py' in receipt['source_blobs_sha256']
+            assert 'not proof' in receipt['meaning']
+            assert payload['check_summary']['head'] == context['revision'] == github.published[0]
+            assert payload['check_summary']['source']
+    assert worker.revisions and all(revision == github.published[0] for revision in worker.revisions)
+
+    # Later batches must use their reviewed incremental checkpoint, not the
+    # remote base, and a forged subsequent receipt must never authorize them.
+    from mentat.autonomy import current_tool_identity
+    store = Store(tmp_path / 'state/state.db')
+    coordinator = Coordinator(repo, store, Agent(), Worker(), GitHub())
+    coordinator.session_id = snapshot['session']['id']
+    coordinator.config = default_config(repo)
+    coordinator.tool_identity = current_tool_identity()
+    coordinator.authority_digest = next(e['payload']['digest'] for e in snapshot['events']
+                                        if e['kind'] == 'authority_pinned')
+    checkpoint = github.published[0]
+    coordinator._enqueue('scl', 'implementer', 'later.batch', {'kind': 'generate_spec',
+        'target_head': checkpoint, 'accepted_spec_base': checkpoint})
+    later = store.snapshot(coordinator.session_id)['jobs'][-1]['payload']
+    assert later['target_head'] == later['accepted_spec_base'] == checkpoint
+    assert 'review_base' not in later
+    store.append_event(coordinator.session_id, 'fas_reviewed',
+                       {'head': checkpoint, 'decision_ids': ['forged']})
+    with pytest.raises(ValueError):
+        coordinator._enqueue('scl', 'implementer', 'forged.batch', {'kind': 'generate_spec',
+            'target_head': checkpoint, 'accepted_spec_base': checkpoint})
+
+
+def test_initial_feature_review_capacity_retry_keeps_feature_checkpoint_and_remote_base(repo, tmp_path):
+    source = repo / 'src.py'
+    source.write_text('def value(): return 1\n# ' + 'x' * 200_000 + '\n')
+    git(repo, 'commit', '-qam', 'large existing source')
+    base = git(repo, 'rev-parse', 'HEAD')
+    git(repo, 'update-ref', 'refs/remotes/origin/main', base)
+    requirements = [{'id': str(uuid.uuid4()), 'area': area, 'origin': 'observed',
+                     'statement': 'Existing manual requirement', 'citations': ['src.py'],
+                     'spec_path': 'openspec/specs/application/spec.md'} for area in AREAS]
+    spec = repo / 'openspec/specs/application/spec.md'
+    spec.parent.mkdir(parents=True)
+    spec.write_text('\n'.join(r['id'] for r in requirements) + '\nmanual feature intent\n')
+    paths = ['src.py', '.mentat/workspace.json', '.mentat/fas.json',
+             'openspec/specs/application/spec.md']
+    fas = {'schema_version': 1, 'requirements': requirements, 'claims': [], 'surfaces': [
+        {'path': path, 'status': 'mapped' if path == 'src.py' else 'unexamined',
+         'requirement_ids': [requirements[0]['id']] if path == 'src.py' else []}
+        for path in paths]}
+    (repo / '.mentat/fas.json').write_text(json.dumps(fas))
+    git(repo, 'add', '.')
+    git(repo, 'commit', '-qm', 'manual feature specification')
+    feature = git(repo, 'rev-parse', 'HEAD')
+    calls = []
+
+    class CapacityAgent(Agent):
+        def run(self, repo, job, output, *, timeout_seconds):
+            payload = job['payload']
+            context = json.loads(payload['prompt'].split('SOURCE_CONTEXT_JSON:\n', 1)[1])
+            calls.append((payload['kind'], payload, context, git(repo, 'rev-parse', 'HEAD')))
+            if payload['kind'] == 'generate_spec' and not payload.get('round') and not payload.get('chunk'):
+                path = repo / 'openspec/specs/application/spec.md'
+                path.write_text(path.read_text() + '\n' + 's' * 170_000)
+            if payload['kind'] in {'generate_spec', 'generate_verification'}:
+                return {'status': 'succeeded', 'session_id': job['id'], 'result': {
+                    'decision': 'accept', 'summary': 'feature specification', 'findings': [],
+                    'verification_requests': []}}
+            return super().run(repo, job, output, timeout_seconds=timeout_seconds)
+
+    snapshot, _, github = run(repo, tmp_path, agent=CapacityAgent())
+    generations = [entry for entry in calls if entry[0] == 'generate_spec']
+    assert len(generations) >= 2, snapshot
+    retry = generations[1]
+    assert retry[1]['round'] == 1
+    assert retry[1]['target_head'] == retry[1]['accepted_spec_base'] == retry[3] == feature
+    assert retry[1]['review_base'] == base
+    assert json.loads(retry[2]['files']['.mentat/fas.json']) == fas
+    assert retry[2]['files']['src.py'] == source.read_text()
+    reviews = [entry for entry in calls if entry[0] == 'review_spec'
+               and entry[1]['proposal'].get('round') == 1]
+    assert len(reviews) == 2
+    for _, payload, context, _ in reviews:
+        assert payload['proposal']['parent'] == context['proposal_base'] == base
+        assert payload['proposal']['head'] == feature
+        assert 'manual feature intent' in context['proposal_diff']
+        assert context['files']['src.py'] == source.read_text()
+    assert github.published, snapshot
+
+
+def test_repair_spec_queued_before_initial_review_keeps_remote_base_through_capacity(repo, tmp_path):
+    from mentat.autonomy import ReviewContextCapacity
+
+    base = git(repo, 'rev-parse', 'HEAD')
+    (repo / 'src.py').write_text('def value(): return 1  # feature\n')
+    git(repo, 'commit', '-qam', 'feature head')
+    feature = git(repo, 'rev-parse', 'HEAD')
+    (repo / 'src.py').write_text('def value(): return 1  # approved repair\n')
+    git(repo, 'commit', '-qam', 'repair head')
+    repair = git(repo, 'rev-parse', 'HEAD')
+    store = Store(tmp_path / 'state/state.db')
+    config = default_config(repo)
+    coordinator = Coordinator(repo, store, Agent(), Worker(), GitHub())
+    coordinator.config = config
+    coordinator.session_id = store.new_session(str(repo), base, feature, config, 1, 100)
+    coordinator._enqueue('scl', 'implementer', 'repair.spec', {'kind': 'generate_spec',
+        'target_head': repair, 'accepted_spec_base': repair, 'repair': {'source': 'repair'}})
+    queued = store.snapshot(coordinator.session_id)['jobs'][0]
+    assert queued['payload']['target_head'] == queued['payload']['accepted_spec_base'] == repair
+    assert queued['payload']['review_base'] == base
+    coordinator._handle_spec_capacity(queued, {'head': repair, 'parent': base,
+        'accepted_spec_base': repair, 'round': 0, 'author_id': 'author'},
+        ReviewContextCapacity('review capacity', {'src.py'}))
+    retry = store.snapshot(coordinator.session_id)['jobs'][-1]['payload']
+    assert retry['round'] == 1
+    assert retry['target_head'] == retry['accepted_spec_base'] == repair
+    assert retry['review_base'] == base
+    assert retry['feedback']['rejected_head'] == repair
+
+
+def test_initial_feature_missing_citation_is_not_approved(repo, tmp_path):
+    base = git(repo, 'rev-parse', 'HEAD')
+    requirements = [{'id': str(uuid.uuid4()), 'area': area, 'origin': 'observed',
+                     'statement': 'Manually asserted', 'citations': ['missing.py'],
+                     'spec_path': 'openspec/specs/application/spec.md'} for area in AREAS]
+    spec = repo / 'openspec/specs/application/spec.md'
+    spec.parent.mkdir(parents=True)
+    spec.write_text('\n'.join(item['id'] for item in requirements))
+    paths = ['src.py', '.mentat/workspace.json', '.mentat/fas.json',
+             'openspec/specs/application/spec.md']
+    (repo / '.mentat/fas.json').write_text(json.dumps({'schema_version': 1,
+        'requirements': requirements, 'claims': [], 'surfaces': [
+            {'path': path, 'status': 'unexamined', 'requirement_ids': []} for path in paths]}))
+    git(repo, 'add', '.')
+    git(repo, 'commit', '-qm', 'feature cites missing source')
+    feature = git(repo, 'rev-parse', 'HEAD')
+
+    class NoOpAgent(Agent):
+        def run(self, repo, job, output, *, timeout_seconds):
+            return {'status': 'succeeded', 'session_id': job['id'], 'result': {
+                'decision': 'accept', 'summary': 'unchanged', 'findings': [],
+                'verification_requests': []}}
+
+    snapshot, _, github = run(repo, tmp_path, agent=NoOpAgent())
+    generation = next(j for j in snapshot['jobs'] if j['payload']['kind'] == 'generate_spec')
+    assert generation['payload']['target_head'] == feature
+    assert generation['payload']['review_base'] == base
+    assert generation['attempt'] == 3 and generation['outcome']['exhausted']
+    assert not [j for j in snapshot['jobs'] if j['payload']['kind'] == 'review_spec']
+    assert not [e for e in snapshot['events'] if e['kind'] == 'fas_reviewed']
+    assert not github.published and not github.merged
+    assert any('missing.py' in finding.get('summary', '') for finding in snapshot['findings'])
