@@ -1479,7 +1479,7 @@ class Coordinator:
             git(self.repo, "merge-base", source_revision, original) != source_revision
             or git(self.repo, "merge-base", original, checkpoint) != original
             or any(
-            git(self.repo, "merge-base", head, checkpoint) != head for head in heads
+                git(self.repo, "merge-base", head, checkpoint) != head for head in heads
             )
         ):
             raise ValueError("accepted specification checkpoints are incompatible with repair")
@@ -1489,7 +1489,10 @@ class Coordinator:
         if checkpoint == source_revision:
             return original
 
-        changed = git(self.repo, "diff", "--name-only", "--no-renames", source_revision, checkpoint).splitlines()
+        changed = _git_paths(
+            self.repo, "diff", "--name-only", "-z", "--no-renames", "--no-ext-diff",
+            "--no-textconv", "--ignore-submodules=none", source_revision, checkpoint,
+        )
         if any(path != FAS_PATH for path in changed):
             # CAS documents are semantic context, and all other paths include
             # source, callers, tests, configuration, and their Git modes.

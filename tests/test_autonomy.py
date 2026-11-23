@@ -193,6 +193,7 @@ def test_inventory_rejects_missing_surface(repo, tmp_path):
         (False, "accept"),
         (True, "accept"),
         (True, "chained_refresh"),
+        (True, "chained_retry"),
         (True, "changed_requirement"),
         (True, "changed_cas"),
         (True, "ancestral_refresh"),
@@ -203,7 +204,7 @@ def test_inventory_rejects_missing_surface(repo, tmp_path):
     ],
 )
 def test_counterexample_requires_protected_reproduction(repo, tmp_path, protected, domain, monkeypatch):
-    checkpoint_domains = {"chained_refresh", "ancestral_refresh", "changed_requirement", "changed_cas"}
+    checkpoint_domains = {"chained_refresh", "chained_retry", "ancestral_refresh", "changed_requirement", "changed_cas"}
     requirements = [
         {
             "id": str(uuid.uuid4()),
@@ -379,7 +380,7 @@ def test_counterexample_requires_protected_reproduction(repo, tmp_path, protecte
             result = super().run(repo, job, output, timeout_seconds=timeout_seconds)
             if (
                 job["payload"]["kind"] == "investigate_defect"
-                and domain in {"repair_retry", "verification_repair_retry"}
+                and domain in {"repair_retry", "chained_retry", "verification_repair_retry"}
                 and job["payload"].get("round", 0) == 0
             ):
                 result["result"]["verification_requests"] = [
@@ -395,7 +396,7 @@ def test_counterexample_requires_protected_reproduction(repo, tmp_path, protecte
         def run(self, repo, rev, argv, *, timeout_seconds):
             result = super().run(repo, rev, argv, timeout_seconds=timeout_seconds)
             if argv == ["bad-repair-command"] and (
-                domain == "repair_retry" or self.commands.count(argv) == 2
+                domain in {"repair_retry", "chained_retry"} or self.commands.count(argv) == 2
             ):
                 result.update(status="failed", returncode=127, stderr="not found")
             return result
@@ -469,17 +470,17 @@ def test_counterexample_requires_protected_reproduction(repo, tmp_path, protecte
         assert github.published and worker.revisions[-1] == github.published[0], snapshot[
             "findings"
         ]
-        if domain not in {"verification_repair_retry", "chained_refresh", "ancestral_refresh"}:
+        if domain not in {"verification_repair_retry", "chained_refresh", "chained_retry", "ancestral_refresh"}:
             assert len(worker.revisions) == (5 if domain == "repair_retry" else 3)
             assert worker.commands.count(["check"]) == (3 if domain == "repair_retry" else 2)
             assert worker.commands.count(["sidecar-check"]) == 1
-        if domain in {"repair_retry", "verification_repair_retry"}:
+        if domain in {"repair_retry", "chained_retry", "verification_repair_retry"}:
             assert worker.commands.count(["bad-repair-command"]) == (
-                1 if domain == "repair_retry" else 2
+                1 if domain in {"repair_retry", "chained_retry"} else 2
             )
             fix_jobs = [j for j in snapshot["jobs"] if j["payload"]["kind"] == "investigate_defect"]
             assert len(fix_jobs) == 2 and len({j["item_id"] for j in fix_jobs}) == 1
-            assert len(fix_review_prompts) == (2 if domain == "repair_retry" else 4)
+            assert len(fix_review_prompts) == (2 if domain in {"repair_retry", "chained_retry"} else 4)
             for prompt in fix_review_prompts[-2:]:
                 context = json.loads(prompt.split("SOURCE_CONTEXT_JSON:\n", 1)[1])
                 assert "return x - 1" in context["proposal_diff"]
@@ -507,6 +508,24 @@ def test_counterexample_requires_protected_reproduction(repo, tmp_path, protecte
             domain_review = next(j for j in snapshot["jobs"] if j["payload"]["kind"] == "adjudicate_domain")
             assert domain_review["payload"]["evidence"] == fix["payload"]["evidence"]
             assert domain_review["payload"]["reproduction"] == fix["payload"]["reproduction"]
+            entailment = next(event["payload"] for event in snapshot["events"]
+                              if event["kind"] == "defect_adjudicated")
+            domain_event = next(event["payload"] for event in snapshot["events"]
+                                if event["kind"] == "domain_adjudicated")
+            assert entailment["reviewer_id"] == fix["payload"]["adjudicator_id"]
+            assert entailment["evidence_id"] == fix["payload"]["evidence"]["id"]
+            assert domain_event["reviewer_id"] == domain_review["outcome"]["author_id"]
+            assert domain_event["defect"]["evidence_id"] == entailment["evidence_id"]
+            assert domain_event["reviewer_id"] != entailment["reviewer_id"]
+            if domain == "chained_retry":
+                fix_jobs = [j for j in snapshot["jobs"] if j["payload"]["kind"] == "investigate_defect"]
+                assert len(fix_jobs) == len(repair_inputs) == 2
+                first_head = fix_jobs[0]["outcome"]["head"]
+                assert repair_inputs[1][1] == first_head
+                assert git(repo, "merge-base", first_head, fix_jobs[1]["outcome"]["head"]) == first_head
+                assert all(payload["evidence"] == fix["payload"]["evidence"] and
+                           payload["reproduction"] == fix["payload"]["reproduction"]
+                           for payload, _ in repair_inputs)
             assert len(spec_review_contexts) >= 4
             fresh = [(payload, context) for payload, context in spec_review_contexts
                      if "return x + 1" in context["files"].get("src.py", "")]
@@ -515,9 +534,11 @@ def test_counterexample_requires_protected_reproduction(repo, tmp_path, protecte
                 assert payload["proposal"]["head"] == context["revision"]
                 assert payload["correspondence_refresh"]["source_paths"] == ["src.py"]
                 assert payload["correspondence_refresh"]["checkpoint"] != context["revision"]
-                assert context["files"]["src.py"] == "def f(x):\n    return x + 1\n"
+                fixed = ("def f(x):\n    return x + 1  # corrected\n" if domain == "chained_retry"
+                         else "def f(x):\n    return x + 1\n")
+                assert context["files"]["src.py"] == fixed
             assert len(final_contexts) == 2
-            expected = hashlib.sha256(b"def f(x):\n    return x + 1\n").hexdigest()
+            expected = hashlib.sha256(fixed.encode()).hexdigest()
             for _, context in final_contexts:
                 assert context["reviewed_specification"]["source_blobs_sha256"]["src.py"] == expected
         assert any(
@@ -3810,3 +3831,113 @@ def test_worktree_registration_runtime_error_is_bounded_and_preserves_evidence(r
     for branch, path in registered:
         assert Path(path).is_dir()
         assert git(repo, 'rev-parse', '--verify', branch)
+
+
+@pytest.mark.parametrize('drift', [
+    'unchanged', 'application', 'caller', 'unicode_caller', 'mode', 'cas', 'requirement',
+    'claim', 'contract', 'forged', 'incomparable',
+])
+def test_repair_checkpoint_validates_reviewed_history_and_witness_context(repo, tmp_path, drift):
+    from copy import deepcopy
+
+    from mentat.autonomy import current_tool_identity
+
+    requirements, paths = _review_capacity_repo(repo)
+    caller = repo / 'caller.py'
+    caller.write_text('from src import value\n')
+    unicode_caller = repo / 'é caller.py'
+    unicode_caller.write_text('from src import value\n')
+    fas_path = repo / '.mentat/fas.json'
+    fas = json.loads(fas_path.read_text())
+    fas['surfaces'].extend([{'path': 'caller.py', 'status': 'gap', 'requirement_ids': []},
+                            {'path': 'é caller.py', 'status': 'gap', 'requirement_ids': []}])
+    claim = {'id': str(uuid.uuid4()), 'requirement_ids': [requirements[0]['id']],
+             'statement': 'Value is one', 'assumptions': ['integer result'],
+             'status': 'unattempted', 'formal_contract': {'path': 'src.py',
+             'function': 'value', 'inputs': {}, 'requires': 'True', 'ensures': 'result == 1'}}
+    fas['claims'].append(claim)
+    fas_path.write_text(json.dumps(fas))
+    git(repo, 'add', '.')
+    git(repo, 'commit', '-qm', 'original witness context')
+    original = git(repo, 'rev-parse', 'HEAD')
+    if drift == 'application':
+        (repo / 'src.py').write_text('def value(): return 2\n')
+    elif drift == 'caller':
+        caller.write_text('from src import value\nprint(value())\n')
+    elif drift == 'unicode_caller':
+        unicode_caller.write_text('from src import value\nprint(value())\n')
+    elif drift == 'mode':
+        caller.chmod(0o755)
+    elif drift == 'cas':
+        spec = repo / 'openspec/specs/application/spec.md'
+        spec.write_text(spec.read_text() + '\nAdditional semantic qualification\n')
+    elif drift == 'requirement':
+        fas['requirements'][0]['statement'] = 'Different adjudicated behavior'
+        fas_path.write_text(json.dumps(fas))
+    elif drift == 'claim':
+        claim['assumptions'] = ['different domain']
+        fas_path.write_text(json.dumps(fas))
+    elif drift == 'contract':
+        claim['formal_contract']['ensures'] = 'result == 2'
+        fas_path.write_text(json.dumps(fas))
+    if drift not in {'unchanged', 'forged', 'incomparable'}:
+        git(repo, 'add', '.')
+        git(repo, 'commit', '-qm', 'context changed before reviewed checkpoint')
+    base = git(repo, 'rev-parse', 'HEAD')
+    git(repo, 'update-ref', 'refs/remotes/origin/main', base)
+
+    class MappingAgent(Agent):
+        def run(self, repo, job, output, *, timeout_seconds):
+            kind = job['payload']['kind']
+            if kind == 'generate_spec':
+                path = repo / '.mentat/fas.json'
+                data = json.loads(path.read_text())
+                next(row for row in data['surfaces'] if row['path'] == paths[0]).update(
+                    status='mapped', requirement_ids=[requirements[0]['id']])
+                path.write_text(json.dumps(data))
+            if kind in {'generate_spec', 'generate_verification'}:
+                return {'status': 'succeeded', 'session_id': job['id'], 'result': {
+                    'decision': 'accept' if kind == 'generate_spec' else 'defer',
+                    'summary': 'bounded test', 'findings': [], 'verification_requests': []}}
+            return super().run(repo, job, output, timeout_seconds=timeout_seconds)
+
+    snapshot, _, github = run(repo, tmp_path, agent=MappingAgent())
+    assert not github.published
+    event = next(e for e in snapshot['events'] if e['kind'] == 'fas_reviewed')
+    checkpoint = event['payload']['head']
+    assert checkpoint != base
+    assert len(event['payload']['decision_ids']) == 2
+    store = Store(tmp_path / 'state/state.db')
+    coordinator = Coordinator(repo, store, Agent(), Worker(), github)
+    coordinator.session_id = snapshot['session']['id']
+    coordinator.tool_identity = current_tool_identity()
+    coordinator.authority_digest = next(e['payload']['digest'] for e in snapshot['events']
+                                        if e['kind'] == 'authority_pinned')
+    job = {'id': 'blocked-repair', 'attempt': 1, 'loop': 'iil', 'item_id': 'blocked-repair',
+           'payload': {'kind': 'investigate_defect', 'target_head': original,
+           'requirement': requirements[0], 'evidence': {'source_identity': {'revision': original}}}}
+    if drift in {'forged', 'incomparable'}:
+        altered = deepcopy(snapshot)
+        accepted = next(e for e in altered['events'] if e['kind'] == 'fas_reviewed')
+        if drift == 'forged':
+            accepted['payload']['decision_ids'][0] = 'forged'
+        else:
+            git(repo, 'checkout', '-q', '--detach', original)
+            caller.write_text('independent branch\n')
+            git(repo, 'commit', '-qam', 'incomparable history')
+            accepted['payload']['head'] = git(repo, 'rev-parse', 'HEAD')
+            git(repo, 'checkout', '-q', '--detach', base)
+        class AlteredSnapshot:
+            def snapshot(self, session_id):
+                return altered
+        coordinator.store = AlteredSnapshot()
+    if drift == 'unchanged':
+        assert coordinator._repair_checkpoint(job, original) == checkpoint
+    else:
+        import time
+
+        with pytest.raises(ValueError):
+            coordinator._repair_checkpoint(job, original)
+        outcome = coordinator._execute(job, time.time() + 60)
+        assert outcome['status'] == 'succeeded' and outcome.get('repair_checkpoint_gap')
+        assert not github.published and not github.merged
