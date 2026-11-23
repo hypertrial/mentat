@@ -107,6 +107,22 @@ When work is stable, deferred, cancelled, or out of budget, the controller check
 
 ## Direct Python source evidence
 
+Configured source checks can declare `counterexample_cases` as a bounded list of
+`{path, function}` objects. Each committed negative-control fixture uses the
+positive check's inputs, precondition and postcondition. The controller requires
+an actual solver counterexample, binds its exact source and typed witness, and
+replays it with the trusted harness in the isolated worker. Case results remain
+separate from positive claim proofs and application-defect handling. Generators
+see the pending plan; acceptance reviewers receive the actual current results.
+
+New local policies use version 2 and pin the ordered configured source checks,
+including their case controls and requirement links. Existing version 1 policies
+continue for configurations without cases. To enable cases, initialize explicitly
+with a new `--state` directory; the controller preserves older policies and
+session records. Add and commit the reviewed descriptors and fixtures before
+running the new session. Recognized Mentat repositories require the clamp proof
+and its faulty-clamp control at new policy initialization.
+
 The first backend parses committed source without importing or executing it. It supports a small typed pure subset: exact integer/Boolean inputs, assignments, arithmetic addition/subtraction, branching, comparisons, returns, and restricted literal string outputs. Calls, heap effects, loops, dynamic dispatch, floating point, and other unsupported constructs produce incomplete evidence.
 
 ```sh

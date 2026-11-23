@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from . import gitio, process
-from .autonomy_policy import check_policy, load_policy_path, minimum_gates
+from .autonomy_policy import check_policy, load_policy_path, minimum_gates, minimum_source_checks
 from .autonomy_runtime import git
 from .autonomy_state import Store, record_digest
 from .project import safe_relative_path
@@ -94,10 +94,58 @@ def default_config(repo: Path) -> dict:
         "remote": "origin",
         "local_checks": local,
         "worker_checks": worker,
-        "source_checks": [],
+        "source_checks": minimum_source_checks(repo),
         "worker": "mentat-autonomy",
         "scope": "all first-party application surfaces; trust boundaries and gaps remain explicit",
     }
+
+
+def _source_timeout(configured: object, remaining: float) -> int:
+    if type(configured) is not int or not 1 <= configured <= 30000:
+        raise ValueError("invalid source timeout")
+    return max(1, min(configured, int(remaining * 1000)))
+
+
+def validate_source_checks(checks: object) -> None:
+    if not isinstance(checks, list) or len(checks) > 128:
+        raise ValueError("invalid source checks")
+    total = 0
+    for check in checks:
+        if not isinstance(check, dict) or not {"path", "function", "inputs", "requires", "ensures"} <= set(check) or set(check) - {"path", "function", "inputs", "requires", "ensures", "claim_id", "requirement_id", "counterexample_cases", "timeout_ms"}:
+            raise ValueError("invalid source check")
+        if not isinstance(check["path"], str):
+            raise ValueError("invalid source path")
+        safe_relative_path(check["path"])
+        if not isinstance(check["function"], str) or not check["function"].isidentifier():
+            raise ValueError("invalid source function")
+        if not isinstance(check["inputs"], dict) or any(not isinstance(k, str) or not k.isidentifier() or v not in ("int", "bool") for k, v in check["inputs"].items()):
+            raise ValueError("invalid source inputs")
+        if any(not isinstance(check[k], str) or not check[k] or len(check[k]) > 4096 for k in ("requires", "ensures")):
+            raise ValueError("invalid source predicates")
+        if any(k in check and (not isinstance(check[k], str) or not check[k]) for k in ("claim_id", "requirement_id")):
+            raise ValueError("invalid source identity")
+        if "timeout_ms" in check and (type(check["timeout_ms"]) is not int or not 1 <= check["timeout_ms"] <= 30000):
+            raise ValueError("invalid source timeout")
+        identity = (check["path"], check["function"])
+        cases = check.get("counterexample_cases", [])
+        if not isinstance(cases, list) or len(cases) > 8:
+            raise ValueError("invalid counterexample cases")
+        total += len(cases)
+        case_seen = set()
+        for case in cases:
+            if not isinstance(case, dict) or set(case) != {"path", "function"}:
+                raise ValueError("invalid counterexample case")
+            if not isinstance(case["path"], str):
+                raise ValueError("invalid counterexample path")
+            safe_relative_path(case["path"])
+            if not isinstance(case["function"], str) or not case["function"].isidentifier():
+                raise ValueError("invalid counterexample function")
+            key = (case["path"], case["function"])
+            if key in case_seen or key == identity:
+                raise ValueError("duplicate counterexample case")
+            case_seen.add(key)
+    if total > 128:
+        raise ValueError("too many counterexample cases")
 
 
 def validate_config(value: Any) -> dict:
@@ -128,11 +176,10 @@ def validate_config(value: Any) -> dict:
                 or any(not isinstance(x, str) or len(x) > 4096 or "\0" in x for x in argv)
             ):
                 raise ValueError("checks must be argument arrays")
-    if not isinstance(value["source_checks"], list) or len(value["source_checks"]) > 128:
-        raise ValueError("invalid source checks")
+    validate_source_checks(value["source_checks"])
     if not isinstance(value["scope"], str) or not value["scope"].strip():
         raise ValueError("a reviewed scope is required")
-    return value
+    return copy.deepcopy(value)
 
 
 def initialize(repo: Path) -> dict:
@@ -421,7 +468,7 @@ def project_snapshot(snapshot: dict, *, identity: dict | None = None) -> dict:
             if ev.get("contract_origin") != "reviewed-fas" and not any(
                 isinstance(check, dict)
                 and check.get("claim_id") == claim["id"]
-                and {k: v for k, v in check.items() if k not in {"claim_id", "requirement_id"}}
+                and {k: v for k, v in check.items() if k not in {"claim_id", "requirement_id", "counterexample_cases", "timeout_ms"}}
                 == contract
                 for check in config_checks
             ):
@@ -1008,6 +1055,76 @@ class Coordinator:
                 plan.append(argv)
         return plan
 
+    def _source_cases(self, head: str, deadline: float) -> list[dict]:
+        from .source_verify import verify_source
+
+        source_cases: list[dict] = []
+        for check in self.config["source_checks"]:
+            cases = check.get("counterexample_cases", [])
+            source_check = check
+            for case in cases:
+                contract = {k: source_check[k] for k in ("inputs", "requires", "ensures")}
+                remaining = deadline - self.clock()
+                if self.stop.is_set() or remaining <= 0:
+                    pending = {"status": "incomplete", "reason": "session ended",
+                               "source_identity": {"revision": head, **case}, "contract": contract}
+                    pending["id"] = digest({"head": head, "case": case, "contract": contract, "evidence": pending})
+                    source_cases.append({"case": case, "evidence": pending,
+                                         "reproduction": {"status": "incomplete", "reason": "session ended"},
+                                         "status": "incomplete",
+                                         "scope": "Direct selected-function replay; module binding and callers are outside scope."})
+                    continue
+                timeout_ms = _source_timeout(check.get("timeout_ms", 5000), remaining)
+                negative = verify_source(self.repo, head, **case, **contract, timeout_ms=timeout_ms)
+                negative["id"] = digest({"head": head, "case": case, "contract": contract, "evidence": negative})
+                identity = negative.get("source_identity", {})
+                witness = negative.get("counterexample")
+                try:
+                    raw = gitio.read_file(self.repo, head, case["path"])
+                    source_hash = hashlib.sha256(raw).hexdigest()
+                    blob = b"blob " + str(len(raw)).encode() + b"\0" + raw
+                    blob_oid = hashlib.sha256(blob).hexdigest() if len(head) == 64 else hashlib.sha1(blob).hexdigest()
+                except (OSError, ValueError, RuntimeError, TimeoutError, subprocess.SubprocessError):
+                    source_hash = blob_oid = ""
+                valid = (
+                    negative.get("status") == "counterexample"
+                    and negative.get("method") == "source-proof"
+                    and negative.get("precondition") == "sat" and negative.get("violation") == "sat"
+                    and identity.get("revision") == head and identity.get("path") == case["path"]
+                    and identity.get("function") == case["function"]
+                    and bool(blob_oid) and identity.get("blob_oid") == blob_oid
+                    and bool(source_hash) and identity.get("source_sha256") == source_hash
+                    and negative.get("contract") == contract
+                    and negative.get("contract_sha256") == hashlib.sha256(json.dumps(contract, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+                    and all(self.tool_identity.get(k) and negative.get(k) == self.tool_identity[k] for k in ("frontend_sha256", "python_version", "python_implementation", "solver_version", "solver_binding_sha256", "solver_library_sha256"))
+                    and isinstance(witness, dict) and set(witness) == set(contract["inputs"])
+                    and all(type(witness[k]) is (int if t == "int" else bool) for k, t in contract["inputs"].items())
+                )
+                replay = {"status": "incomplete", "reason": "source counterexample or trusted replay unavailable"}
+                reproduce = getattr(self.worker, "reproduce", None)
+                if valid and callable(reproduce) and not self.stop.is_set() and self.clock() < deadline:
+                    replay = reproduce(self.repo, head, negative, timeout_seconds=min(600, max(1, int(deadline - self.clock()))))
+                replay_tools = replay.get("tools") if isinstance(replay, dict) else None
+                passed = (valid and not self.stop.is_set() and self.clock() < deadline and isinstance(witness, dict) and isinstance(replay, dict) and replay.get("status") == "passed"
+                          and replay.get("method") == "protected-runtime-reproduction"
+                          and replay.get("revision") == head and replay.get("evidence_id") == negative["id"]
+                          and replay.get("source_sha256") == identity.get("source_sha256")
+                          and isinstance(replay.get("inputs"), dict) and replay["inputs"] == witness
+                          and all(type(replay["inputs"][k]) is type(witness[k]) for k in witness)
+                          and isinstance(replay.get("witness"), dict) and replay["witness"] == witness
+                          and all(type(replay["witness"][k]) is type(witness[k]) for k in witness)
+                          and replay.get("postcondition") is False
+                          and replay.get("precondition") is True
+                          and replay.get("violated") is True and isinstance(replay_tools, dict)
+                          and bool(replay_tools)
+                          and isinstance(replay.get("interpreter"), str) and bool(replay["interpreter"].split())
+                          and replay_tools.get("selected_python_version")
+                          == "Python " + replay["interpreter"].split()[0])
+                source_cases.append({"case": case, "evidence": negative, "reproduction": replay,
+                                     "status": "passed" if passed else "incomplete",
+                                     "scope": "Direct selected-function replay; module binding and callers are outside scope."})
+        return source_cases
+
     def _execute(self, job: dict, deadline: float) -> dict:
         from .source_verify import verify_source
 
@@ -1018,9 +1135,17 @@ class Coordinator:
             return {"status": "failed", "error": "session ended"}
         if kind == "source_check":
             check = dict(job["payload"]["check"])
+            check.pop("counterexample_cases", None)
             requirement_id = check.pop("requirement_id", None)
             claim_id = check.pop("claim_id", None)
-            evidence = verify_source(self.repo, session["head"], **check)
+            configured_timeout = check.pop("timeout_ms", 5000)
+            remaining = deadline - self.clock()
+            if self.stop.is_set() or remaining <= 0:
+                return {"status": "failed", "error": "session ended"}
+            timeout_ms = _source_timeout(configured_timeout, remaining)
+            evidence = verify_source(self.repo, session["head"], **check, timeout_ms=timeout_ms)
+            if self.stop.is_set() or self.clock() >= deadline:
+                return {"status": "failed", "error": "session ended"}
             evidence["requirement_id"] = requirement_id
             evidence["claim_id"] = claim_id
             return {"status": "succeeded", "evidence": evidence}
@@ -1066,17 +1191,6 @@ class Coordinator:
         if kind in {"pre_review_checks", "final_checks"}:
             head = job["payload"]["target_head"]
             commands = self._check_plan(job["payload"].get("commands", []))
-            if not commands:
-                return {
-                    "status": "succeeded",
-                    "evidence": {
-                        "status": "incomplete",
-                        "reason": "no verification commands configured",
-                        "head": head,
-                        "base": session["base"],
-                        "check_key": job["payload"].get("check_key"),
-                    },
-                }
             checks = []
             for argv in commands:
                 if self.stop.is_set() or self.clock() >= deadline:
@@ -1141,25 +1255,37 @@ class Coordinator:
                         "reason": "original counterexample was not confirmed fixed by protected replay",
                     }
             source = []
-            source_checks = [
-                *self.config["source_checks"],
-                *job["payload"].get("source_checks", []),
-            ]
+            source_cases = []
+            source_checks = list(self.config["source_checks"])
+            for extra in job["payload"].get("source_checks", []):
+                keys = ("path", "function", "inputs", "requires", "ensures", "claim_id")
+                if not any(all(check.get(k) == extra.get(k) for k in keys) for check in source_checks):
+                    source_checks.append(extra)
             for check in source_checks:
                 source_check = dict(check)
+                source_check.pop("counterexample_cases", None)
                 origin = source_check.pop("contract_origin", "configured")
                 source_check.pop("requirement_id", None)
                 claim_id = source_check.pop("claim_id", None)
-                evidence = verify_source(self.repo, head, **source_check)
+                configured_timeout = source_check.pop("timeout_ms", 5000)
+                remaining = deadline - self.clock()
+                if self.stop.is_set() or remaining <= 0:
+                    return {"status": "failed", "error": "session ended"}
+                timeout_ms = _source_timeout(configured_timeout, remaining)
+                evidence = verify_source(self.repo, head, **source_check, timeout_ms=timeout_ms)
+                if self.stop.is_set() or self.clock() >= deadline:
+                    return {"status": "failed", "error": "session ended"}
                 evidence["claim_id"] = claim_id
                 evidence["contract_origin"] = origin
                 source.append(evidence)
+            source_cases = self._source_cases(head, deadline)
             return {
                 "status": "succeeded",
                 "evidence": {
                     "status": "passed"
-                    if all(c["status"] == "passed" for c in checks)
+                    if bool(commands) and all(c["status"] == "passed" for c in checks)
                     and all(e.get("status") == "proved" for e in source)
+                    and all(e["status"] == "passed" for e in source_cases)
                     and (
                         repair is None
                         or (
@@ -1172,6 +1298,7 @@ class Coordinator:
                     "base": session["base"],
                     "checks": checks,
                     "source": source,
+                    "source_cases": source_cases,
                     "repair_check": repair_check,
                     "check_key": job["payload"].get("check_key"),
                 },
@@ -2177,21 +2304,33 @@ class Coordinator:
                     f"required configuration or OpenSpec context unavailable or exceeds capacity: {path}: {exc}"
                 ) from exc
         review_kind = job["payload"].get("kind")
+        feedback = job["payload"].get("feedback")
+        feedback_summary = feedback.get("check_summary") if isinstance(feedback, dict) else None
+        if not isinstance(feedback_summary, dict):
+            feedback_summary = {}
         composition = None
         trusted_verifier = None
-        if review_kind in {"review_verification", "review_final"}:
-            composition = self._review_composition(revision)
+        case_context = review_kind in {"generate_verification", "review_fix"} and any(
+            check.get("counterexample_cases") for check in self.config.get("source_checks", [])
+        )
+        proof_context = review_kind in {"review_verification", "review_final"} or case_context
+        if proof_context:
+            if review_kind in {"review_verification", "review_final"}:
+                composition = self._review_composition(revision)
             from . import source_verify
 
             verifier_source = Path(source_verify.__file__).read_bytes()
             verifier_digest = hashlib.sha256(verifier_source).hexdigest()
             if self.tool_identity.get("frontend_sha256") != verifier_digest:
                 raise ValueError("trusted source verifier identity changed")
-            trusted_verifier = {"identity": self.tool_identity, "source": verifier_source.decode("utf-8")}
+            from .autonomy_runtime import _REPRODUCE
+            trusted_verifier = {"identity": self.tool_identity, "source": verifier_source.decode("utf-8"),
+                                "replay_source": _REPRODUCE, "replay_sha256": hashlib.sha256(_REPRODUCE.encode()).hexdigest()}
             reserved += len(json.dumps(composition, ensure_ascii=True))
             reserved += len(json.dumps(trusted_verifier, ensure_ascii=True))
             reserved += len(json.dumps(job["payload"].get("check_summary"), ensure_ascii=True))
-            reserved += len(json.dumps(proposal.get("source_checks", []), ensure_ascii=True))
+            reserved += len(json.dumps(feedback_summary, ensure_ascii=True))
+            reserved += len(json.dumps((proposal or job["payload"]).get("source_checks", []), ensure_ascii=True))
             if used + reserved > 490_000:
                 raise ReviewContextCapacity("mandatory review evidence exceeds context capacity")
         refresh = None
@@ -2329,12 +2468,13 @@ class Coordinator:
                     raise
                 except (OSError, ValueError, UnicodeError) as exc:
                     raise ValueError(f"specification refresh source unavailable: {path}: {exc}") from exc
-        if review_kind in {"review_verification", "review_final"}:
-            checks = [*self.config["source_checks"], *proposal.get("source_checks", [])]
+        if proof_context:
+            checks = [*self.config["source_checks"], *(proposal or job["payload"]).get("source_checks", [])]
             for check in checks:
                 if not isinstance(check, dict) or not isinstance(check.get("path"), str):
                     raise ValueError("invalid mandatory source proof target")
                 required_source.add(check["path"])
+                required_source.update(case["path"] for case in check.get("counterexample_cases", []))
             for path in sorted(required_source - set(included)):
                 try:
                     safe_relative_path(path)
@@ -2384,8 +2524,16 @@ class Coordinator:
             context["correspondence_refresh"] = refresh
         if composition is not None:
             context["reviewed_specification"] = composition
+        if trusted_verifier is not None:
             context["trusted_source_verifier"] = trusted_verifier
-            context["mandatory_source_contracts"] = [*self.config["source_checks"], *proposal.get("source_checks", [])]
+            if review_kind == "generate_verification":
+                summary = feedback_summary
+                context["source_cases"] = (
+                    {"status": "fresh", "head": revision, "cases": summary.get("source_cases", [])}
+                    if summary.get("head") == revision
+                    else {"status": "pending", "head": revision, "cases": []}
+                )
+            context["mandatory_source_contracts"] = [*self.config["source_checks"], *(proposal or job["payload"]).get("source_checks", [])]
         if FAS_PATH in included:
             context["prior_revision_index"] = index
             context["fas_sha256"] = fas_sha256
@@ -2468,7 +2616,7 @@ class Coordinator:
         if kind == "generate_verification":
             return (
                 common
-                + "Inspect CAS/FAS. Add isolated verification artifacts only under .mentat/verification/ or verification/. Preserve statements and assumptions; expose unsupported semantic connections. For each additional executable command use {argv:[nonempty strings],claim_ids:[UUIDs],method:string}. Include prerequisites. Do not rewrite application to ease verification."
+                + "Inspect CAS/FAS. Add isolated verification artifacts only under .mentat/verification/ or verification/. Preserve statements and assumptions; expose unsupported semantic connections. Controller-owned counterexample cases are supplied in mandatory source contracts and checked automatically; do not request a redundant command. For each additional executable command use {argv:[nonempty strings],claim_ids:[UUIDs],method:string}. Include prerequisites. Do not rewrite application to ease verification."
             )
         if kind == "adjudicate_defect":
             return (
@@ -3356,6 +3504,7 @@ class Coordinator:
             ],
             "checks_omitted": 0,
             "source": sources,
+            "source_cases": evidence.get("source_cases", []),
             "source_omitted": 0,
             "repair_check": {
                 "status": (evidence.get("repair_check") or {}).get("status"),
