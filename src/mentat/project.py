@@ -33,11 +33,13 @@ PRESENTATION_MODULES = ("evidence_html", "claims_notion", "openspec")
 # Every other module directly under src/mentat must be listed here; tests enforce this.
 VERIFIER_MODULES = (
     "__init__",
-    "source_verify",
-    "autonomy_state",
+    "autonomy",
+    "autonomy_cli",
+    "autonomy_policy",
     "autonomy_runtime",
-    "autonomy_worker",
+    "autonomy_state",
     "autonomy_ui",
+    "autonomy_worker",
     "canonical",
     "claims",
     "cli",
@@ -55,6 +57,7 @@ VERIFIER_MODULES = (
     "qualification",
     "records",
     "runner",
+    "source_verify",
     "spec_review",
     "verification",
 )

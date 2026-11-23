@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "model": "gpt-6.1-terra",
+  "reasoning_effort": "high",
+  "session_seconds": 7200,
+  "concurrency": 3,
+  "max_attempts": 3,
+  "auto_merge": true,
+  "base_branch": "main",
+  "remote": "origin",
+  "local_checks": [
+    [
+      "scripts/verify"
+    ],
+    [
+      "scripts/check-autonomy-package"
+    ]
+  ],
+  "worker_checks": [
+    [
+      "scripts/verify-worker"
+    ]
+  ],
+  "source_checks": [
+    {
+      "path": "examples/source-proof/clamp.py",
+      "function": "clamp",
+      "inputs": {
+        "value": "int",
+        "lower": "int",
+        "upper": "int"
+      },
+      "requires": "lower <= upper",
+      "ensures": "lower <= result and result <= upper and ((lower <= value and value <= upper) == (result == value)) and (value >= lower or result == lower) and (value <= upper or result == upper)",
+      "claim_id": "53944563-954b-5d78-a51b-7401f3eca452",
+      "requirement_id": "2bcfa241-162e-5b32-8b37-79deae3acd37"
+    }
+  ],
+  "worker": "mentat-autonomy",
+  "scope": "all first-party application surfaces; trust boundaries and gaps remain explicit"
+}

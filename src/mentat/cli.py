@@ -14,6 +14,7 @@ import typer
 from pydantic import ValidationError
 
 from . import evidence, records, spec_review, verification
+from .autonomy_cli import register as register_autonomy
 from .claims import checked_claims, provenance_lines, write_claims
 from .claims_notion import notion_claims
 from .command import emit, finish, operator_confirm, visible_text
@@ -24,6 +25,7 @@ from .runner import host_diagnostics, run_behavior, runner_info
 from .showcases.polaris.cli import app as polaris_app
 
 app = typer.Typer(no_args_is_help=True, pretty_exceptions_enable=False)
+register_autonomy(app)
 spec_app = typer.Typer(no_args_is_help=True)
 claims_app = typer.Typer(no_args_is_help=True)
 evidence_app = typer.Typer(no_args_is_help=True)

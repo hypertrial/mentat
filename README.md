@@ -1,5 +1,12 @@
 # Mentat
 
+The development checkout is adding session-scoped, agent-operated specification,
+verification, and improvement loops with a local monitoring UI. See the
+[autonomous workflow](docs/autonomy.md), [versioned product vision](docs/vision.md),
+and [implementation readiness gate](docs/implementation-plan.md). Formal results
+retain their stated assumptions and implementation boundaries; unsupported and
+unproved requirements remain visible.
+
 Mentat verifies a Git commit against a contract you review and approve. Define what should hold, check the model with Lean or Z3, and run behavior checks against the committed implementation. Use the evidence to review a change or hand a reproducible failure to your coding agent.
 
 ## Install
