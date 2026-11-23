@@ -1186,6 +1186,9 @@ class Coordinator:
                 "worktree": str(worktree),
                 "author_id": result["session_id"],
                 "head": parent,
+                "context_pending": deferred_paths,
+                "context_included": sorted(included_paths),
+                "context_unavailable": sorted(omitted_paths - set(deferred_paths)),
                 "diff_digest": digest(""),
             }
         if any(not _allowed_path(kind, path) for path in changes):
@@ -1227,20 +1230,45 @@ class Coordinator:
                 else None
             )
             fas = validate_specification(worktree, tracked=tracked, prior=prior)
-            previously_mapped = {
-                surface["path"]
-                for surface in (prior or {}).get("surfaces", [])
-                if surface.get("status") == "mapped"
-            }
+            old_surfaces = {item["path"]: item for item in (prior or {}).get("surfaces", [])}
+            old_requirements = {item["id"]: item for item in (prior or {}).get("requirements", [])}
+            new_requirements = {item["id"]: item for item in fas["requirements"]}
+
+            def inherited_mapping_unchanged(surface: dict) -> bool:
+                path = surface["path"]
+                if old_surfaces.get(path) != surface or path in job["payload"].get(
+                    "unavailable_files", []
+                ):
+                    return False
+                if path in omitted_paths and path not in deferred_paths:
+                    return False
+                if path in changes or path in staged:
+                    return False
+                refs = surface.get("requirement_ids", [])
+                if any(
+                    ref not in old_requirements
+                    or old_requirements[ref] != new_requirements.get(ref)
+                    for ref in refs
+                ):
+                    return False
+                try:
+                    raw = gitio.read_file(self.repo, parent, path)
+                    if len(raw) > 240_000:
+                        return False
+                    raw.decode("utf-8")
+                    candidate = worktree
+                    for component in path.split("/"):
+                        candidate = candidate / component
+                        if candidate.is_symlink():
+                            return False
+                    return candidate.is_file() and candidate.read_bytes() == raw
+                except (OSError, ValueError, UnicodeError):
+                    return False
+
             if any(
                 surface["status"] == "mapped"
-                and (
-                    surface["path"] in omitted_paths
-                    or (
-                        surface["path"] not in included_paths
-                        and surface["path"] not in previously_mapped
-                    )
-                )
+                and surface["path"] not in included_paths
+                and not inherited_mapping_unchanged(surface)
                 for surface in fas["surfaces"]
             ):
                 raise ValueError("unexamined source cannot be marked mapped")
@@ -1269,6 +1297,7 @@ class Coordinator:
             "parent": review_base,
             "inventory_head": parent,
             "context_pending": deferred_paths,
+            "context_unavailable": sorted(omitted_paths - set(deferred_paths)),
             "diff_digest": hashlib.sha256(_diff(worktree, review_base, head)).hexdigest(),
         }
 
@@ -1460,7 +1489,12 @@ class Coordinator:
         if kind == "generate_spec":
             return (
                 common
-                + f"Inspect every inventoried source surface. Write OpenSpec CAS documents under openspec/specs/*/spec.md and {FAS_PATH}. FAS JSON exact keys schema_version=1, requirements, claims, surfaces. Every requirement has persistent UUID id, area in {AREAS}, nonempty statement, origin observed/intended/inferred/uncertain, citations, spec_path containing the UUID in an HTML comment. Preserve existing IDs and lineage. For every changed existing requirement or claim, add revision {{version: previous version plus one (initial version 1), previous_digest: SHA-256 canonical digest of previous JSON record, reason: nonempty explanation, evidence: nonempty citations}}; do not remove prior IDs or weaken established intent. Every claim has UUID id, requirement_ids, statement, assumptions, status (unattempted/unsupported/inconclusive only; the controller derives proof status), formal_meaning. Every surface has path, status mapped/gap/unsupported/unexamined and requirement_ids. Account for all six areas, including unknown requirements explicitly. Do not change application code. Flag actual established defects separately; uncertainty is not a defect."
+                + f"Work incrementally on the INCLUDED files in this batch. Preserve all existing records and IDs; map only facts supported by included files and keep omitted surfaces unexamined or gap. Do not defer the whole batch solely because files are omitted: the controller queues remaining batches. Write OpenSpec CAS documents under openspec/specs/*/spec.md and {FAS_PATH}. FAS JSON exact keys schema_version=1, requirements, claims, surfaces. Every requirement has persistent UUID id, area in {AREAS}, nonempty statement, origin observed/intended/inferred/uncertain, citations, spec_path containing the UUID in an HTML comment. Preserve existing IDs and lineage. For every changed existing requirement or claim, add revision {{version: previous version plus one (initial version 1), previous_digest: SHA-256 canonical digest of previous JSON record, reason: nonempty explanation, evidence: nonempty citations}}; do not remove prior IDs or weaken established intent. Every claim has UUID id, requirement_ids, statement, assumptions, status (unattempted/unsupported/inconclusive only; the controller derives proof status), formal_meaning. Every surface has path, status mapped/gap/unsupported/unexamined and requirement_ids. Account for all six areas, including unknown requirements explicitly. Do not change application code. Flag actual established defects separately; uncertainty is not a defect."
+            )
+        if kind == "review_spec":
+            return (
+                common
+                + "Review this incremental specification draft against the included source and proposal diff. Accept a defensible partial draft when omitted surfaces remain explicitly unexamined or gaps; do not require unsupported completeness. Reject fabricated mappings or weakened established requirements. Remaining batches and final verification remain required."
             )
         if kind == "generate_verification":
             return (
@@ -1581,6 +1615,17 @@ class Coordinator:
                                 proposal["author_id"],
                             ],
                             "source_checks": request["job"]["payload"].get("source_checks", []),
+                            **{
+                                key: request["job"]["payload"][key]
+                                for key in (
+                                    "targetfiles",
+                                    "chunk",
+                                    "batch_limit",
+                                    "revisit_files",
+                                    "unavailable_files",
+                                )
+                                if key in request["job"]["payload"]
+                            },
                             "repair": repair,
                         }
                         if generator == "investigate_defect":
@@ -1775,16 +1820,79 @@ class Coordinator:
             return
         if kind.startswith("generate_") or kind == "investigate_defect":
             if result["decision"] == "defer":
-                self.store.put_record(
-                    self.session_id,
-                    "finding",
-                    {
-                        "id": record_id("record.6"),
-                        "status": "inconclusive",
-                        "summary": result["summary"],
-                        "loop": job["loop"],
-                    },
+                pending = outcome.get("context_pending", []) if kind == "generate_spec" else []
+                previous = job["payload"].get("targetfiles")
+                chunk = job["payload"].get("chunk", 0)
+                surfaces = inventory(self.repo, outcome["head"]) if pending else []
+                limit = job["payload"].get("batch_limit")
+                if limit is None:
+                    limit = len(inventory(self.repo, session["head"]))
+                progress = (
+                    isinstance(pending, list)
+                    and bool(pending)
+                    and isinstance(chunk, int)
+                    and isinstance(limit, int)
+                    and chunk + 1 <= limit
+                    and (previous is None or set(pending) < set(previous))
                 )
+                if progress:
+                    included = set(outcome.get("context_included", []))
+                    if previous is None:
+                        lost = {
+                            path
+                            for path in included
+                            if path not in {FAS_PATH, CONFIG_PATH}
+                            and not path.startswith("openspec/specs/")
+                        }
+                    else:
+                        lost = included & set(previous)
+                    revisit = sorted(set(job["payload"].get("revisit_files", [])) | lost)
+                    self.store.put_record(
+                        self.session_id,
+                        "finding",
+                        {
+                            "id": record_id("context-awaiting"),
+                            "status": "awaiting-context",
+                            "loop": "scl",
+                            "summary": result["summary"],
+                            "paths": pending,
+                        },
+                    )
+                    self._enqueue(
+                        "scl",
+                        "implementer",
+                        job["payload"].get("root_item", job["item_id"]),
+                        {
+                            "kind": "generate_spec",
+                            "root_item": job["payload"].get("root_item", job["item_id"]),
+                            "round": job["payload"].get("round", 0),
+                            "target_head": outcome["head"],
+                            "targetfiles": pending,
+                            "surfaces": surfaces,
+                            "chunk": chunk + 1,
+                            "batch_limit": limit,
+                            "revisit_files": revisit,
+                            "unavailable_files": sorted(
+                                set(job["payload"].get("unavailable_files", []))
+                                | set(outcome.get("context_unavailable", []))
+                            ),
+                            "repair": job["payload"].get("repair"),
+                            "prior_authors": job["payload"].get("prior_authors", []),
+                        },
+                    )
+                else:
+                    self.store.put_record(
+                        self.session_id,
+                        "finding",
+                        {
+                            "id": record_id("record.6"),
+                            "status": "inconclusive",
+                            "summary": result["summary"]
+                            if not pending
+                            else "Context batches could not make bounded progress",
+                            "loop": job["loop"],
+                        },
+                    )
                 return
             review_kind = {
                 "generate_spec": "review_spec",
@@ -1927,6 +2035,22 @@ class Coordinator:
                         ],
                         "source_checks": job["payload"].get("source_checks", []),
                         "repair": job["payload"].get("repair"),
+                        **{
+                            key: job["payload"][key]
+                            for key in (
+                                "targetfiles",
+                                "chunk",
+                                "batch_limit",
+                                "revisit_files",
+                                "unavailable_files",
+                            )
+                            if key in job["payload"]
+                        },
+                        **(
+                            {"surfaces": inventory(self.repo, proposal["head"])}
+                            if original_kind == "generate_spec"
+                            else {}
+                        ),
                     },
                 )
             return
@@ -1951,13 +2075,16 @@ class Coordinator:
                 tracked=[x["path"] for x in inventory(self.repo, proposal["inventory_head"])],
             )
             gaps = [surface["path"] for surface in fas["surfaces"] if surface["status"] != "mapped"]
+            continuing_batches = bool(
+                proposal.get("context_pending") or job["payload"].get("revisit_files")
+            )
             if gaps:
                 self.store.put_record(
                     self.session_id,
                     "finding",
                     {
                         "id": record_id("record.9"),
-                        "status": "gap",
+                        "status": "awaiting-context" if continuing_batches else "gap",
                         "loop": "scl",
                         "summary": "Some tracked surfaces remain unmapped",
                         "paths": gaps,
@@ -1969,7 +2096,7 @@ class Coordinator:
                     "finding",
                     {
                         "id": record_id("record.10"),
-                        "status": "inconclusive",
+                        "status": "awaiting-context" if continuing_batches else "inconclusive",
                         "loop": "scl",
                         "summary": "Some requirements remain uncertain",
                     },
@@ -2012,7 +2139,7 @@ class Coordinator:
             if (
                 pending_paths
                 and previous_targets is not None
-                and set(pending_paths) >= set(previous_targets)
+                and not set(pending_paths) < set(previous_targets)
             ):
                 self.store.put_record(
                     self.session_id,
@@ -2025,8 +2152,31 @@ class Coordinator:
                         "paths": pending_paths,
                     },
                 )
-                pending_paths = []
+                return
+            # Files seen only by an earlier deferred agent were never recorded in
+            # an accepted draft, so revisit them after this reviewed batch.
+            pending_paths = sorted(
+                set(pending_paths) | set(job["payload"].get("revisit_files", []))
+            )
             if pending_paths:
+                surfaces = inventory(self.repo, proposal["head"])
+                chunk = job["payload"].get("chunk", 0) + 1
+                limit = job["payload"].get("batch_limit")
+                if limit is None:
+                    limit = len(inventory(self.repo, session["head"]))
+                if chunk > limit:
+                    self.store.put_record(
+                        self.session_id,
+                        "finding",
+                        {
+                            "id": record_id("context-bound"),
+                            "status": "gap",
+                            "loop": "scl",
+                            "summary": "Context batch limit reached",
+                            "paths": pending_paths,
+                        },
+                    )
+                    return
                 self._enqueue(
                     "scl",
                     "implementer",
@@ -2035,13 +2185,19 @@ class Coordinator:
                         "kind": "generate_spec",
                         "target_head": proposal["head"],
                         "targetfiles": pending_paths,
-                        "surfaces": inventory(self.repo, proposal["head"]),
+                        "surfaces": surfaces,
                         "repair": job["payload"].get("repair"),
                         "prior_authors": [
                             *proposal.get("prior_authors", []),
                             proposal["author_id"],
                         ],
-                        "chunk": job["payload"].get("chunk", 0) + 1,
+                        "chunk": chunk,
+                        "batch_limit": limit,
+                        "revisit_files": [],
+                        "unavailable_files": sorted(
+                            set(job["payload"].get("unavailable_files", []))
+                            | set(proposal.get("context_unavailable", []))
+                        ),
                     },
                 )
                 return
@@ -2267,6 +2423,9 @@ class Coordinator:
                 "base": self.store.snapshot(self.session_id)["session"]["base"],
                 "targetfiles": payload.get("targetfiles"),
                 "chunk": payload.get("chunk", 0),
+                "batch_limit": payload.get("batch_limit"),
+                "revisit_files": payload.get("revisit_files", []),
+                "unavailable_files": payload.get("unavailable_files", []),
                 "check_evidence_id": check_id,
                 "check_key": check_key,
                 "authority_digest": self.authority_digest,
@@ -2299,6 +2458,9 @@ class Coordinator:
                     "repair": job["payload"].get("repair"),
                     "targetfiles": job["payload"].get("targetfiles"),
                     "chunk": job["payload"].get("chunk", 0),
+                    "batch_limit": job["payload"].get("batch_limit"),
+                    "revisit_files": job["payload"].get("revisit_files", []),
+                    "unavailable_files": job["payload"].get("unavailable_files", []),
                     "check_evidence_id": check_id,
                     "check_key": check_key,
                     "review_cohort": cohort,
