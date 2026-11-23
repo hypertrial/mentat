@@ -2323,9 +2323,10 @@ class Coordinator:
             verifier_digest = hashlib.sha256(verifier_source).hexdigest()
             if self.tool_identity.get("frontend_sha256") != verifier_digest:
                 raise ValueError("trusted source verifier identity changed")
-            from .autonomy_runtime import _REPRODUCE
+            from .autonomy_runtime import reproduction_program
+            replay_source = reproduction_program()
             trusted_verifier = {"identity": self.tool_identity, "source": verifier_source.decode("utf-8"),
-                                "replay_source": _REPRODUCE, "replay_sha256": hashlib.sha256(_REPRODUCE.encode()).hexdigest()}
+                                "replay_source": replay_source, "replay_sha256": hashlib.sha256(replay_source.encode()).hexdigest()}
             reserved += len(json.dumps(composition, ensure_ascii=True))
             reserved += len(json.dumps(trusted_verifier, ensure_ascii=True))
             reserved += len(json.dumps(job["payload"].get("check_summary"), ensure_ascii=True))

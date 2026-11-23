@@ -759,3 +759,42 @@ def test_case_check_key_changes_when_configured_timeout_changes(checked_case_rep
     key = coordinator._check_key(head, [], [], None)
     coordinator.config['source_checks'][0]['timeout_ms'] = 750
     assert coordinator._check_key(head, [], [], None) != key
+
+
+def test_public_replay_program_matches_worker_execution_and_review_context(checked_case_repo, tmp_path, monkeypatch):
+    import hashlib
+    import sys
+
+    from mentat.autonomy_runtime import LocalWorker, reproduction_program
+    from mentat.source_verify import verify_source
+
+    repo, head, config = checked_case_repo
+    contract = config['source_checks'][0]
+    negative = verify_source(repo, head, 'bad.py', 'bad_clamp', contract['inputs'],
+                             contract['requires'], contract['ensures'])
+    assert negative['status'] == 'counterexample'
+    negative['id'] = 'case-evidence'
+    worker = LocalWorker()
+    commands = []
+
+    def guest(repo, rev, argv, *, timeout_seconds):
+        commands.append(argv)
+        result = subprocess.run([sys.executable, *argv[1:]], text=True, capture_output=True,
+                                timeout=10, check=False)
+        return {'status': 'succeeded' if result.returncode == 0 else 'failed',
+                'returncode': result.returncode, 'stdout': result.stdout,
+                'tools': {'selected_python_version': 'Python ' + sys.version.split()[0]}}
+
+    monkeypatch.setattr(worker, 'run', guest)
+    replay = worker.reproduce(repo, head, negative)
+    assert replay['status'] == 'passed'
+    assert replay['witness'] == {'x': 0} and replay['postcondition'] is False
+    assert len(commands) == 1
+    program = reproduction_program()
+    assert commands[0][4] == program
+    coordinator, _ = execute_check(repo, head, config, tmp_path, ReplayWorker())
+    text, _, _, _ = coordinator._source_context(head, {'payload': {'kind': 'generate_verification'}})
+    context = json.loads(text.split('SOURCE_CONTEXT_JSON:\n', 1)[1])
+    trusted = context['trusted_source_verifier']
+    assert trusted['replay_source'] == program
+    assert trusted['replay_sha256'] == hashlib.sha256(program.encode()).hexdigest()

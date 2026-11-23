@@ -405,6 +405,41 @@ the logical five-field contract. Nine focused timeout/projection tests, full Ruf
 and the configured static gate pass. Independent exact-commit reviews, an actual
 protected VM case and complete native/Linux acceptance remain required.
 
+At frozen `adf0d13b5a4625af853b963d5bf9ef493481bc07`, the independent
+verifier executed the real case primitive. Z3 produced the integer witness
+`value=1, lower=-1, upper=0`; protected CPython 3.12.13 confirmed a true
+precondition and false postcondition with matching source/blob/contract/tool and
+evidence identities. This is direct selected-function replay, with module
+binding/callers outside scope. Both package gates, static analysis and all 45
+protected fixtures passed. The complete suites each had 1,876 passes, 53 optional
+skips and one failure: the repository's module-boundary rule prohibits importing
+the private replay constant across modules. The verifier confirmed 227 unchanged
+source/script/test hashes and a clean exact head.
+
+The implementation now exposes an immutable public replay-program getter;
+execution and program contents remain unchanged. Getter parity is checked against
+actual CPython execution and review-context source/hash. Boundary/source-case/
+static checks pass (159 tests), alongside full Ruff. Renewed exact-revision VM
+and completion evidence remains required.
+
+## Renewed real repair-loop fixture
+
+Using controller `adf0d13` and an explicitly initialized v2 local policy, the
+identity fixture again produced the actual SAT witness `value=0` against
+`ad4b817979cca46316944debcfe4ff98abc9caf1`. Protected reproduction and distinct
+entailment/domain adjudicators confirmed the defect. Repair candidate
+`5797f66cfb0048cb3f0ff1133a9e2898beceae25` passed its actual gates, source
+proof and original-witness repair replay, followed by independent fix, refreshed
+specification, verification and final review pairs. Session
+`90389eb32c654b9895753df1b670b12e` retained 26 jobs, six requirements and one
+claim. The original-head failing-check branch remained inconclusive while the
+repair branch continued.
+
+The disposable repository deliberately has no `origin`; publication failed and
+the session paused with an unconfirmed remote outcome. No publication or merge
+is claimed. This exercise demonstrates the actual repair/review path under the
+new policy; real Mentat publication and whole-workflow readiness remain pending.
+
 ## Current self-run acceptance gap
 
 The renewed real self-run from `cebafba` completed SCL, including substantive

@@ -709,6 +709,11 @@ print(json.dumps({'status':'passed','source_sha256':D['sha256'],'witness':witnes
 
 
 
+def reproduction_program() -> str:
+    """Return the trusted isolated witness-replay program used by the worker."""
+    return _REPRODUCE
+
+
 def _source_tree(repo: Path, rev: str) -> dict[str, tuple[int, bytes]]:
     deadline = time.monotonic() + 60
     roots = list(gitio.ls_tree(repo, rev, "-z", [], deadline))
