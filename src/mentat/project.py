@@ -33,6 +33,7 @@ PRESENTATION_MODULES = ("evidence_html", "claims_notion", "openspec")
 # Every other module directly under src/mentat must be listed here; tests enforce this.
 VERIFIER_MODULES = (
     "__init__",
+    "source_verify",
     "canonical",
     "claims",
     "cli",

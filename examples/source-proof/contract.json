@@ -1,0 +1,5 @@
+{
+  "inputs": {"value": "int", "lower": "int", "upper": "int"},
+  "requires": "lower <= upper",
+  "ensures": "lower <= result and result <= upper and ((lower <= value and value <= upper) == (result == value)) and (value >= lower or result == lower) and (value <= upper or result == upper)"
+}
