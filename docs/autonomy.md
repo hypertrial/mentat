@@ -72,6 +72,25 @@ independent decisions; unchanged baseline records retain their unreviewed status
 This process evidence accompanies the complete final diff and current proof
 source, contracts, frontend and check results. Changed content requires fresh review.
 
+Before final aggregate review, the controller partitions required current source
+into bounded correspondence reviews. Coverage derives from the baseline and
+candidate FAS and the actual Git changes, including removed mappings, renames and
+file modes. Each batch needs two independent non-author reviewers and receives
+the complete source and specification records for its declared scope. An
+indivisible source or relationship that exceeds the existing limits remains a
+gap. Source review establishes an inspected correspondence contribution; it
+does not prove the application mathematically.
+
+The controller privately records each source reviewer's exact supplied prompt
+and a manifest bound to the job attempt, source, records, candidate, checks and
+policy. Earlier reviews without these manifests remain historical. Final
+reviewers receive validated current coverage and complete bounded findings,
+alongside the full cumulative diff, CAS/FAS and current proof and check evidence.
+They assess consistency and outstanding gaps without claiming to have personally
+reread every source in one prompt. Coverage is checked again before publication;
+missing, stale or mismatched inputs cannot authorize it. Raw prompts stay in
+private local state.
+
 An IIL repair queued before SCL accepts a newer specification can start from that
 accepted checkpoint while retaining the original witness, reproduction and
 adjudicator identities. Reuse currently requires byte-unchanged application and

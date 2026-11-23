@@ -768,7 +768,19 @@
       "reason": "Awaiting independently reviewed source correspondence."
     },
     {
+      "path": "src/mentat/autonomy_final_review.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
       "path": "src/mentat/autonomy_policy.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "src/mentat/autonomy_review_inputs.py",
       "status": "gap",
       "requirement_ids": [],
       "reason": "Awaiting independently reviewed source correspondence."
@@ -1732,6 +1744,12 @@
         "ce55ac49-b6d5-5469-833f-b5262a895ea1"
       ],
       "note": "Regression coverage for bounded complete review context, explicit optional-source omissions and mandatory evidence preservation; this mapping is not a formal proof."
+    },
+    {
+      "path": "tests/test_autonomy_final_sources.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
     },
     {
       "path": "tests/test_autonomy_integration.py",

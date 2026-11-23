@@ -442,6 +442,62 @@ new policy; real Mentat publication and whole-workflow readiness remain pending.
 
 ## Current self-run acceptance gap
 
+The bounded final-source implementation adds a current-head coverage plan,
+independent source-batch pairs, private exact-input manifests and aggregate
+review. A read-only preflight of the archived v6 candidate derived 65 obligations
+in eight batches; the largest source context was 471,466 bytes. Aggregate context
+was 494,872 bytes including its wrapper with sixteen synthetic 4,097-byte
+findings, one byte above each review's allowed maximum. These are capacity
+measurements, not real acceptances, and no historical decisions were changed.
+
+Independent pre-commit review found two defects: structured accepted output could
+be omitted from aggregate findings, and an artifact replaced with a FIFO could
+block before file-type validation. Accepted source reviews now require the other
+structured output arrays to be present and empty; nonblocking reads reject
+nonregular artifacts before consuming them. Regression checks cover the actual
+runner's prompt, scope and receipt tampering, private path/content boundaries,
+growing reads, FIFO substitutions and publication before any GitHub effect.
+Final committed-head reviews, native/Linux/package/protected completion and a
+fresh published self-run remain required before Titanic onboarding.
+
+The terminal v6 session and merged proof-context feature were preserved before
+pruning their 62 retired worktrees and local development branches. The reviewed
+archive helper retained Git bundles, full working-tree and index snapshots,
+coherent state and all raw agent/evidence files in private controller history
+`20261123T222850Z-v6-retired-worktrees/manifest.json`. Both current coding owners
+confirmed quiescence; independent process and open-file audits found no selected
+users. The controller lock remained held through dry-run, prepare and retirement.
+Post-retirement Git lists only clean `main` and the active bounded-review branch.
+
+Proof-source candidate `a06e9b11b335f4576bcb64276a5e1230bd7bc200`
+passed both independent reviews before final code completion: native and Linux
+each 1,937 passed with 53 documented optional skips; both package checks,
+Ruff/Pyright, complete 293-path inventory and all 45 protected fixtures without
+skips passed. All 230 source/script/test hashes and the clean head matched before
+and after. Both actual saved v5 review inputs independently reconstructed with
+the contract and mapped test present. PR #68's hosted check passed in ten seconds
+and merged as `2f98e3aba372639906d304ac0bfcca98bc835882`.
+
+Fresh session `1b305614c3dc40b6967772e689429dfb` completed fourteen accepted
+SCL cohorts, including genuine bounded capacity recovery. Candidate
+`8eb5c9bf8b465ad242e73f38fc27f9eac3ed7600` passed its configured full suite
+(1,937 passed, 53 documented optional skips), packaging, all 45 protected fixtures,
+scoped positive clamp proof and real protected negative-case replay. Both IVL
+reviewers accepted and explicitly assessed the supplied clamp source and declared
+contract. The complete per-reviewer input-file list was not durably recorded in
+the old outcomes, so no stronger inspection claim is inferred.
+
+Both genuine final reviewers deferred: 57 of 62 cumulatively changed mapped
+sources were omitted. Those 62 files total 1,352,139 raw bytes / 1,433,089 JSON
+characters, exceeding the unchanged 360,000-character file-content limit. The
+477,882-character final context retained full diff, proof/control and historical
+cohort descriptors, but those descriptors did not durably attest each reviewer's
+supplied source or include substantive findings. A retrospective reconstruction
+confirms one earlier pair saw `gitio.py`; it does not manufacture missing actual
+input attestations or semantic correctness. Session v6 ended blocked without
+publication. Current-head bounded source review and exact input provenance,
+independent review/completion and a real published self-run remain pending.
+
 Final bounded-context candidate `e5b6becb5d00d5cb4df14f27d8b007166e3e8f39`
 passed both independent reviews before final completion: native and Linux each
 1,899 passed with 53 documented optional skips, both package gates, Ruff/Pyright,
