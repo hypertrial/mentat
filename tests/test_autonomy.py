@@ -990,6 +990,8 @@ def test_large_inventory_continues_in_targeted_chunks(repo, tmp_path):
 def test_interrupted_merge_reconciles_before_retry(repo, tmp_path, remote_state, recorded_failure):
     import time
 
+    _valid_publication_spec(repo)
+
     from mentat.autonomy import current_tool_identity
 
     class ReconcilingGitHub(GitHub):
@@ -1071,6 +1073,8 @@ def test_interrupted_merge_reconciles_before_retry(repo, tmp_path, remote_state,
 
 def test_failed_publication_reconciles_existing_pr(repo, tmp_path):
     import time
+
+    _valid_publication_spec(repo)
 
     from mentat.autonomy import current_tool_identity
 
@@ -2992,3 +2996,194 @@ def test_agent_cannot_forge_controller_capacity_result(repo, tmp_path):
         coordinator._execute(job, time.time() + 60)
     snapshot = store.snapshot(coordinator.session_id)
     assert not snapshot['jobs'] and not snapshot['decisions']
+
+
+def test_verification_artifact_is_inventoried_and_reviewed_before_publication(repo, tmp_path):
+    from mentat.autonomy_state import record_digest
+
+    artifact = '.mentat/verification/check_eligibility_model.py'
+    contexts = []
+
+    class VerificationAgent(Agent):
+        def run(self, repo, job, output, *, timeout_seconds):
+            payload = job['payload']
+            kind = payload['kind']
+            if kind == 'generate_verification':
+                path = repo / artifact
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text('def check(): return True\n')
+                return {'status': 'succeeded', 'session_id': job['id'], 'result': {
+                    'decision': 'accept', 'summary': 'new checker', 'findings': [],
+                    'verification_requests': []}}
+            if kind in {'review_verification', 'review_final'}:
+                context = json.loads(payload['prompt'].split('SOURCE_CONTEXT_JSON:\n', 1)[1])
+                contexts.append((kind, payload, context))
+            result = super().run(repo, job, output, timeout_seconds=timeout_seconds)
+            if kind == 'generate_spec':
+                path = repo / '.mentat/fas.json'
+                fas = json.loads(path.read_text())
+                fas['claims'].append({'id': str(uuid.uuid4()),
+                    'requirement_ids': [fas['requirements'][0]['id']],
+                    'statement': 'An unproved claim', 'assumptions': [],
+                    'formal_meaning': 'unattempted', 'status': 'unattempted'})
+                path.write_text(json.dumps(fas))
+            return result
+
+    snapshot, _, github = run(repo, tmp_path, agent=VerificationAgent())
+    generation = next(j for j in snapshot['jobs'] if j['payload']['kind'] == 'generate_verification')
+    proposal = generation['outcome']
+    before = json.loads(git(repo, 'show', f"{proposal['observed_source_revision']}:.mentat/fas.json"))
+    after = json.loads(git(repo, 'show', f"{proposal['head']}:.mentat/fas.json"))
+    assert after['requirements'] == before['requirements']
+    assert after['claims'] == before['claims']
+    assert len(after['claims']) == 1 and after['claims'][0]['status'] == 'unattempted'
+    assert all(claim['status'] == 'unattempted' for claim in snapshot['claims'])
+    assert [record_digest(c) for c in after['claims']] == [record_digest(c) for c in before['claims']]
+    old_rows = {row['path']: row for row in before['surfaces']}
+    new_rows = {row['path']: row for row in after['surfaces']}
+    assert {key: new_rows[key] for key in old_rows} == old_rows
+    assert set(new_rows) - set(old_rows) == {artifact}
+    assert new_rows[artifact] == {'path': artifact, 'status': 'unexamined', 'requirement_ids': []}
+    for kind in ('review_verification', 'review_final'):
+        reviews = [(payload, context) for review, payload, context in contexts if review == kind]
+        assert len(reviews) == 2
+        for payload, context in reviews:
+            assert payload['proposal']['head'] == proposal['head'] == context['revision']
+            assert '.mentat/fas.json' in context['proposal_diff']
+            assert artifact in context['proposal_diff']
+            assert json.loads(context['files']['.mentat/fas.json']) == after
+    candidate = Path(proposal['worktree'])
+    tracked = git(candidate, 'ls-tree', '-r', '--name-only', 'HEAD').splitlines()
+    assert validate_specification(candidate, tracked=tracked) == after
+    assert github.published
+
+    class DeferAgent(Agent):
+        def run(self, repo, job, output, *, timeout_seconds):
+            return {'status': 'succeeded', 'session_id': job['id'], 'result': {
+                'decision': 'defer', 'summary': 'no further work', 'findings': [],
+                'verification_requests': []}}
+
+    fresh, _, _ = run(candidate, tmp_path / 'fresh', agent=DeferAgent())
+    assert fresh['session']['head'] == proposal['head']
+    assert {r['id'] for r in fresh['requirements']} == {r['id'] for r in after['requirements']}
+
+
+@pytest.mark.parametrize('fault', ['omitted', 'duplicate', 'malformed'])
+def test_verification_inventory_does_not_repair_invalid_prior_fas(repo, tmp_path, fault):
+    import time
+
+    _review_capacity_repo(repo)
+    path = repo / '.mentat/fas.json'
+    fas = json.loads(path.read_text())
+    if fault == 'omitted':
+        fas['surfaces'] = [row for row in fas['surfaces'] if row['path'] != 'src.py']
+        raw = json.dumps(fas)
+    elif fault == 'duplicate':
+        fas['surfaces'].append(dict(fas['surfaces'][0]))
+        raw = json.dumps(fas)
+    else:
+        raw = '{malformed'
+    path.write_text(raw)
+    git(repo, 'commit', '-qam', 'invalid existing inventory')
+    head = git(repo, 'rev-parse', 'HEAD')
+
+    class ArtifactAgent(Agent):
+        def run(self, repo, job, output, *, timeout_seconds):
+            artifact = repo / '.mentat/verification/check.py'
+            artifact.parent.mkdir(parents=True, exist_ok=True)
+            artifact.write_text('check = True\n')
+            return {'status': 'succeeded', 'session_id': job['id'], 'result': {
+                'decision': 'accept', 'summary': 'checker', 'findings': [],
+                'verification_requests': []}}
+
+    store = Store(tmp_path / 'state/state.db')
+    config = default_config(repo)
+    coordinator = Coordinator(repo, store, ArtifactAgent(), Worker(), GitHub())
+    coordinator.config = config
+    coordinator.session_id = store.new_session(str(repo), head, head, config, 1, 100)
+    job = {'id': 'invalid-inventory', 'attempt': 1, 'item_id': 'verification.inventory',
+           'loop': 'ivl', 'payload': {'kind': 'generate_verification', 'target_head': head}}
+    with pytest.raises(ValueError):
+        coordinator._execute(job, time.time() + 60)
+    assert path.read_text() == raw
+    assert not store.snapshot(coordinator.session_id)['decisions']
+
+
+def test_verification_generator_cannot_write_fas(repo, tmp_path):
+    import time
+
+    _review_capacity_repo(repo)
+    head = git(repo, 'rev-parse', 'HEAD')
+
+    class UnauthorizedAgent(Agent):
+        def run(self, repo, job, output, *, timeout_seconds):
+            (repo / '.mentat/fas.json').write_text('{}')
+            return {'status': 'succeeded', 'session_id': job['id'], 'result': {
+                'decision': 'accept', 'summary': 'invalid edit', 'findings': [],
+                'verification_requests': []}}
+
+    store = Store(tmp_path / 'state/state.db')
+    config = default_config(repo)
+    coordinator = Coordinator(repo, store, UnauthorizedAgent(), Worker(), GitHub())
+    coordinator.config = config
+    coordinator.session_id = store.new_session(str(repo), head, head, config, 1, 100)
+    job = {'id': 'unauthorized', 'attempt': 1, 'item_id': 'verification.inventory',
+           'loop': 'ivl', 'payload': {'kind': 'generate_verification', 'target_head': head}}
+    with pytest.raises(ValueError, match='scope|outside|permitted'):
+        coordinator._execute(job, time.time() + 60)
+
+
+def test_publication_rejects_incomplete_candidate_before_any_github_call(repo, tmp_path):
+    import time
+
+    from mentat.autonomy import current_tool_identity
+
+    _review_capacity_repo(repo)
+    path = repo / '.mentat/fas.json'
+    fas = json.loads(path.read_text())
+    fas['surfaces'] = [row for row in fas['surfaces'] if row['path'] != 'src.py']
+    path.write_text(json.dumps(fas))
+    git(repo, 'commit', '-qam', 'incomplete candidate')
+    head = git(repo, 'rev-parse', 'HEAD')
+
+    class NoGitHub(GitHub):
+        def publish(self, *args, **kwargs):
+            raise AssertionError('publication before inventory validation')
+        def reconcile(self, *args, **kwargs):
+            raise AssertionError('reconciliation before inventory validation')
+        def merge(self, *args, **kwargs):
+            raise AssertionError('merge before inventory validation')
+
+    store = Store(tmp_path / 'state/state.db')
+    config = default_config(repo)
+    coordinator = Coordinator(repo, store, Agent(), Worker(), NoGitHub())
+    coordinator.config = config
+    coordinator.tool_identity = current_tool_identity()
+    now = time.time()
+    coordinator.session_id = store.new_session(str(repo), head, head, config, now, now + 60)
+    key = coordinator._check_key(head, [], [], None)
+    proposal = {'head': head, 'worktree': str(repo), 'diff_digest': 'diff'}
+    reviews = [{'reviewer_id': reviewer, 'author_id': 'author', 'status': 'passed',
+                'head': head, 'base': head, 'diff_digest': 'diff', 'review_cohort': 'cohort',
+                'check_evidence_id': 'checked', 'check_key': key} for reviewer in ('one', 'two')]
+    evidence = {'id': 'checked', 'check_key': key, 'head': head, 'base': head, 'checks': []}
+    with pytest.raises(ValueError, match='surface inventory omits'):
+        coordinator._publish({'payload': {'proposal': proposal, 'reviews': reviews}}, evidence)
+    assert not any(e['kind'] in {'publication_started', 'merge_started'}
+                   for e in store.snapshot(coordinator.session_id)['events'])
+
+
+def _valid_publication_spec(repo):
+    spec_name = 'openspec/specs/app/spec.md'
+    spec = repo / spec_name
+    spec.parent.mkdir(parents=True, exist_ok=True)
+    requirements = [{'id': str(uuid.uuid4()), 'area': area, 'origin': 'uncertain',
+                     'statement': 'Unspecified', 'spec_path': spec_name} for area in AREAS]
+    spec.write_text('\n'.join(row['id'] for row in requirements))
+    paths = ['src.py', '.mentat/workspace.json', '.mentat/fas.json', spec_name]
+    (repo / '.mentat/fas.json').write_text(json.dumps({
+        'schema_version': 1, 'requirements': requirements, 'claims': [],
+        'surfaces': [{'path': path, 'status': 'gap', 'requirement_ids': []} for path in paths]}))
+    git(repo, 'add', '.')
+    git(repo, 'commit', '-qm', 'reviewed publication fixture')
+    git(repo, 'update-ref', 'refs/remotes/origin/main', git(repo, 'rev-parse', 'HEAD'))
