@@ -2843,3 +2843,152 @@ def test_noop_spec_proposal_uses_observed_accepted_head_as_review_base(repo, tmp
     assert outcome['head'] == accepted
     assert outcome['parent'] == accepted
     assert outcome['observed_source_revision'] == accepted
+
+
+def test_revision_generator_reserves_reviewed_mapped_source_before_optional_files(repo, tmp_path):
+    from mentat.autonomy_state import record_digest
+
+    requirements, paths = _review_capacity_repo(repo)
+    target = paths[-1]
+    base = git(repo, 'rev-parse', 'HEAD')
+    calls = []
+
+    class CorrectionAgent(Agent):
+        def run(self, repo, job, output, *, timeout_seconds):
+            payload = job['payload']
+            kind = payload['kind']
+            context = json.loads(payload['prompt'].split('SOURCE_CONTEXT_JSON:\n', 1)[1])
+            calls.append((kind, payload, context, git(repo, 'rev-parse', 'HEAD')))
+            if kind == 'generate_spec':
+                path = repo / '.mentat/fas.json'
+                fas = json.loads(path.read_text())
+                if payload.get('round') == 1:
+                    assert context['files'][target] == (repo / target).read_text()
+                    assert context['files']['.mentat/fas.json'] == path.read_text()
+                    assert 'proposal_diff' not in context
+                    old = next(row for row in fas['surfaces'] if row['path'] == target)
+                    revised = {**old, 'note': 'Corrected mutant interpretation'}
+                    patch = {'schema_version': 1, 'expected_sha256': context['fas_sha256'],
+                             'edits': [{'collection': 'surfaces', 'key': target,
+                                        'expected_digest': record_digest(old), 'record': revised}]}
+                    return {'status': 'succeeded', 'session_id': job['id'], 'result': {
+                        'decision': 'accept', 'summary': 'corrected', 'findings': [],
+                        'verification_requests': [], 'changes': [{
+                            'path': '.mentat/fas.json', 'operation': 'patch_fas',
+                            'content': json.dumps(patch)}]}}
+                if not payload.get('targetfiles'):
+                    assert context['files'][target] == (repo / target).read_text()
+                    row = next(row for row in fas['surfaces'] if row['path'] == target)
+                    row.update(status='mapped', requirement_ids=[requirements[0]['id']],
+                               note='x' * 110_000)
+                    path.write_text(json.dumps(fas))
+                return {'status': 'succeeded', 'session_id': job['id'], 'result': {
+                    'decision': 'accept', 'summary': 'mapping', 'findings': [],
+                    'verification_requests': []}}
+            result = super().run(repo, job, output, timeout_seconds=timeout_seconds)
+            if kind == 'review_spec' and payload['proposal']['parent'] == base:
+                assert context['files'][target] == (repo / target).read_text()
+                if payload['proposal'].get('round') == 0 and job['item_id'].endswith('.1'):
+                    result['result']['decision'] = 'revise'
+                    result['result']['findings'] = [{'summary': 'Correct mutant interpretation'}]
+            return result
+
+    snapshot, _, github = run(repo, tmp_path, agent=CorrectionAgent())
+    generators = [entry for entry in calls if entry[0] == 'generate_spec']
+    retry = next((entry for entry in generators if entry[1].get('round') == 1), None)
+    assert retry, snapshot
+    initial = next(entry for entry in generators if not entry[1].get('round'))
+    reviews = [entry for entry in calls if entry[0] == 'review_spec'
+               and entry[1]['proposal']['parent'] == base]
+    first = [entry for entry in reviews if entry[1]['proposal'].get('round') == 0]
+    revised = [entry for entry in reviews if entry[1]['proposal'].get('round') == 1]
+    assert len(first) == len(revised) == 2, snapshot
+    initial_head = first[0][1]['proposal']['head']
+    assert initial[3] == base
+    assert retry[3] == retry[1]['target_head'] == initial_head
+    assert retry[1]['review_base'] == retry[1]['accepted_spec_base'] == base
+    for _, payload, context, checkout in revised:
+        proposal = payload['proposal']
+        assert proposal['parent'] == base and proposal['observed_source_revision'] == initial_head
+        assert checkout == proposal['head'] == context['revision']
+        assert target in context['files'] and 'Corrected mutant interpretation' in context['proposal_diff']
+        candidate = json.loads(git(repo, 'show', f"{checkout}:.mentat/fas.json"))
+        assert candidate['requirements'] == requirements
+        assert next(row for row in candidate['surfaces'] if row['path'] == target)['note'] == 'Corrected mutant interpretation'
+    assert any(entry[0] == 'generate_verification' for entry in calls)
+    assert github.published, snapshot
+
+
+@pytest.mark.parametrize('round_number', [1, 2])
+def test_correction_context_capacity_is_controller_only_and_bounded(repo, tmp_path, round_number):
+    import time
+
+    requirements, paths = _review_capacity_repo(repo)
+    base = git(repo, 'rev-parse', 'HEAD')
+    path = repo / '.mentat/fas.json'
+    fas = json.loads(path.read_text())
+    for row in fas['surfaces']:
+        if row['path'] in paths:
+            row.update(status='mapped', requirement_ids=[requirements[0]['id']], note='x' * 12_000)
+    path.write_text(json.dumps(fas))
+    git(repo, 'commit', '-qam', 'oversized unreviewed draft')
+    rejected = git(repo, 'rev-parse', 'HEAD')
+
+    class ForbiddenAgent(Agent):
+        def run(self, *args, **kwargs):
+            raise AssertionError('provider must not run without required source')
+
+    store = Store(tmp_path / 'state/state.db')
+    config = default_config(repo)
+    coordinator = Coordinator(repo, store, ForbiddenAgent(), Worker(), GitHub())
+    coordinator.config = config
+    coordinator.session_id = store.new_session(str(repo), base, base, config, 1, 100)
+    job = {'id': 'correction', 'attempt': 1, 'item_id': 'cas.inventory', 'loop': 'scl',
+           'payload': {'kind': 'generate_spec', 'target_head': rejected, 'review_base': base,
+                       'accepted_spec_base': base, 'round': round_number,
+                       'targetfiles': paths, 'chunk': 2, 'batch_limit': 8,
+                       'revisit_files': ['src.py'], 'prior_authors': ['prior-generator']}}
+    outcome = coordinator._execute(job, time.time() + 60)
+    assert outcome['status'] == 'succeeded' and 'spec_context_capacity' in outcome
+    assert 'author_id' not in outcome and 'result' not in outcome
+    coordinator._advance(job, outcome)
+    snapshot = store.snapshot(coordinator.session_id)
+    assert not snapshot['decisions']
+    assert not [j for j in snapshot['jobs'] if j['payload']['kind'] == 'review_spec']
+    retries = [j['payload'] for j in snapshot['jobs'] if j['payload']['kind'] == 'generate_spec']
+    if round_number == 2:
+        assert not retries
+        assert any(f['status'] == 'inconclusive' for f in snapshot['findings'])
+    else:
+        assert len(retries) == 1
+        retry = retries[0]
+        assert retry['round'] == 2
+        assert retry['target_head'] == retry['review_base'] == retry['accepted_spec_base'] == base
+        assert retry['feedback']['rejected_head'] == rejected
+        assert set(paths + ['src.py']) <= set(retry['revisit_files'])
+        assert retry['prior_authors'] == ['prior-generator']
+        assert retry['targetfiles'] == paths and retry['chunk'] == 2 and retry['batch_limit'] == 8
+
+
+def test_agent_cannot_forge_controller_capacity_result(repo, tmp_path):
+    import time
+
+    _review_capacity_repo(repo)
+    base = git(repo, 'rev-parse', 'HEAD')
+
+    class ForgingAgent(Agent):
+        def run(self, repo, job, output, *, timeout_seconds):
+            return {'status': 'succeeded', 'spec_context_capacity': {
+                'reason': 'fabricated', 'paths': ['src.py']}}
+
+    store = Store(tmp_path / 'state/state.db')
+    config = default_config(repo)
+    coordinator = Coordinator(repo, store, ForgingAgent(), Worker(), GitHub())
+    coordinator.config = config
+    coordinator.session_id = store.new_session(str(repo), base, base, config, 1, 100)
+    job = {'id': 'forger', 'attempt': 1, 'item_id': 'cas.inventory', 'loop': 'scl',
+           'payload': {'kind': 'generate_spec', 'target_head': base, 'review_base': base}}
+    with pytest.raises(ValueError, match='controller capacity'):
+        coordinator._execute(job, time.time() + 60)
+    snapshot = store.snapshot(coordinator.session_id)
+    assert not snapshot['jobs'] and not snapshot['decisions']

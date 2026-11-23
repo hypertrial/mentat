@@ -1118,7 +1118,18 @@ class Coordinator:
         output = self.store.path.parent / "agents" / job["id"] / str(job["attempt"])
         output.mkdir(parents=True, exist_ok=True, mode=0o700)
         task = dict(job)
-        context, omitted_paths, included_paths, deferred_paths = self._source_context(parent, job)
+        try:
+            context, omitted_paths, included_paths, deferred_paths = self._source_context(parent, job)
+        except ReviewContextCapacity as exc:
+            if (
+                kind == "generate_spec"
+                and isinstance(job["payload"].get("review_base"), str)
+                and job["payload"]["review_base"] != parent
+            ):
+                return {"status": "succeeded", "spec_context_capacity": {
+                    "reason": str(exc), "paths": exc.paths,
+                }}
+            raise
         if (
             kind == "adjudicate_domain"
             and job["payload"]["evidence"]["source_identity"]["path"] not in included_paths
@@ -1139,6 +1150,8 @@ class Coordinator:
             output,
             timeout_seconds=min(MAX_AGENT_SECONDS, max(1, int(deadline - self.clock()))),
         )
+        if "spec_context_capacity" in result:
+            raise ValueError("agent cannot produce controller capacity outcomes")
         if result.get("status") != "succeeded":
             return result
         # File contents are committed in Git; do not duplicate them or the raw
@@ -1398,6 +1411,21 @@ class Coordinator:
                     "proposal diff is incomplete or exceeds review context limit"
                 )
 
+        source_base = parent if isinstance(proposal, dict) else None
+        if job["payload"].get("kind") == "generate_spec" and "review_base" in job["payload"]:
+            correction_base = job["payload"]["review_base"]
+            if not isinstance(correction_base, str) or not correction_base:
+                raise ValueError("invalid specification correction review base")
+            if git(self.repo, "merge-base", correction_base, revision) != correction_base:
+                raise ValueError("specification correction base is not an input ancestor")
+            if correction_base != revision:
+                source_base = correction_base
+                changed = set(
+                    git(
+                        self.repo, "diff", "--name-only", "--no-renames", correction_base, revision
+                    ).splitlines()
+                )
+
         targets = job["payload"].get("targetfiles")
         if targets is not None:
             if not isinstance(targets, list) or any(not isinstance(p, str) for p in targets):
@@ -1510,18 +1538,20 @@ class Coordinator:
                 raise ValueError(
                     f"required configuration or OpenSpec context unavailable or exceeds capacity: {path}: {exc}"
                 ) from exc
-        # A specification review must inspect the source underlying every new or
-        # revised mapping and claim. Compare with the cumulative review base so
-        # rejected drafts cannot lose this obligation on a later review round.
+        # Review and correction contexts must inspect source underlying the
+        # unreviewed mappings and claims relative to the cumulative review base.
         required_source: set[str] = set()
-        if job["payload"].get("kind") == "review_spec" and isinstance(proposal, dict):
+        if source_base is not None and (
+            job["payload"].get("kind") == "review_spec"
+            or job["payload"].get("kind") == "generate_spec"
+        ):
             baseline_paths = set(
                 git(
-                    self.repo, "ls-tree", "-r", "--name-only", proposal["parent"], "--", FAS_PATH
+                    self.repo, "ls-tree", "-r", "--name-only", source_base, "--", FAS_PATH
                 ).splitlines()
             )
             prior_fas = (
-                json.loads(gitio.read_file(self.repo, proposal["parent"], FAS_PATH))
+                json.loads(gitio.read_file(self.repo, source_base, FAS_PATH))
                 if FAS_PATH in baseline_paths
                 else {}
             )
@@ -1751,6 +1781,26 @@ class Coordinator:
             return digest({"job": job["id"], "record": label})
 
         session = self.store.snapshot(self.session_id)["session"]
+        if kind == "generate_spec" and "spec_context_capacity" in outcome:
+            capacity = outcome["spec_context_capacity"]
+            if (
+                not isinstance(capacity, dict)
+                or not isinstance(capacity.get("reason"), str)
+                or not isinstance(capacity.get("paths"), list)
+                or any(not isinstance(path, str) for path in capacity["paths"])
+            ):
+                raise ValueError("invalid specification capacity result")
+            proposal = {
+                "head": job["payload"]["target_head"],
+                "parent": job["payload"]["review_base"],
+                "accepted_spec_base": job["payload"].get("accepted_spec_base"),
+                "round": job["payload"].get("round", 0),
+                "root_item": job["payload"].get("root_item", job["item_id"]),
+            }
+            self._handle_spec_capacity(
+                job, proposal, ReviewContextCapacity(capacity["reason"], set(capacity["paths"]))
+            )
+            return
         if "evidence" in outcome:
             evidence = {"id": record_id("evidence"), "job_id": job["id"], **outcome["evidence"]}
             self.store.put_record(self.session_id, "evidence", evidence)
@@ -2600,6 +2650,93 @@ class Coordinator:
             else None,
         }
 
+    def _handle_spec_capacity(
+        self, job: dict, proposal: dict, exc: ReviewContextCapacity
+    ) -> None:
+        assert self.session_id
+        round_number = proposal.get("round", 0)
+        if type(round_number) is not int or round_number < 0:
+            raise ValueError("invalid specification review round") from exc
+        next_round = round_number + 1
+        accepted_base = proposal.get("accepted_spec_base")
+        valid_base = False
+        if isinstance(accepted_base, str) and accepted_base:
+            try:
+                valid_base = (
+                    git(self.repo, "merge-base", proposal["parent"], accepted_base)
+                    == proposal["parent"]
+                    and git(self.repo, "merge-base", accepted_base, proposal["head"])
+                    == accepted_base
+                )
+            except (ValueError, OSError, RuntimeError, subprocess.SubprocessError):
+                valid_base = False
+        retry = next_round < self.config["max_attempts"] and valid_base
+        required_paths = exc.paths
+        if not required_paths:
+            # Capacity may be exceeded before FAS source dependencies can
+            # be derived. Conservatively retain the whole batch frontier.
+            required_paths = [
+                entry["path"] for entry in inventory(self.repo, proposal["head"])
+                if entry["path"] not in {FAS_PATH, CONFIG_PATH}
+            ]
+        feedback = {
+            "reason": str(exc) if valid_base else (
+                str(exc) + "; accepted specification base unavailable or ambiguous"
+            ),
+            "guidance": (
+                "The full independent review cannot fit. Split this unreviewed "
+                "proposal into a smaller defensible increment; preserve all "
+                "established records and leave remaining surfaces as gaps."
+            ),
+            "rejected_head": proposal["head"],
+            "review_base": accepted_base,
+            "required_paths": required_paths,
+        }
+        self.store.put_record(
+            self.session_id,
+            "finding",
+            {
+                "id": digest({"job": job["id"], "record": "review-capacity"}),
+                "status": "revision-requested" if retry else "inconclusive",
+                "loop": job["loop"],
+                "summary": feedback["reason"],
+                **feedback,
+            },
+        )
+        if retry:
+            assert isinstance(accepted_base, str)
+            self._enqueue(
+                job["loop"],
+                "implementer",
+                proposal.get("root_item", job["item_id"]),
+                {
+                    **{
+                        key: job["payload"][key]
+                        for key in (
+                            "targetfiles", "chunk", "batch_limit", "unavailable_files",
+                            "repair", "source_checks",
+                        )
+                        if key in job["payload"]
+                    },
+                    "kind": "generate_spec",
+                    "target_head": accepted_base,
+                    "review_base": accepted_base,
+                    "accepted_spec_base": accepted_base,
+                    "root_item": proposal.get("root_item", job["item_id"]),
+                    "round": next_round,
+                    "feedback": feedback,
+                    "surfaces": inventory(self.repo, accepted_base),
+                    "revisit_files": sorted(
+                        set(job["payload"].get("revisit_files", [])) | set(required_paths)
+                    ),
+                    "prior_authors": [
+                        *job["payload"].get("prior_authors", []),
+                        *([proposal["author_id"]] if "author_id" in proposal else []),
+                    ],
+                },
+            )
+        return
+
     def _request_reviews(self, job: dict, proposal: dict, kind: str) -> None:
         if kind == "review_spec":
             # A deterministic capacity failure cannot be repaired by retrying
@@ -2611,87 +2748,7 @@ class Coordinator:
                     {"payload": {**job["payload"], "kind": kind, "proposal": proposal}},
                 )
             except ReviewContextCapacity as exc:
-                assert self.session_id
-                round_number = proposal.get("round", 0)
-                if type(round_number) is not int or round_number < 0:
-                    raise ValueError("invalid specification review round") from exc
-                next_round = round_number + 1
-                accepted_base = proposal.get("accepted_spec_base")
-                valid_base = False
-                if isinstance(accepted_base, str) and accepted_base:
-                    try:
-                        valid_base = (
-                            git(self.repo, "merge-base", proposal["parent"], accepted_base)
-                            == proposal["parent"]
-                            and git(self.repo, "merge-base", accepted_base, proposal["head"])
-                            == accepted_base
-                        )
-                    except (ValueError, OSError, RuntimeError, subprocess.SubprocessError):
-                        valid_base = False
-                retry = next_round < self.config["max_attempts"] and valid_base
-                required_paths = exc.paths
-                if not required_paths:
-                    # Capacity may be exceeded before FAS source dependencies can
-                    # be derived. Conservatively retain the whole batch frontier.
-                    required_paths = [
-                        entry["path"] for entry in inventory(self.repo, proposal["head"])
-                        if entry["path"] not in {FAS_PATH, CONFIG_PATH}
-                    ]
-                feedback = {
-                    "reason": str(exc) if valid_base else (
-                        str(exc) + "; accepted specification base unavailable or ambiguous"
-                    ),
-                    "guidance": (
-                        "The full independent review cannot fit. Split this unreviewed "
-                        "proposal into a smaller defensible increment; preserve all "
-                        "established records and leave remaining surfaces as gaps."
-                    ),
-                    "rejected_head": proposal["head"],
-                    "review_base": accepted_base,
-                    "required_paths": required_paths,
-                }
-                self.store.put_record(
-                    self.session_id,
-                    "finding",
-                    {
-                        "id": digest({"job": job["id"], "record": "review-capacity"}),
-                        "status": "revision-requested" if retry else "inconclusive",
-                        "loop": job["loop"],
-                        "summary": feedback["reason"],
-                        **feedback,
-                    },
-                )
-                if retry:
-                    assert isinstance(accepted_base, str)
-                    self._enqueue(
-                        job["loop"],
-                        "implementer",
-                        proposal.get("root_item", job["item_id"]),
-                        {
-                            **{
-                                key: job["payload"][key]
-                                for key in (
-                                    "targetfiles", "chunk", "batch_limit", "unavailable_files",
-                                    "repair", "source_checks",
-                                )
-                                if key in job["payload"]
-                            },
-                            "kind": "generate_spec",
-                            "target_head": accepted_base,
-                            "review_base": accepted_base,
-                            "accepted_spec_base": accepted_base,
-                            "root_item": proposal.get("root_item", job["item_id"]),
-                            "round": next_round,
-                            "feedback": feedback,
-                            "surfaces": inventory(self.repo, accepted_base),
-                            "revisit_files": sorted(
-                                set(job["payload"].get("revisit_files", [])) | set(required_paths)
-                            ),
-                            "prior_authors": [
-                                *job["payload"].get("prior_authors", []), proposal["author_id"]
-                            ],
-                        },
-                    )
+                self._handle_spec_capacity(job, proposal, exc)
                 return
             self._enqueue_reviewers(job, proposal, kind)
             return

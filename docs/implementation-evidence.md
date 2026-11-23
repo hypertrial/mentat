@@ -172,3 +172,17 @@ fresh-worker/profile initialization remain required. Independent security review
 additionally found checkout module shadowing in Python archive inspection. All
 inline artifact checks now use isolated Python, and a hostile `tarfile.py` regression
 rejects Git metadata without executing the checkout module.
+
+## Source context for specification corrections
+
+The fresh-profile self-run at `f0ed32f` completed independently reviewed source
+batches, but a later correction could not inspect the test file named in reviewer
+feedback. Both failed revision attempts changed the mapped
+`tests/test_source_control_flow.py` note while that targeted file was omitted from
+their generator context for capacity. The strict mapping check rejected both;
+IVL and final publication were not reached. Read-only replay showed that the
+review context contained the same complete source and a 6,589-byte diff, while
+the correction context treated the file as optional. Corrections now reserve
+the mapped/cited/contract sources of their unreviewed input before optional
+context, retaining the existing bounds and accepted-base recovery. New regression,
+independent-review and completion evidence remains required.
