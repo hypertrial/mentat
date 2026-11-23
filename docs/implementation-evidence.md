@@ -442,6 +442,56 @@ new policy; real Mentat publication and whole-workflow readiness remain pending.
 
 ## Current self-run acceptance gap
 
+The source-case candidate `9ee0df3d1c49204c939555f462c43adf4d0a3a49`
+passed independent completion: 1,878 native and Linux tests each with 53
+documented optional skips, both package checks, Ruff/Pyright and 91 boundary
+tests, and all 45 protected checker fixtures without skips. The real solver
+case and protected CPython replay passed again; the clean head and all 227
+source/script/test hashes remained unchanged. Two independent reviews accepted
+the exact commit. PR #65's required hosted check passed in 12 seconds and merged
+as `e08a7f7fd28e285770ba7007089373bf0efb0d11`.
+
+A new explicit v2 policy and session
+`d8b813cbf14e4602b54180e2c6a3ade2` preserved the previous authorities. Its
+initial scoped clamp proof passed, and three specification-review cohorts
+accepted. The fourth exhausted three reviewed drafts: its final pair split
+accept/defer because the prompt did not establish continuity from an older
+`process.py` citation. Independent Git inspection found the cited revision was
+an ancestor and its source blob exactly matched the candidate. This is an
+evidence-context gap, not an observed source mismatch. The session stopped
+blocked after 19 jobs, before mandatory IVL checks, negative-control replay,
+final reviews or publication. It does not establish workflow readiness.
+
+The focused citation-continuity correction and renewed workflow evidence remain
+pending. No blocked decision is converted into acceptance.
+
+The correction supplies bounded path-specific ancestor and regular-file endpoint
+mode/blob evidence for structured historical citations and the existing explicit
+task-input revision format. It includes retained correction citations, associated
+unchanged records during source refresh, and complete candidate source; equality
+does not establish uninterrupted history or semantic correspondence. Independent
+test development passed 15 new regressions, including actual scheduled correction
+and reviewer jobs; selected positive/count regressions fail on the prior code.
+Existing source-context/citation feedback passed 21 tests. The combined new
+regression, boundary and configured static gate passed 107 tests; the fast gate
+and whitespace check also pass. Exact-commit reviews, completion gates and a
+renewed real workflow remain pending.
+
+Frozen citation candidate `a006c93783fe57479fd60f3ed51b481b2b757fb9`
+passed independent native and Linux completion (1,893 passed and 53 documented
+optional skips each), both package gates, Ruff, Pyright with the explicit
+candidate interpreter, complete 291-path inventory and all 45 protected fixtures
+without skips. The exact clean head and 228 source/script/test hashes matched
+before and after. An initial Pyright invocation selected the wrong interpreter
+and reported missing dependencies; its diagnostic log remains alongside the
+correct explicit-interpreter pass. Both independent reviews accepted the commit.
+
+Before another real run, generation guidance now recommends the supported
+structured revision citation for new local observations, preventing a fresh
+generator from choosing an unrecognized prose convention. Existing provenance
+remains unchanged. The final prompt candidate requires renewed exact-revision
+completion and real workflow evidence before readiness.
+
 The renewed real self-run from `cebafba` completed SCL, including substantive
 deadline/exception-cleanup corrections accepted by fresh reviewer pairs. The
 lockfile remained an explicit gap. Candidate
