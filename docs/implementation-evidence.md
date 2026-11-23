@@ -442,6 +442,28 @@ new policy; real Mentat publication and whole-workflow readiness remain pending.
 
 ## Current self-run acceptance gap
 
+Both independent reviews accepted frozen candidate
+`f8d5e616198bcd52434ee9619923731c496279e3`. Its full native and Linux gates each
+reported 1,983 passed, ten failed and 53 documented optional skips. All ten
+failures share an adapter-specific fixture that constructs publication proposals
+without the new source-stage precondition; they stop before their intended
+adapter and specification-staleness assertions. Read-only diagnosis found no
+production defect in those traces. The fixture correction must preserve every
+original assertion, while genuine source receipts and publication rejection
+remain exercised separately. Fresh committed-head review and completion remain
+pending; these failed runs do not establish readiness.
+
+The corrected fixture isolates only the new source-coverage validator as an
+adapter-test precondition. The entire adapter integration file plus the genuine
+source-receipt/forged-prompt publication workflow passed all 17 cases. Production
+code was unchanged; a fresh exact-head full gate remains required.
+
+At that same unchanged candidate, both package checks, fast/static checks and
+296-path FAS inventory passed. The dedicated protected checker passed all 45
+fixtures without skips. All 233 source, script and test hashes matched before and
+after; manifest SHA-256 was
+`45695d356b0659ee47fa308c549fb0f0a0fc9d4007a21ca9b80e53e5da4d61a6`.
+
 The bounded final-source implementation adds a current-head coverage plan,
 independent source-batch pairs, private exact-input manifests and aggregate
 review. A read-only preflight of the archived v6 candidate derived 65 obligations
