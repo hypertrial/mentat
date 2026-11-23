@@ -52,6 +52,14 @@ identity. Reviewers check the observed ancestor and relevant changed content;
 a versioned specification does not need to embed its own resulting commit hash.
 Execution results and approvals still bind to the exact candidate head and base.
 
+Review context prioritizes the complete sources needed to assess changed FAS
+mappings and source contracts, alongside mandatory specifications and the full
+proposal diff. A mapping is not accepted when its required source cannot be
+inspected within the supported context bounds; the proposal must be split or revised.
+Changed-record repository citations may use path objects or path strings with
+supported line anchors. Missing, unsafe or malformed local citations fail explicitly;
+HTTP(S) references are identified as uninspected external metadata.
+
 When work is stable, deferred, cancelled, or out of budget, the controller checkpoints. Resumption preserves attempt counts and fences old workers. Changed source or policy makes prior evidence stale; it must not be displayed as current assurance. Review material fixes again and rerun the required local gate at the final candidate revision.
 
 ## Direct Python source evidence

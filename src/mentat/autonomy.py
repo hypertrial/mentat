@@ -1269,6 +1269,16 @@ class Coordinator:
                     for ref in refs
                 ):
                     return False
+                old_claims = {
+                    claim["id"]: claim for claim in (prior or {}).get("claims", [])
+                    if set(claim.get("requirement_ids", [])) & set(refs)
+                }
+                new_claims = {
+                    claim["id"]: claim for claim in fas["claims"]
+                    if set(claim.get("requirement_ids", [])) & set(refs)
+                }
+                if old_claims != new_claims:
+                    return False
                 try:
                     raw = gitio.read_file(self.repo, parent, path)
                     if len(raw) > 240_000:
@@ -1290,6 +1300,19 @@ class Coordinator:
                 for surface in fas["surfaces"]
             ):
                 raise ValueError("unexamined source cannot be marked mapped")
+            old_claims = {claim["id"]: claim for claim in (prior or {}).get("claims", [])}
+            for claim in fas["claims"]:
+                contract = claim.get("formal_contract")
+                if not isinstance(contract, dict):
+                    continue
+                path = contract["path"]
+                old = old_claims.get(claim["id"])
+                refs = claim.get("requirement_ids", [])
+                if path not in included_paths and (
+                    old != claim
+                    or any(old_requirements.get(ref) != new_requirements.get(ref) for ref in refs)
+                ):
+                    raise ValueError("unexamined source cannot support a changed formal contract")
         if self.stop.is_set() or self.clock() >= deadline:
             raise ValueError("session ended")
         if staged:
@@ -1325,7 +1348,7 @@ class Coordinator:
     ) -> tuple[str, set[str], set[str], list[str]]:
         """Provide bounded committed source; unavailable content remains an explicit gap."""
         paths = [entry["path"] for entry in inventory(self.repo, revision)]
-
+        inventory_paths = set(paths)
         requested_targets: set[str] = set()
         target_set: set[str] = set()
 
@@ -1430,7 +1453,11 @@ class Coordinator:
                 raise ValueError(
                     f"required FAS unavailable or exceeds context capacity: {exc}"
                 ) from exc
-        reserved = len(json.dumps(index, ensure_ascii=True)) + len(json.dumps(patch_index, ensure_ascii=True)) + len(fas_sha256)
+        reserved = (
+            len(json.dumps(index, ensure_ascii=True))
+            + len(json.dumps(patch_index, ensure_ascii=True))
+            + len(fas_sha256)
+        )
         if diff is not None:
             reserved += len(json.dumps(diff, ensure_ascii=True))
         # Keep room for field names and omission metadata; the final bound is checked below.
@@ -1459,8 +1486,106 @@ class Coordinator:
                 raise ValueError(
                     f"required configuration or OpenSpec context unavailable or exceeds capacity: {path}: {exc}"
                 ) from exc
+        # A specification review must inspect the source underlying every new or
+        # revised mapping and claim. Compare with the cumulative review base so
+        # rejected drafts cannot lose this obligation on a later review round.
+        required_source: set[str] = set()
+        if job["payload"].get("kind") == "review_spec" and isinstance(proposal, dict):
+            baseline_paths = set(
+                git(
+                    self.repo, "ls-tree", "-r", "--name-only", proposal["parent"], "--", FAS_PATH
+                ).splitlines()
+            )
+            prior_fas = (
+                json.loads(gitio.read_file(self.repo, proposal["parent"], FAS_PATH))
+                if FAS_PATH in baseline_paths
+                else {}
+            )
+            current_fas = fas if FAS_PATH in included else {}
+            old_requirements = {r["id"]: r for r in prior_fas.get("requirements", [])}
+            changed_requirements = {
+                r["id"]
+                for r in current_fas.get("requirements", [])
+                if old_requirements.get(r["id"]) != r
+            }
+            old_claims = {c["id"]: c for c in prior_fas.get("claims", [])}
+            for claim in current_fas.get("claims", []):
+                if old_claims.get(claim["id"]) != claim:
+                    changed_requirements.update(claim.get("requirement_ids", []))
+            for record in [*current_fas.get("requirements", []), *current_fas.get("claims", [])]:
+                relevant = record.get("id") in changed_requirements or (
+                    "requirement_ids" in record
+                    and (
+                        old_claims.get(record["id"]) != record
+                        or changed_requirements.intersection(record["requirement_ids"])
+                    )
+                )
+                if not relevant:
+                    continue
+                contract = record.get("formal_contract")
+                if isinstance(contract, dict) and isinstance(contract.get("path"), str):
+                    required_source.add(contract["path"])
+                record_changed = (
+                    old_requirements.get(record["id"]) != record
+                    if "requirement_ids" not in record
+                    else old_claims.get(record["id"]) != record
+                )
+                if not record_changed:
+                    continue
+                citations = record.get("citations", [])
+                if not isinstance(citations, list):
+                    raise ValueError("invalid review citations; revise the specification proposal")
+                for citation in citations:
+                    if isinstance(citation, dict):
+                        citation = citation.get("path", citation.get("url"))
+                    if not isinstance(citation, str) or not citation:
+                        raise ValueError("invalid review citation; revise the specification proposal")
+                    if citation.startswith(("https://", "http://")):
+                        if not re.match(r"^https?://[^/\s?#]+(?:[/?#]|$)", citation) or any(
+                            char.isspace() for char in citation
+                        ):
+                            raise ValueError(
+                                "invalid external review citation; revise the specification proposal"
+                            )
+                        continue  # External metadata is not represented as inspected source.
+                    path = citation if citation in inventory_paths else re.sub(
+                        r"(?:#L\d+(?:-L?\d+)?|:\d+(?::\d+)?)$", "", citation
+                    )
+                    try:
+                        safe_relative_path(path)
+                    except ValueError as exc:
+                        raise ValueError(
+                            "unsafe review citation; revise the specification proposal"
+                        ) from exc
+                    required_source.add(path)
+            old_surfaces = {s["path"]: s for s in prior_fas.get("surfaces", [])}
+            for surface in current_fas.get("surfaces", []):
+                path = surface["path"]
+                if surface.get("status") == "mapped" and (
+                    old_surfaces.get(path) != surface
+                    or path in changed
+                    or changed_requirements.intersection(surface.get("requirement_ids", []))
+                ):
+                    required_source.add(path)
+            for path in sorted(required_source - set(included)):
+                try:
+                    safe_relative_path(path)
+                    raw = gitio.read_file(self.repo, revision, path)
+                    if len(raw) > 240_000:
+                        raise ValueError("required file exceeds 240000-byte limit")
+                    contents = raw.decode("utf-8")
+                    cost = len(json.dumps({path: contents}, ensure_ascii=True))
+                    if used + cost > 360_000 or used + cost + reserved > 490_000:
+                        raise ValueError("required context exceeds capacity")
+                    included[path] = contents
+                    used += cost
+                except (OSError, ValueError, UnicodeError) as exc:
+                    raise ValueError(
+                        f"required review source unavailable or exceeds capacity: {path}: {exc}; "
+                        "split or revise the specification proposal"
+                    ) from exc
         for path in paths:
-            if path == FAS_PATH or path in mandatory:
+            if path == FAS_PATH or path in mandatory or path in required_source:
                 continue
             try:
                 safe_relative_path(path)
@@ -1498,9 +1623,11 @@ class Coordinator:
                     raise ValueError("observed source revision is not a candidate ancestor")
                 context["observed_source_revision"] = observed
                 context["source_changes_since_observation"] = [
-                    path for path in git(
+                    path
+                    for path in git(
                         self.repo, "diff", "--name-only", "--no-renames", "-z", observed, revision
-                    ).split("\0") if path
+                    ).split("\0")
+                    if path
                 ]
             context["proposal_diff"] = diff
         encoded = json.dumps(context, ensure_ascii=True)
@@ -1547,7 +1674,7 @@ class Coordinator:
         if kind == "review_spec":
             return (
                 common
-                + "Review this incremental specification draft against the included source and proposal diff. The context revision and proposal_head identify the reviewed candidate; observed_source_revision is the generator input and proposal_base is the cumulative review baseline. An observation may cite an ancestor if the relevant file blobs or content and scope remain unchanged through the candidate; flag actual drift and defer when equivalence cannot be established from available evidence. source_changes_since_observation lists changed paths since the generator input when supplied. Never require a versioned document to cite its own resulting commit hash. Accept a defensible partial draft when omitted surfaces remain explicitly unexamined or gaps; do not require unsupported completeness. Reject fabricated mappings or weakened established requirements. Remaining batches and final verification remain required."
+                + "Review this incremental specification draft against the included source and proposal diff. Local citations identify repository paths (optionally with line anchors); HTTP(S) citations are external metadata, not inspected source. The context revision and proposal_head identify the reviewed candidate; observed_source_revision is the generator input and proposal_base is the cumulative review baseline. An observation may cite an ancestor if the relevant file blobs or content and scope remain unchanged through the candidate; flag actual drift and defer when equivalence cannot be established from available evidence. source_changes_since_observation lists changed paths since the generator input when supplied. Never require a versioned document to cite its own resulting commit hash. Accept a defensible partial draft when omitted surfaces remain explicitly unexamined or gaps; do not require unsupported completeness. Reject fabricated mappings or weakened established requirements. Remaining batches and final verification remain required."
             )
         if kind == "generate_verification":
             return (
