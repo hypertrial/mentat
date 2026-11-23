@@ -1,3 +1,4 @@
+import hashlib
 import json
 import subprocess
 import uuid
@@ -76,9 +77,13 @@ class Agent:
             "session_id": job["id"],
             "result": {
                 "decision": "accept",
-                "summary": "accepted",
+                "summary": json.dumps({
+                    "findings": "Inspected the supplied source and its mapped requirements.",
+                    "unresolved_dependencies": [],
+                }) if kind == "review_final_source" else "accepted",
                 "findings": [],
                 "verification_requests": [],
+                "requirements": [], "claims": [], "defects": [], "changes": [],
             },
         }
 
@@ -561,7 +566,14 @@ def test_agent_receives_committed_context_and_review_diff(repo, tmp_path):
             prompt = job["payload"]["prompt"]
             assert "SOURCE_CONTEXT_JSON:" in prompt
             context = json.loads(prompt.split("SOURCE_CONTEXT_JSON:\n", 1)[1])
-            assert "src.py" in context["files"]
+            if kind == "review_final_source":
+                for item in context["source_batch"]["obligations"]:
+                    if item["mode"] == "current-source":
+                        assert item["path"] in context["files"]
+            elif kind == "review_final" and context.get("source_coverage"):
+                assert context["source_coverage"]["batches"]
+            else:
+                assert "src.py" in context["files"]
             if kind.startswith("review_"):
                 assert context["proposal_diff"]
                 assert context["proposal_base"]
@@ -1184,7 +1196,8 @@ def test_interrupted_merge_reconciles_before_retry(repo, tmp_path, remote_state,
             },
         )
     key = coordinator._check_key(head, [], [], None)
-    proposal = {"head": head, "worktree": str(repo), "diff_digest": "diff"}
+    proposal = {"head": head, "parent": head, "worktree": str(repo),
+                "diff_digest": hashlib.sha256(b"").hexdigest()}
     reviews = [
         {
             "reviewer_id": reviewer,
@@ -1192,7 +1205,7 @@ def test_interrupted_merge_reconciles_before_retry(repo, tmp_path, remote_state,
             "status": "passed",
             "head": head,
             "base": head,
-            "diff_digest": "diff",
+            "diff_digest": proposal["diff_digest"],
             "review_cohort": "cohort",
             "check_evidence_id": "checked",
             "check_key": key,
@@ -1253,7 +1266,8 @@ def test_failed_publication_reconciles_existing_pr(repo, tmp_path):
         {"head": head, "base": head, "result": {"status": "failed", "error": "timeout"}},
     )
     key = coordinator._check_key(head, [], [], None)
-    proposal = {"head": head, "worktree": str(repo), "diff_digest": "diff"}
+    proposal = {"head": head, "parent": head, "worktree": str(repo),
+                "diff_digest": hashlib.sha256(b"").hexdigest()}
     reviews = [
         {
             "reviewer_id": reviewer,
@@ -1261,7 +1275,7 @@ def test_failed_publication_reconciles_existing_pr(repo, tmp_path):
             "status": "passed",
             "head": head,
             "base": head,
-            "diff_digest": "diff",
+            "diff_digest": proposal["diff_digest"],
             "review_cohort": "cohort",
             "check_evidence_id": "checked",
             "check_key": key,
@@ -3309,9 +3323,10 @@ def test_publication_rejects_incomplete_candidate_before_any_github_call(repo, t
     now = time.time()
     coordinator.session_id = store.new_session(str(repo), head, head, config, now, now + 60)
     key = coordinator._check_key(head, [], [], None)
-    proposal = {'head': head, 'worktree': str(repo), 'diff_digest': 'diff'}
+    proposal = {'head': head, 'parent': head, 'worktree': str(repo),
+                'diff_digest': hashlib.sha256(b'').hexdigest()}
     reviews = [{'reviewer_id': reviewer, 'author_id': 'author', 'status': 'passed',
-                'head': head, 'base': head, 'diff_digest': 'diff', 'review_cohort': 'cohort',
+                'head': head, 'base': head, 'diff_digest': proposal['diff_digest'], 'review_cohort': 'cohort',
                 'check_evidence_id': 'checked', 'check_key': key} for reviewer in ('one', 'two')]
     evidence = {'id': 'checked', 'check_key': key, 'head': head, 'base': head, 'checks': []}
     with pytest.raises(ValueError, match='surface inventory omits'):
@@ -3397,7 +3412,7 @@ def test_both_review_stages_receive_every_check_after_twelfth(repo, tmp_path):
 
 
 @pytest.mark.parametrize("revert_prior_mapping", [False, True])
-def test_chained_spec_reviews_reach_noop_verification_and_full_final_review(repo, tmp_path, revert_prior_mapping):
+def test_chained_spec_reviews_reach_noop_verification_and_full_final_review(repo, tmp_path, revert_prior_mapping, monkeypatch):
     requirements, paths = _review_capacity_repo(repo)
     if revert_prior_mapping:
         unicode_cas = repo / 'openspec/specs/é/spec.md'
@@ -3470,7 +3485,7 @@ def test_chained_spec_reviews_reach_noop_verification_and_full_final_review(repo
     # publication. Recreate that ordering using these real persisted cohorts.
     from copy import deepcopy
 
-    from mentat.autonomy import current_tool_identity
+    from mentat.autonomy import _diff, current_tool_identity
 
     store = Store(tmp_path / 'state/state.db')
     first_head = events[0]['payload']['head']
@@ -3491,18 +3506,24 @@ def test_chained_spec_reviews_reach_noop_verification_and_full_final_review(repo
                                         if e['kind'] == 'authority_pinned')
     coordinator.store = EarlierSnapshot()
     proposal = {'head': first_head, 'parent': snapshot['session']['base'],
-                'worktree': str(repo), 'diff_digest': 'final-diff'}
+                'worktree': str(repo), 'diff_digest': hashlib.sha256(
+                    _diff(repo, snapshot['session']['base'], first_head)).hexdigest()}
     coordinator._source_context(first_head, {'payload': {'kind': 'review_final',
         'proposal': proposal, 'check_summary': {}}})
     coordinator.store = store
     git(repo, 'checkout', '-q', '--detach', first_head)
     key = coordinator._check_key(first_head, [], [], None)
     evidence = {'id': 'check', 'head': first_head, 'base': snapshot['session']['base'],
-                'check_key': key, 'checks': []}
+                'check_key': key, 'status': 'passed', 'checks': []}
     reviews = [{'reviewer_id': reviewer, 'author_id': 'author', 'status': 'passed',
                 'head': first_head, 'base': snapshot['session']['base'],
-                'diff_digest': 'final-diff', 'review_cohort': 'final-cohort',
+                'diff_digest': proposal['diff_digest'], 'review_cohort': 'final-cohort',
                 'check_evidence_id': 'check', 'check_key': key} for reviewer in ('one', 'two')]
+    with pytest.raises(ValueError, match='specification|correspondence|ancestor|reconciliation'):
+        coordinator._review_composition(first_head)
+    # Isolate the older late-composition publication guard. The real source
+    # coverage gate and receipts are exercised independently in its workflow test.
+    monkeypatch.setattr(coordinator, '_final_source_coverage', lambda *args, **kwargs: {'batches': []})
     with pytest.raises(ValueError, match='specification|correspondence|ancestor|reconciliation'):
         coordinator._publish({'payload': {'proposal': proposal, 'reviews': reviews}}, evidence)
     assert not github_spy.published and not github_spy.merged
@@ -3519,16 +3540,18 @@ def test_chained_spec_reviews_reach_noop_verification_and_full_final_review(repo
         coordinator.store = LateSnapshot()
         git(repo, 'checkout', '-q', '--detach', candidate['head'])
         candidate_proposal = {'head': candidate['head'], 'parent': snapshot['session']['base'],
-                              'worktree': str(repo), 'diff_digest': 'later-final'}
+                              'worktree': str(repo), 'diff_digest': hashlib.sha256(
+                                  _diff(repo, snapshot['session']['base'], candidate['head'])).hexdigest()}
         coordinator._source_context(candidate['head'], {'payload': {'kind': 'review_final',
             'proposal': candidate_proposal, 'check_summary': {}}})
         late_ancestor['events'].append(first)
         key = coordinator._check_key(candidate['head'], [], [], None)
         later_evidence = {'id': 'later-check', 'head': candidate['head'],
-                          'base': snapshot['session']['base'], 'check_key': key, 'checks': []}
+                          'base': snapshot['session']['base'], 'check_key': key,
+                          'status': 'passed', 'checks': []}
         later_reviews = [{'reviewer_id': reviewer, 'author_id': 'author', 'status': 'passed',
             'head': candidate['head'], 'base': snapshot['session']['base'],
-            'diff_digest': 'later-final', 'review_cohort': 'later-cohort',
+            'diff_digest': candidate_proposal['diff_digest'], 'review_cohort': 'later-cohort',
             'check_evidence_id': 'later-check', 'check_key': key} for reviewer in ('one', 'two')]
         with pytest.raises(ValueError):
             coordinator._publish({'payload': {'proposal': candidate_proposal,

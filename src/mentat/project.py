@@ -34,6 +34,8 @@ PRESENTATION_MODULES = ("evidence_html", "claims_notion", "openspec")
 VERIFIER_MODULES = (
     "__init__",
     "autonomy",
+    "autonomy_final_review",
+    "autonomy_review_inputs",
     "autonomy_cli",
     "autonomy_policy",
     "autonomy_runtime",

@@ -289,8 +289,12 @@ class RecordingAgent:
                     {'path': row['path'], 'status': 'gap', 'requirement_ids': []}
                     for row in payload['surfaces']]}))
         return {'status': 'succeeded', 'session_id': job['id'], 'result': {
-            'decision': 'accept', 'summary': 'reviewed', 'findings': [],
-            'verification_requests': []}}
+            'decision': 'accept', 'summary': json.dumps({
+                'findings': 'Inspected the supplied source and its mapped requirements.',
+                'unresolved_dependencies': [],
+            }) if kind == 'review_final_source' else 'reviewed', 'findings': [],
+            'verification_requests': [], 'requirements': [], 'claims': [],
+            'defects': [], 'changes': []}}
 
 
 class RecordingGitHub:

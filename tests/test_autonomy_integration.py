@@ -74,6 +74,9 @@ def scenario(tmp_path, monkeypatch):
             return {"status": "succeeded", "returncode": 0, "revision": revision, "tools": {"python": "3.12"}}
 
     coordinator = Coordinator(repo, store, object(), Worker(), adapter, clock=lambda: 2)
+    # This fixture isolates GitHub adapter behavior; real source receipts and
+    # publication revalidation are exercised in test_autonomy_final_sources.py.
+    monkeypatch.setattr(coordinator, "_final_source_coverage", lambda *_args, **_kwargs: {"batches": []})
     coordinator.session_id = session
     coordinator.config = config
     coordinator.tool_identity = current_tool_identity()
