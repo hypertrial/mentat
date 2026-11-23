@@ -244,3 +244,115 @@ def test_refresh_includes_citations_from_unchanged_mapped_records(history, tmp_p
         assert item['status'] == 'unchanged'
         assert item['ancestor'] is True
         assert result['files'][path] == (repo / path).read_text()
+
+
+def test_rejected_surface_note_is_corrected_to_single_current_observation(tmp_path):
+    from copy import deepcopy
+
+    from test_autonomy import Agent, _valid_publication_spec, run
+    from test_autonomy import repo as repo_fixture
+
+    repo = repo_fixture.__wrapped__(tmp_path)
+    _valid_publication_spec(repo)
+    fas_path = repo / '.mentat/fas.json'
+    fas = json.loads(fas_path.read_text())
+    requirement_id = fas['requirements'][0]['id']
+    unrelated_claim = {'id': str(uuid.uuid4()), 'requirement_ids': [fas['requirements'][1]['id']],
+                       'statement': 'Unrelated observation', 'assumptions': [],
+                       'status': 'unattempted'}
+    fas['claims'].append(unrelated_claim)
+    fas_path.write_text(json.dumps(fas))
+    base = commit(repo, 'existing records')
+    git(repo, 'update-ref', 'refs/remotes/origin/main', base)
+    baseline = deepcopy(fas)
+    calls = []
+    correction_inputs = []
+
+    class SurfaceCorrectionAgent(Agent):
+        def run(self, repo, job, output, *, timeout_seconds):
+            payload = job['payload']
+            kind = payload['kind']
+            data = json.loads(payload['prompt'].split('SOURCE_CONTEXT_JSON:\n', 1)[1])
+            if kind == 'generate_spec':
+                prompt = payload['prompt']
+                assert 'cite exactly one task input revision' in prompt
+                assert 'Do not add a retrospective claim' in prompt
+                current = json.loads((repo / '.mentat/fas.json').read_text())
+                surface = next(row for row in current['surfaces'] if row['path'] == 'src.py')
+                task_input = git(repo, 'rev-parse', 'HEAD')
+                if payload.get('round') == 1:
+                    correction_inputs.append((task_input, deepcopy(current), data))
+                    surface['note'] = f'At task input revision {task_input}, value returns 1.'
+                else:
+                    surface.update(status='mapped', requirement_ids=[requirement_id],
+                                   note=f'At task input revision {task_input}, value returns 3.')
+                (repo / '.mentat/fas.json').write_text(json.dumps(current))
+                return {'status': 'succeeded', 'session_id': job['id'], 'result': {
+                    'decision': 'accept', 'summary': 'Observed source', 'findings': [],
+                    'verification_requests': []}}
+            result = super().run(repo, job, output, timeout_seconds=timeout_seconds)
+            if kind == 'review_spec':
+                calls.append((job['id'], payload, data))
+                if payload['proposal'].get('round') == 0:
+                    result['result']['decision'] = 'revise'
+                    result['result']['findings'] = [{'summary': 'Source returns 1, not 3.'}]
+            return result
+
+    snapshot, _, _ = run(repo, tmp_path, agent=SurfaceCorrectionAgent())
+    initial = [(job_id, payload, data) for job_id, payload, data in calls
+               if payload['proposal'].get('round') == 0]
+    final = [(job_id, payload, data) for job_id, payload, data in calls
+             if payload['proposal'].get('round') == 1]
+    assert len(initial) == len(final) == 2, snapshot
+    assert len({row[0] for row in final}) == 2
+    assert len(correction_inputs) == 1
+    observed, rejected_fas, generator_context = correction_inputs[0]
+    rejected_head = initial[0][1]['proposal']['head']
+    assert observed == rejected_head == generator_context['revision']
+    rejected = json.loads(git(repo, 'show', f'{rejected_head}:.mentat/fas.json'))
+    rejected_surface = next(row for row in rejected['surfaces'] if row['path'] == 'src.py')
+    assert rejected_surface['note'].endswith('value returns 3.')
+    assert rejected_fas == rejected
+    source_blob = git(repo, 'rev-parse', f'{observed}:src.py')
+    for _, payload, data in final:
+        candidate = payload['proposal']['head']
+        assert data['revision'] == data['proposal_head'] == candidate
+        assert data['observed_source_revision'] == observed
+        assert data['proposal_base'] == base
+        assert data['files']['src.py'] == 'def value(): return 1\n'
+        current = json.loads(data['files']['.mentat/fas.json'])
+        surface = next(row for row in current['surfaces'] if row['path'] == 'src.py')
+        assert surface['note'] == f'At task input revision {observed}, value returns 1.'
+        assert surface['note'].count('task input revision') == 1
+        assert surface['requirement_ids'] == [requirement_id]
+        assert current['requirements'] == baseline['requirements']
+        assert current['claims'] == baseline['claims']
+        assert [row for row in current['surfaces'] if row['path'] != 'src.py'] == [
+            row for row in baseline['surfaces'] if row['path'] != 'src.py']
+        assert 'value returns 1.' in data['proposal_diff']
+        assert 'value returns 3.' not in data['proposal_diff']
+        item = next(row for row in data['cited_source_continuity'] if row['path'] == 'src.py')
+        assert item['status'] == 'unchanged' and item['ancestor'] is True
+        assert item['cited_revision'] == observed and item['candidate_revision'] == candidate
+        assert item['cited_blob'] == item['candidate_blob'] == source_blob
+        assert item['cited_mode'] == item['candidate_mode'] == '100644'
+
+
+def test_surface_note_with_two_real_ancestor_revisions_remains_unverified(history, tmp_path):
+    repo, fas, base, _ = history
+    fas['surfaces'].append({'path': 'src.py', 'status': 'mapped', 'requirement_ids': [],
+                            'note': f'At task input revision {base}, value returns 3.'})
+    write_fas(repo, fas)
+    rejected = commit(repo, 'rejected overbroad note')
+    fas['surfaces'][0]['note'] = (
+        f'At task input revision {rejected}, value returns 1; '
+        f'the prior note at task input revision {base} was incorrect.'
+    )
+    write_fas(repo, fas)
+    head = commit(repo, 'ambiguous retrospective correction')
+    data = context(repo, tmp_path, head, review_payload(base, rejected))
+    assert data['files']['src.py'] == 'def value(): return 1\n'
+    item = next(row for row in data['cited_source_continuity'] if row['path'] == 'src.py')
+    assert item['status'] == 'unverified'
+    assert item['cited_revision'] is None
+    assert item['ancestor'] is None
