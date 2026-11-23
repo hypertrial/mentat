@@ -1706,6 +1706,14 @@
       "reason": "Awaiting independently reviewed source correspondence."
     },
     {
+      "path": "tests/test_autonomy_citation_continuity.py",
+      "status": "mapped",
+      "requirement_ids": [
+        "dda11903-8c6a-5849-8fc3-cbedfcfd3ab2"
+      ],
+      "note": "Regression coverage for candidate-bound historical source citation ancestry, endpoint modes/blobs, independent review context and explicit provenance gaps; test mapping is not a formal proof."
+    },
+    {
       "path": "tests/test_autonomy_cli.py",
       "status": "gap",
       "requirement_ids": [],
