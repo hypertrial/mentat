@@ -1725,6 +1725,15 @@
       "requirement_ids": []
     },
     {
+      "path": "tests/test_autonomy_context_budget.py",
+      "status": "mapped",
+      "requirement_ids": [
+        "dda11903-8c6a-5849-8fc3-cbedfcfd3ab2",
+        "ce55ac49-b6d5-5469-833f-b5262a895ea1"
+      ],
+      "note": "Regression coverage for bounded complete review context, explicit optional-source omissions and mandatory evidence preservation; this mapping is not a formal proof."
+    },
+    {
       "path": "tests/test_autonomy_integration.py",
       "status": "gap",
       "requirement_ids": [],

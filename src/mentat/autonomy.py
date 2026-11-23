@@ -2604,6 +2604,8 @@ class Coordinator:
         reserved += len(json.dumps(cited_continuity, ensure_ascii=True)) + 64
         if used + reserved > 490_000:
             raise ReviewContextCapacity("cited source continuity exceeds context capacity", required_source)
+        optional_files: list[str] = []
+        cited_paths = {path for path, _, _ in cited_references}
         for path in paths:
             if path == FAS_PATH or path in mandatory or path in required_source:
                 continue
@@ -2620,18 +2622,10 @@ class Coordinator:
                     raise ValueError("context budget exhausted")
                 included[path] = contents
                 used += cost
+                if path not in changed and path not in cited_paths:
+                    optional_files.append(path)
             except (OSError, ValueError, UnicodeError) as exc:
                 omitted.append({"path": path, "reason": str(exc)[:200]})
-        if requested_targets and not (requested_targets & set(included)):
-            target_omissions = [item for item in omitted if item["path"] in requested_targets]
-            if all(item["reason"] in {
-                "context budget exhausted", "requires targeted context",
-                "file exceeds supported 240000-byte limit",
-            } for item in target_omissions):
-                raise ReviewContextCapacity(
-                    "targeted source context cannot make progress within capacity", required_source
-                )
-            raise ValueError("targeted source context cannot make progress: source unavailable")
         context = {"revision": revision, "files": included, "omitted": omitted}
         if cited_continuity:
             context["cited_source_continuity"] = cited_continuity
@@ -2654,8 +2648,6 @@ class Coordinator:
             context["fas_sha256"] = fas_sha256
             context["patch_record_digest_index"] = patch_index
         if isinstance(proposal, dict):
-            if changed & {item["path"] for item in omitted}:
-                raise ValueError("review cannot inspect a changed file")
             context["proposal_base"] = proposal["parent"]
             context["proposal_head"] = revision
             observed = proposal.get("observed_source_revision")
@@ -2679,6 +2671,39 @@ class Coordinator:
                 )
             context["proposal_diff"] = diff
         encoded = json.dumps(context, ensure_ascii=True)
+        encoded_size = len(encoded)
+        included_targets = len(requested_targets & set(included))
+        # Late metadata (especially the complete omission list) is not known
+        # when optional files are admitted. Keep all mandatory evidence and
+        # evict only optional contents in deterministic reverse priority order.
+        for path in reversed(optional_files):
+            if encoded_size <= 500_000:
+                break
+            if path in requested_targets and included_targets == 1:
+                continue
+            file_size = len(json.dumps({path: included[path]}, ensure_ascii=True))
+            removal = file_size if len(included) > 1 else file_size - 2
+            omission = {"path": path, "reason": "context budget exhausted"}
+            addition = len(json.dumps(omission, ensure_ascii=True)) + (2 if omitted else 0)
+            del included[path]
+            omitted.append(omission)
+            encoded_size += addition - removal
+            if path in requested_targets:
+                included_targets -= 1
+        # Check the actual serialization even if the incremental accounting is wrong.
+        encoded = json.dumps(context, ensure_ascii=True)
+        if requested_targets and not (requested_targets & set(included)):
+            target_omissions = [item for item in omitted if item["path"] in requested_targets]
+            if all(item["reason"] in {
+                "context budget exhausted", "requires targeted context",
+                "file exceeds supported 240000-byte limit",
+            } for item in target_omissions):
+                raise ReviewContextCapacity(
+                    "targeted source context cannot make progress within capacity", required_source
+                )
+            raise ValueError("targeted source context cannot make progress: source unavailable")
+        if isinstance(proposal, dict) and changed & {item["path"] for item in omitted}:
+            raise ValueError("review cannot inspect a changed file")
         if len(encoded) > 500_000:
             if FAS_PATH in included:
                 raise ReviewContextCapacity(

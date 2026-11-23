@@ -442,6 +442,63 @@ new policy; real Mentat publication and whole-workflow readiness remain pending.
 
 ## Current self-run acceptance gap
 
+The final citation candidate `d22041b1b2811b6541177bea2e95baa61eca5694`
+passed independent completion: native and Linux each 1,893 passed with 53
+documented optional skips, both package gates, Ruff/Pyright, complete 291-path
+inventory and all 45 protected fixtures without skips. Its clean head and 228
+source/script/test hashes remained unchanged. Both independent reviews accepted;
+PR #66's hosted check passed in nine seconds and merged as
+`979363c961621039e4ef44aed0854fd76e3f7822`.
+
+Fresh session `827511ea83cb40dca8d9bf2c16845109` completed eleven accepted
+SCL cohorts. Reviewers used actual cited-revision ancestry and matching endpoint
+blob evidence. Candidate `fe712d27a3946f500c38d8799ca48b2af0a97679`
+passed the configured Linux suite (1,893 passed, 53 documented skips), packaging
+and all 45 protected fixtures without skips. Its positive clamp check had a
+satisfiable precondition and unsatisfiable violation query. The separate negative
+control produced the actual integer witness `value=1, lower=-1, upper=0`;
+protected CPython 3.12.13 reproduced true precondition, false postcondition and a
+violation with matching candidate/source/blob/evidence identity. Both independent
+verification reviewers accepted this scoped evidence.
+
+Both final-review jobs exhausted three attempts before a reviewer could run:
+their serialized context exceeded its fixed bound. Read-only reproduction from a
+database backup measured 511,588 characters, including 28,308 characters of
+omission descriptors that the reservation estimate missed. More than 200,000
+characters were optional source; complete mandatory material fits. The session
+ended blocked without final acceptance or publication. This is not workflow
+readiness, and an exhausted job status is not an approval. A bounded optional
+source eviction fix, independent completion and renewed actual workflow remain
+pending.
+
+The bounded-context correction retains every mandatory item and evicts only
+explicitly tracked optional source contents with omission/frontier accounting.
+Disposable reconstruction of both actual saved final-review payloads succeeds
+at 482,850 characters, preserving the complete cumulative diff, all eleven
+validated cohorts, full FAS/configuration, trusted verifier and positive/negative
+source targets. No agents or review decisions were created in the old session.
+Four new regressions pass, including the old capacity failure, true mandatory
+overflow, paired final-review workflow and retained targeted-source progress
+with an accurate omission frontier. The fast gate and 92 boundary/static checks
+pass. Exact-revision independent review and completion remain pending.
+
+Development candidate `abb248f4a9025e04c9ba2ceef25757ccb2732cac`
+passed native and Linux suites (1,897 passed, 53 documented optional skips each),
+both package checks, Ruff/Pyright, complete 292-path inventory and all 45 protected
+fixtures without skips. The clean head and all 229 source/script/test hashes
+remained unchanged. Code review accepted its evidence-preservation logic, but
+independent security review identified repeated full-context serialization as an
+availability issue. These are development gate results, not final acceptance.
+The follow-up uses exact linear size accounting and incrementally maintained
+target counts, with an actual final serialization and unchanged capacity guard.
+Six focused tests now pass, including 400 tiny files with escaped Unicode in
+both fitting and genuine-overflow contexts. They permit at most two complete
+context serializations; an isolated prelinear implementation performed 402 and
+failed the regression. Both saved real review inputs still reconstruct at
+482,850 characters with all mandatory content. Existing source-context/citation
+feedback passed 21 tests. The fast gate, 92 boundary/static checks and whitespace
+check pass. Exact-commit independent review and final completion remain pending.
+
 The source-case candidate `9ee0df3d1c49204c939555f462c43adf4d0a3a49`
 passed independent completion: 1,878 native and Linux tests each with 53
 documented optional skips, both package checks, Ruff/Pyright and 91 boundary
