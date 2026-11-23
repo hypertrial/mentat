@@ -7,6 +7,21 @@ uv sync --locked --extra polaris
 scripts/verify
 ```
 
+Every PR and push also requires the real protected Linux checker gate on the
+dedicated local worker. After provisioning that worker as described in
+[the checker setup](docs/proofs.md#environment-and-contract), run this command
+inside its trusted verification environment:
+
+```sh
+scripts/verify-worker
+```
+
+This gate sets `MENTAT_REQUIRE_PROOF_CHECKER=1`, runs the real checker fixtures,
+and rejects skipped tests. A macOS run of `scripts/verify` does not replace it.
+If a worker or prerequisite is unavailable, record the check as incomplete and
+leave the PR unmerged. Include both local gate results and their exact revision
+in the PR. The full no-skip upstream replay matrix remains a pre-release gate.
+
 `scripts/verify` runs ruff, the claims check, then the test suite. Tests run in parallel by default (`addopts` in `pyproject.toml`); add `-n 0` to a `pytest` command for a serial run.
 
 The gate also lints with ruff's bugbear (`B`) and pyupgrade (`UP`) groups and type-checks `src/mentat` with pyright in basic mode (`showcases/` is excluded for now). `tests/test_static_checks.py` runs pyright once; pyright and its Node engine come from the `dev` group (`pyright[nodejs]`), so the check runs offline after `uv sync`. Keep `# noqa` and `# pyright: ignore[rule]` comments narrow, naming the rule, with a short reason. Pyright reports stale ignores as errors.

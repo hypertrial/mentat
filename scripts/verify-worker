@@ -1,0 +1,16 @@
+#!/bin/sh
+# Run on the dedicated Linux worker; absence of the real checker is a failure.
+set -eu
+cd "$(dirname "$0")/.."
+[ "$(uname -s)" = Linux ] || { echo 'The required checker gate needs Linux' >&2; exit 2; }
+worker_log=$(mktemp)
+trap 'rm -f "$worker_log"' EXIT HUP INT TERM
+if ! MENTAT_REQUIRE_PROOF_CHECKER=1 uv run --locked --no-sync pytest -q -rs -n 0 tests/test_proof_checker.py >"$worker_log" 2>&1; then
+  cat "$worker_log"
+  exit 1
+fi
+cat "$worker_log"
+if grep -q '^SKIPPED ' "$worker_log"; then
+  echo 'A required worker test was skipped' >&2
+  exit 1
+fi

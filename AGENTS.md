@@ -20,6 +20,9 @@ Development feedback: `scripts/verify-fast`
 
 Completion gate: `scripts/verify`
 
+Required Linux gate: `scripts/verify-worker` on the dedicated local worker, with
+no skipped checker fixtures. A passing macOS suite does not replace this gate.
+
 A change is not complete while required verification is failing or unrun. Record why if a required command cannot run.
 
 ## Evidence and handoffs
