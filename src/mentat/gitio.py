@@ -31,7 +31,7 @@ _MAX_COMMIT = 1_000_000
 _MODE = re.compile(rb"[0-7]{5,6}")
 
 
-def _git_env() -> dict[str, str]:
+def git_env() -> dict[str, str]:
     # Ignore caller-provided Git environment that can redirect the repository or inject config.
     return {
         **{k: v for k, v in os.environ.items() if not k.startswith("GIT_")},
@@ -66,7 +66,7 @@ def run(
                 command,
                 output_limit=limit,
                 timeout=timeout,
-                env=_git_env(),
+                env=git_env(),
                 stdin=source,
                 stderr=False,
             )
@@ -109,7 +109,7 @@ def ls_tree(
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
-                env=_git_env(),
+                env=git_env(),
             ) as child,
             selectors.DefaultSelector() as selector,
         ):
