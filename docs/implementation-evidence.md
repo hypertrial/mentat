@@ -301,3 +301,35 @@ native case pass. The critical section is per coordinator; the normal workspace
 lock excludes another controller using the same store. Independent state roots
 or external Git administration remain outside that lock. Renewed independent
 reviews and exact-revision full native/Linux gates remain pending.
+
+The exact registration candidate `63f5121647abed4ade0e9daf714b9df86adee558`
+subsequently passed both full suites: 1,791 passed and 53 documented optional
+skips on each platform. Native/Linux package checks and static analysis passed;
+the protected checker passed all 45 fixtures without skips. The independent
+verifier confirmed 226 unchanged before/after hashes and a clean exact head.
+Two independent reviews accepted the commit. PR #62's hosted syntax/whitespace
+check passed in seven seconds; the guarded merge produced
+`c3bbb47399e5ac3f5987194a8205d5007748057f`. This is code acceptance, with the
+checkpoint lifecycle and renewed real self-run still required for readiness.
+
+## Preserving accepted checkpoints during repairs
+
+The real serialized regression showed that a prequeued repair used the immutable
+session head and created a sibling of an accepted SCL mapping. The publication
+guard correctly blocked its loss. First-round investigation now selects a fully
+validated compatible accepted checkpoint at execution, preserving original source
+evidence, reproduction, entailment and domain-adjudication identities. The actual
+prompt, source context and observed generation parent identify the selected head.
+Whole application/caller trees, modes, gitlinks and CAS context must be unchanged;
+established requirements and their linked claim/contract component are compared
+exactly. Incompatibility is an explicit bounded gap before agents or remote calls.
+Retries retain the repaired head, and the existing publication guard fences later
+accepted work.
+
+At `2741cc6aff6740aafe49e5bc342b4bfa7156c89a`, both affected autonomy modules
+passed all 159 tests. Eleven real-review compatibility cases and the actual
+promoted repair/retry exercise source, caller, Unicode, mode, CAS, requirement,
+contract, forged-review and incomparable-checkpoint boundaries. Two independent
+reviews accepted this scoped change. Rebase onto the PR #62 merge preserved the
+exact production and test SHA-256 values. Independent full exact-revision
+completion and renewed real workflow evidence remain pending.
