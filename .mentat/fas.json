@@ -1,0 +1,2009 @@
+{
+  "schema_version": 1,
+  "requirements": [
+    {
+      "id": "b4085f53-5591-5dbf-8718-d21877944bf5",
+      "area": "product",
+      "statement": "Mentat operates SCL, IVL, and IIL autonomously during an active session; optional human feedback never gates a loop transition.",
+      "origin": "intended",
+      "spec_path": "openspec/specs/autonomous-assurance/spec.md",
+      "citations": [
+        {
+          "path": "docs/vision.md",
+          "source": "approved product baseline, 2026-11-23"
+        }
+      ],
+      "status": "unattempted"
+    },
+    {
+      "id": "d86b4556-1832-529d-be52-8412a2bcdc95",
+      "area": "product",
+      "statement": "Application changes serve recorded intended behavior. Verification does not become an application runtime dependency or justify a rewrite solely for easier proof.",
+      "origin": "intended",
+      "spec_path": "openspec/specs/autonomous-assurance/spec.md",
+      "citations": [
+        {
+          "path": "docs/vision.md",
+          "source": "approved product baseline, 2026-11-23"
+        }
+      ],
+      "status": "unattempted"
+    },
+    {
+      "id": "3d7c49cc-e290-5e74-94d8-016ba4ce4b5e",
+      "area": "functional",
+      "statement": "SCL maintains complete OpenSpec CAS across all six areas and distinguishes observed, intended, inferred, and uncertain requirements.",
+      "origin": "intended",
+      "spec_path": "openspec/specs/autonomous-assurance/spec.md",
+      "citations": [
+        {
+          "path": "docs/vision.md",
+          "source": "approved product baseline, 2026-11-23"
+        }
+      ],
+      "status": "unattempted"
+    },
+    {
+      "id": "c7ddc910-3dec-59a4-af95-4a62094bd503",
+      "area": "functional",
+      "statement": "FAS records stable atomic claims, formal meaning, preconditions, assumptions, implementation links, and explicit unformalized or unsupported gaps.",
+      "origin": "intended",
+      "spec_path": "openspec/specs/autonomous-assurance/spec.md",
+      "citations": [
+        {
+          "path": "docs/vision.md",
+          "source": "approved product baseline, 2026-11-23"
+        }
+      ],
+      "status": "unattempted"
+    },
+    {
+      "id": "2752c9c0-b068-5aa5-9337-84a64a08478d",
+      "area": "functional",
+      "statement": "Every loop uses separate generator and discriminator sessions. Authors cannot independently review their own artifacts; material fixes require renewed review.",
+      "origin": "intended",
+      "spec_path": "openspec/specs/autonomous-assurance/spec.md",
+      "citations": [
+        {
+          "path": "docs/vision.md",
+          "source": "approved product baseline, 2026-11-23"
+        }
+      ],
+      "status": "unattempted"
+    },
+    {
+      "id": "80c41572-1639-5ca6-99d9-538bb20e1de5",
+      "area": "functional",
+      "statement": "IVL executes and scrutinizes formal obligations and implementation checks independently; a failed proof attempt is unresolved rather than an established application defect.",
+      "origin": "intended",
+      "spec_path": "openspec/specs/autonomous-assurance/spec.md",
+      "citations": [
+        {
+          "path": "docs/vision.md",
+          "source": "approved product baseline, 2026-11-23"
+        }
+      ],
+      "status": "unattempted"
+    },
+    {
+      "id": "f968da79-9b96-54e6-b84c-87f408302708",
+      "area": "functional",
+      "statement": "IIL fixes only independently adjudicated, reproduced violations of established requirements, then refreshes SCL and IVL and preserves regression obligations.",
+      "origin": "intended",
+      "spec_path": "openspec/specs/autonomous-assurance/spec.md",
+      "citations": [
+        {
+          "path": "docs/vision.md",
+          "source": "approved product baseline, 2026-11-23"
+        }
+      ],
+      "status": "unattempted"
+    },
+    {
+      "id": "f6d43cfc-273d-5487-b265-310f1e5b2619",
+      "area": "functional",
+      "statement": "The live UI presents readable CAS, FAS, loop activity, decisions, findings, evidence, and revision changes; optional feedback reaches subsequent iterations.",
+      "origin": "intended",
+      "spec_path": "openspec/specs/autonomous-assurance/spec.md",
+      "citations": [
+        {
+          "path": "docs/vision.md",
+          "source": "approved product baseline, 2026-11-23"
+        }
+      ],
+      "status": "unattempted"
+    },
+    {
+      "id": "ce55ac49-b6d5-5469-833f-b5262a895ea1",
+      "area": "nonfunctional",
+      "statement": "Sessions run at most two hours, three agents concurrently, and three unsuccessful rounds per unchanged item, preserving durable limits across resume.",
+      "origin": "intended",
+      "spec_path": "openspec/specs/autonomous-assurance/spec.md",
+      "citations": [
+        {
+          "path": "docs/vision.md",
+          "source": "approved product baseline, 2026-11-23"
+        }
+      ],
+      "status": "unattempted"
+    },
+    {
+      "id": "abbaf6b2-d9d1-5f95-9cc2-74e1783cd35f",
+      "area": "nonfunctional",
+      "statement": "Generated application and proof execution is bounded in a dedicated Linux environment without host mounts, controller credentials, or merge authority.",
+      "origin": "intended",
+      "spec_path": "openspec/specs/autonomous-assurance/spec.md",
+      "citations": [
+        {
+          "path": "docs/vision.md",
+          "source": "approved product baseline, 2026-11-23"
+        }
+      ],
+      "status": "unattempted"
+    },
+    {
+      "id": "cca768da-b2a5-5cfd-8ad0-738c9e69de96",
+      "area": "nonfunctional",
+      "statement": "Model results, conditional source proofs, empirical checks, inconclusive outcomes, unsupported scope, stale evidence, and unattempted work remain distinguishable.",
+      "origin": "intended",
+      "spec_path": "openspec/specs/autonomous-assurance/spec.md",
+      "citations": [
+        {
+          "path": "docs/vision.md",
+          "source": "approved product baseline, 2026-11-23"
+        }
+      ],
+      "status": "unattempted"
+    },
+    {
+      "id": "a1886d10-0091-5825-891d-1b2a18e4b997",
+      "area": "architecture",
+      "statement": "The application, repository OpenSpec and FAS, verification sidecar, and evidence descriptors evolve together while verification tooling remains operationally independent.",
+      "origin": "intended",
+      "spec_path": "openspec/specs/autonomous-assurance/spec.md",
+      "citations": [
+        {
+          "path": "docs/vision.md",
+          "source": "approved product baseline, 2026-11-23"
+        }
+      ],
+      "status": "unattempted"
+    },
+    {
+      "id": "d6ad5546-1d76-5e3c-a9b7-320b2c4f4acc",
+      "area": "architecture",
+      "statement": "A trusted local session controller checkpoints on stability, cancellation, or exhaustion and resumes without duplicate work; all agents use GPT-6.1 Terra at high effort.",
+      "origin": "intended",
+      "spec_path": "openspec/specs/autonomous-assurance/spec.md",
+      "citations": [
+        {
+          "path": "docs/vision.md",
+          "source": "approved product baseline, 2026-11-23"
+        }
+      ],
+      "status": "unattempted"
+    },
+    {
+      "id": "dda11903-8c6a-5849-8fc3-cbedfcfd3ab2",
+      "area": "data-api",
+      "statement": "Every result binds the exact code, specification, assumptions, method, translator, tools, and environment; relevant changes invalidate dependent current assurance.",
+      "origin": "intended",
+      "spec_path": "openspec/specs/autonomous-assurance/spec.md",
+      "citations": [
+        {
+          "path": "docs/vision.md",
+          "source": "approved product baseline, 2026-11-23"
+        }
+      ],
+      "status": "unattempted"
+    },
+    {
+      "id": "f5ccc5ca-7707-59bf-88ff-dc27170ba8fa",
+      "area": "data-api",
+      "statement": "Persistent UUID identifiers survive requirement edits and preserve explicit renames, splits, merges, supersession, and evidence history.",
+      "origin": "intended",
+      "spec_path": "openspec/specs/autonomous-assurance/spec.md",
+      "citations": [
+        {
+          "path": "docs/vision.md",
+          "source": "approved product baseline, 2026-11-23"
+        }
+      ],
+      "status": "unattempted"
+    },
+    {
+      "id": "4891d2bd-4717-540b-8d90-a0e92b078cd6",
+      "area": "acceptance",
+      "statement": "Substantial tests, browser checks, proofs, required worker fixtures, and packaging run locally. GitHub CI performs only syntax and whitespace checks.",
+      "origin": "intended",
+      "spec_path": "openspec/specs/autonomous-assurance/spec.md",
+      "citations": [
+        {
+          "path": "docs/vision.md",
+          "source": "approved product baseline, 2026-11-23"
+        }
+      ],
+      "status": "unattempted"
+    },
+    {
+      "id": "72ae2fdf-994e-5ad4-b214-e0e65fa1a39f",
+      "area": "acceptance",
+      "statement": "Existing SSH and gh authentication advance qualifying PRs only during active sessions, with exact-revision local checks, independent reviews, enforced branch rules, and two reviews for sensitive changes.",
+      "origin": "intended",
+      "spec_path": "openspec/specs/autonomous-assurance/spec.md",
+      "citations": [
+        {
+          "path": "docs/vision.md",
+          "source": "approved product baseline, 2026-11-23"
+        }
+      ],
+      "status": "unattempted"
+    },
+    {
+      "id": "2bcfa241-162e-5b32-8b37-79deae3acd37",
+      "area": "acceptance",
+      "statement": "The committed clamp fixture satisfies its declared bounds for exact integer inputs with lower no greater than upper; a faulty candidate produces a replayable counterexample.",
+      "origin": "intended",
+      "spec_path": "openspec/specs/autonomous-assurance/spec.md",
+      "citations": [
+        {
+          "path": "docs/vision.md",
+          "source": "approved product baseline, 2026-11-23"
+        }
+      ],
+      "status": "unattempted"
+    },
+    {
+      "id": "32c5a5b9-002e-5163-9ded-6a55f9e46250",
+      "area": "acceptance",
+      "statement": "Titanic onboarding begins only after complete Mentat acceptance scenarios, real required worker checks, independent review, and a real Mentat self-run.",
+      "origin": "intended",
+      "spec_path": "openspec/specs/autonomous-assurance/spec.md",
+      "citations": [
+        {
+          "path": "docs/vision.md",
+          "source": "approved product baseline, 2026-11-23"
+        }
+      ],
+      "status": "unattempted"
+    }
+  ],
+  "claims": [
+    {
+      "id": "53944563-954b-5d78-a51b-7401f3eca452",
+      "requirement_ids": [
+        "2bcfa241-162e-5b32-8b37-79deae3acd37"
+      ],
+      "statement": "The supported clamp fixture preserves its integer range contract.",
+      "formal_meaning": "For exact integers value, lower, upper with lower <= upper, clamp is bounded and returns the appropriate boundary or unchanged value.",
+      "assumptions": [
+        "The audited source translator and selected Python semantics are trusted.",
+        "The selected function is called unmodified with exact integer inputs; callers are outside this obligation."
+      ],
+      "status": "unattempted",
+      "formal_contract": {
+        "path": "examples/source-proof/clamp.py",
+        "function": "clamp",
+        "inputs": {
+          "value": "int",
+          "lower": "int",
+          "upper": "int"
+        },
+        "requires": "lower <= upper",
+        "ensures": "lower <= result and result <= upper and ((lower <= value and value <= upper) == (result == value)) and (value >= lower or result == lower) and (value <= upper or result == upper)"
+      }
+    }
+  ],
+  "surfaces": [
+    {
+      "path": ".gitattributes",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": ".github/workflows/ci.yml",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": ".gitignore",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": ".mentat/acceptance-counterexample.smt2",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": ".mentat/acceptance.smt2",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": ".mentat/claims.md",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": ".mentat/contract.json",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": ".mentat/fas.json",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": ".mentat/selfcheck.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": ".mentat/workspace.json",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": ".python-version",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "AGENTS.md",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "CHANGELOG.md",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "CONTRIBUTING.md",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "LICENSE",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "PROJECT_AGENT.md",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "README.md",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "SECURITY.md",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "docs/autonomy.md",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "docs/contracts.md",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "docs/iceberg-go.md",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "docs/implementation-evidence.md",
+      "status": "gap",
+      "requirement_ids": []
+    },
+    {
+      "path": "docs/implementation-plan.md",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "docs/nanoid.md",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "docs/nemo.md",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "docs/polaris.md",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "docs/proofs.md",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "docs/vision.md",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "examples/iceberg-go/LICENSE",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "examples/iceberg-go/NOTICE",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "examples/iceberg-go/contract/Model.lean",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "examples/iceberg-go/contract/check.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "examples/iceberg-go/contract/contract.json",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "examples/iceberg-go/contract/ideal-counterexample.smt2",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "examples/iceberg-go/contract/ideal.smt2",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "examples/iceberg-go/contract/probe_test.go",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "examples/iceberg-go/prepare.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "examples/iceberg-go/setup.sh",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "examples/iceberg-go/summarize.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "examples/nanoid/contract/check-cli.mjs",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "examples/nanoid/contract/check-native.mjs",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "examples/nanoid/contract/contract.json",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "examples/nanoid/contract/ideal-counterexample.smt2",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "examples/nanoid/contract/ideal.smt2",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "examples/nanoid/setup.sh",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "examples/nemo/Dockerfile",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "examples/nemo/contract/cases.json",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "examples/nemo/contract/contract.json",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "examples/nemo/contract/ideal-counterexample.smt2",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "examples/nemo/contract/ideal.smt2",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "examples/nemo/contract/mutant.smt2",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "examples/nemo/contract/replay.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "examples/nemo/prepare-image.sh",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "examples/nemo/setup.sh",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "examples/python-src/create.sh",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "examples/quickstart/create.sh",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "examples/source-proof/clamp.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "examples/source-proof/contract.json",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "openspec/specs/autonomous-assurance/spec.md",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "pyproject.toml",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "scripts/benchmark_openspec.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "scripts/check-autonomy-package",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "scripts/check-release-artifacts.sh",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "scripts/generate_record_fixtures.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "scripts/install-proof-checker",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "scripts/profile_runtime.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "scripts/provision-autonomy-worker",
+      "status": "gap",
+      "requirement_ids": []
+    },
+    {
+      "path": "scripts/record-fixtures",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "scripts/smoke_runtime.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "scripts/verify",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "scripts/verify-fast",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "scripts/verify-release",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "scripts/verify-worker",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "src/mentat/__init__.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "src/mentat/autonomy.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "src/mentat/autonomy_cli.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "src/mentat/autonomy_policy.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "src/mentat/autonomy_runtime.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "src/mentat/autonomy_state.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "src/mentat/autonomy_ui.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "src/mentat/autonomy_worker.py",
+      "status": "gap",
+      "requirement_ids": []
+    },
+    {
+      "path": "src/mentat/canonical.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "src/mentat/claims.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "src/mentat/claims_notion.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "src/mentat/cli.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "src/mentat/colima.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "src/mentat/command.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "src/mentat/evidence.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "src/mentat/evidence_html.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "src/mentat/evidence_report.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "src/mentat/gitio.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "src/mentat/openspec.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "src/mentat/process.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "src/mentat/project.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "src/mentat/project_formal.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "src/mentat/proof.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "src/mentat/proof_checker.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "src/mentat/proof_lean.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "src/mentat/qualification.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "src/mentat/records.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "src/mentat/runner.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "src/mentat/showcases/__init__.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "src/mentat/showcases/polaris/__init__.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "src/mentat/showcases/polaris/cli.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "src/mentat/showcases/polaris/docker_runtime.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "src/mentat/showcases/polaris/evaluation.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "src/mentat/showcases/polaris/formal.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "src/mentat/showcases/polaris/model_evidence.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "src/mentat/showcases/polaris/oracle.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "src/mentat/showcases/polaris/pack/contract.json",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "src/mentat/showcases/polaris/pack/lean/Check.lean",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "src/mentat/showcases/polaris/pack/lean/Main.lean",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "src/mentat/showcases/polaris/pack/lean/lakefile.toml",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "src/mentat/showcases/polaris/pack/lean/lean-toolchain",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "src/mentat/showcases/polaris/pack/public.json",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "src/mentat/showcases/polaris/pack/runtime/Dockerfile",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "src/mentat/showcases/polaris/pack/runtime/oracle_cli.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "src/mentat/showcases/polaris/pack/runtime/requirements.txt",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "src/mentat/showcases/polaris/regression.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "src/mentat/showcases/polaris/replay.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "src/mentat/showcases/polaris/spec.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "src/mentat/source_verify.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "src/mentat/spec_review.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "src/mentat/verification.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "src/mentat/worker_assets/package-lock.json",
+      "status": "gap",
+      "requirement_ids": []
+    },
+    {
+      "path": "src/mentat/worker_assets/package.json",
+      "status": "gap",
+      "requirement_ids": []
+    },
+    {
+      "path": "src/mentat/worker_assets/requirements-314.txt",
+      "status": "gap",
+      "requirement_ids": []
+    },
+    {
+      "path": "tests/conftest.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/compare-1.json",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/compare-2.json",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/compare-3.json",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/index.json",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/state/acceptances/4d71e2a16ed9410ba1aeb99dea985b9b.json",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/state/acceptances/5cac54d062154ae38d2845d87818ec59.json",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/state/approvals/21952688f25bc704a3931375498e78e48dde05c50259d6d73819b1dd1326787c.json",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/state/approvals/2763c44bcbde6d3c5c8b98dc10aaf602ef00190a8a1a2128bdf976571f91331a.json",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/state/approvals/508e5cc4c8a1d5b36211f05d6202cd46a0be673e5650f94def70a267e74e240e.json",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/state/approvals/549b23d1adbde6433bb2cd741353598cb465d36be2927faa66e561ddd1534bd5.json",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/state/approvals/575f8a5c650133e7bdd476ecc69e7c02e066f8f8f98178664d1be1e9cf223202.json",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/state/approvals/72925afb86b5298a55284efd310e3feb613b4c9e6e45fc654a596c81ac8ebcbe.json",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/state/approvals/87db0852802076e874db18db6a9bee7ffef724250bce6192df5a1b69f348ac49.json",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/state/approvals/891b652faf705cd1878eebbd4545f3746e80b5d929f0a528533b5eddf2556702.json",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/state/approvals/900625a54d81b4afe1d79c1b0f33185dd6e776a207b0625f2c7bb70fe49e0cfa.json",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/state/approvals/b77c461730646a438828d5fcf1716cd89eb3a5954f0e9be13e5de3d48005e820.json",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/state/receipts/01f2f84b9b254c4183d3c349ede0e473",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/state/receipts/35a1d45fbfbd498aa7550b14f8d4880e",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/state/receipts/4354a85afc7a4316b34fc391dc76f50c",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/state/receipts/46575fae7d3c42e297aff4a91c8822ab",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/state/receipts/4760c46b03984546a1e93053e0352ffd",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/state/receipts/4d71e2a16ed9410ba1aeb99dea985b9b",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/state/receipts/5cac54d062154ae38d2845d87818ec59",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/state/receipts/6667cbf1842946bdacce6b9d840a0a09",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/state/receipts/7f6f605ece2646b48a259acb92962a17",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/state/receipts/994d38e1ef2e478e9b26f2d390598441",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/state/receipts/b5a5bbe1929c4fbfb4f35def4e45449b",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/state/receipts/c5e4002ae7f0439095d23126f5bd8d15",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/state/runs/01f2f84b9b254c4183d3c349ede0e473/check-001.artifact-001.cases.json",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/state/runs/01f2f84b9b254c4183d3c349ede0e473/check-001.negative-control.artifact-001.cases.json",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/state/runs/01f2f84b9b254c4183d3c349ede0e473/manifest.json",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/state/runs/01f2f84b9b254c4183d3c349ede0e473/report.md",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/state/runs/35a1d45fbfbd498aa7550b14f8d4880e/check-001.stdout.log",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/state/runs/35a1d45fbfbd498aa7550b14f8d4880e/manifest.json",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/state/runs/35a1d45fbfbd498aa7550b14f8d4880e/report.md",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/state/runs/4354a85afc7a4316b34fc391dc76f50c/manifest.json",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/state/runs/4354a85afc7a4316b34fc391dc76f50c/report.md",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/state/runs/46575fae7d3c42e297aff4a91c8822ab/check-001.artifact-001.cases.json",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/state/runs/46575fae7d3c42e297aff4a91c8822ab/check-001.negative-control.artifact-001.cases.json",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/state/runs/46575fae7d3c42e297aff4a91c8822ab/manifest.json",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/state/runs/46575fae7d3c42e297aff4a91c8822ab/report.md",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/state/runs/4760c46b03984546a1e93053e0352ffd/manifest.json",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/state/runs/4760c46b03984546a1e93053e0352ffd/report.md",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/state/runs/4d71e2a16ed9410ba1aeb99dea985b9b/check-001.artifact-001.cases.json",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/state/runs/4d71e2a16ed9410ba1aeb99dea985b9b/check-001.negative-control.artifact-001.cases.json",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/state/runs/4d71e2a16ed9410ba1aeb99dea985b9b/manifest.json",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/state/runs/4d71e2a16ed9410ba1aeb99dea985b9b/mutation-001.check-001.artifact-001.cases.json",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/state/runs/4d71e2a16ed9410ba1aeb99dea985b9b/mutation-002.check-001.artifact-001.cases.json",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/state/runs/4d71e2a16ed9410ba1aeb99dea985b9b/report.md",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/state/runs/5cac54d062154ae38d2845d87818ec59/manifest.json",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/state/runs/5cac54d062154ae38d2845d87818ec59/report.md",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/state/runs/6667cbf1842946bdacce6b9d840a0a09/check-001.stdout.log",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/state/runs/6667cbf1842946bdacce6b9d840a0a09/manifest.json",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/state/runs/6667cbf1842946bdacce6b9d840a0a09/report.md",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/state/runs/7f6f605ece2646b48a259acb92962a17/check-001.artifact-001.cases.json",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/state/runs/7f6f605ece2646b48a259acb92962a17/check-001.negative-control.artifact-001.cases.json",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/state/runs/7f6f605ece2646b48a259acb92962a17/manifest.json",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/state/runs/7f6f605ece2646b48a259acb92962a17/mutation-002.check-001.artifact-001.cases.json",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/state/runs/7f6f605ece2646b48a259acb92962a17/mutation-003.check-001.artifact-001.cases.json",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/state/runs/7f6f605ece2646b48a259acb92962a17/report.md",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/state/runs/994d38e1ef2e478e9b26f2d390598441/check-001.artifact-001.cases.json",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/state/runs/994d38e1ef2e478e9b26f2d390598441/check-001.negative-control.artifact-001.cases.json",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/state/runs/994d38e1ef2e478e9b26f2d390598441/manifest.json",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/state/runs/994d38e1ef2e478e9b26f2d390598441/mutation-001.check-001.artifact-001.cases.json",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/state/runs/994d38e1ef2e478e9b26f2d390598441/report.md",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/state/runs/b5a5bbe1929c4fbfb4f35def4e45449b/check-001.artifact-001.counterexample.txt",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/state/runs/b5a5bbe1929c4fbfb4f35def4e45449b/check-001.stdout.log",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/state/runs/b5a5bbe1929c4fbfb4f35def4e45449b/manifest.json",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/state/runs/b5a5bbe1929c4fbfb4f35def4e45449b/report.md",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/state/runs/c5e4002ae7f0439095d23126f5bd8d15/manifest.json",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/main-pre-split/state/runs/c5e4002ae7f0439095d23126f5bd8d15/report.md",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/v0.1.2/compare-1.json",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/v0.1.2/index.json",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/v0.1.2/state/acceptances/70a7486a406a41a18746115299ac3c64.json",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/v0.1.2/state/approvals/4eb3244211aa0aa330c012ef1dc0eebedf5797da4d196c8b859f9204a4dcbcb6.json",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/v0.1.2/state/approvals/afd9c613f56c336aceefbaa99a9a428ddd45af949a144a01acc723033d1c71d5.json",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/v0.1.2/state/approvals/c1ea1e6fe1f0e997e1bf235089cf7dad67b0eb2a001c28777f6ee03784a59dd9.json",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/v0.1.2/state/approvals/f5ee6223581c1376f7b6b9f2c11401b6c06bb87739b4f7963573e51dc28002a8.json",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/v0.1.2/state/receipts/6bb67f1b654f44159be2ec3f49b5cf16",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/v0.1.2/state/receipts/70a7486a406a41a18746115299ac3c64",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/v0.1.2/state/receipts/7e049a4e9d4e4004ac4d7f28b0357619",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/v0.1.2/state/receipts/9e2cd01f94a446d091990884e159fc12",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/v0.1.2/state/receipts/b57f9bdf6e1148538fd066be06003519",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/v0.1.2/state/receipts/dda7d34c532445da8e0f2993ff622cc4",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/v0.1.2/state/runs/6bb67f1b654f44159be2ec3f49b5cf16/check-001.stdout.log",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/v0.1.2/state/runs/6bb67f1b654f44159be2ec3f49b5cf16/manifest.json",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/v0.1.2/state/runs/6bb67f1b654f44159be2ec3f49b5cf16/report.md",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/v0.1.2/state/runs/70a7486a406a41a18746115299ac3c64/manifest.json",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/v0.1.2/state/runs/70a7486a406a41a18746115299ac3c64/report.md",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/v0.1.2/state/runs/7e049a4e9d4e4004ac4d7f28b0357619/manifest.json",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/v0.1.2/state/runs/7e049a4e9d4e4004ac4d7f28b0357619/report.md",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/v0.1.2/state/runs/9e2cd01f94a446d091990884e159fc12/check-001.stdout.log",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/v0.1.2/state/runs/9e2cd01f94a446d091990884e159fc12/manifest.json",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/v0.1.2/state/runs/9e2cd01f94a446d091990884e159fc12/report.md",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/v0.1.2/state/runs/b57f9bdf6e1148538fd066be06003519/check-001.artifact-001.counterexample.txt",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/v0.1.2/state/runs/b57f9bdf6e1148538fd066be06003519/check-001.stdout.log",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/v0.1.2/state/runs/b57f9bdf6e1148538fd066be06003519/manifest.json",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/v0.1.2/state/runs/b57f9bdf6e1148538fd066be06003519/report.md",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/v0.1.2/state/runs/dda7d34c532445da8e0f2993ff622cc4/manifest.json",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/fixtures/records/v0.1.2/state/runs/dda7d34c532445da8e0f2993ff622cc4/report.md",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/helpers.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/proof_record_oracle.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/saved_record_oracle.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/test_assurance.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/test_autonomy.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/test_autonomy_cli.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/test_autonomy_cli_freshness.py",
+      "status": "gap",
+      "requirement_ids": []
+    },
+    {
+      "path": "tests/test_autonomy_integration.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/test_autonomy_policy.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/test_autonomy_runtime.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/test_autonomy_state.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/test_autonomy_target_environment.py",
+      "status": "gap",
+      "requirement_ids": []
+    },
+    {
+      "path": "tests/test_autonomy_ui.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/test_autonomy_worker.py",
+      "status": "gap",
+      "requirement_ids": []
+    },
+    {
+      "path": "tests/test_behavior_evidence.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/test_boundaries.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/test_bounded_process.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/test_candidate_symlinks.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/test_claims.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/test_claims_notion.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/test_cli_version.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/test_developer_tools.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/test_evidence_comparison.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/test_evidence_html.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/test_evidence_publication.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/test_evidence_report.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/test_gitio.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/test_iceberg_compaction_models.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/test_iceberg_compaction_replay.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/test_iceberg_compaction_summary.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/test_lean_audit_imports.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/test_lean_ci.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/test_nanoid_replay.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/test_nemo_replay.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/test_openspec.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/test_polaris_runtime.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/test_polaris_snapshot.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/test_project.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/test_proof.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/test_proof_checker.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/test_proof_record_equivalence.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/test_qualification_evidence.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/test_record_fixtures.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/test_record_parity.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/test_records.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/test_run_behavior_characterization.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/test_saved_record_equivalence.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/test_selfcheck.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/test_smoke_runtime.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/test_source_control_flow.py",
+      "status": "gap",
+      "requirement_ids": []
+    },
+    {
+      "path": "tests/test_source_module_limits.py",
+      "status": "gap",
+      "requirement_ids": []
+    },
+    {
+      "path": "tests/test_source_qualification.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/test_source_tool_identity.py",
+      "status": "gap",
+      "requirement_ids": []
+    },
+    {
+      "path": "tests/test_source_verify.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/test_static_checks.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/test_trial_workflow.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/test_verifier_digest.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/test_verify_characterization.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "uv.lock",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    }
+  ]
+}

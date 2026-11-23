@@ -5,6 +5,9 @@
 !/.mentat/selfcheck.py
 !/.mentat/acceptance.smt2
 !/.mentat/acceptance-counterexample.smt2
+!/.mentat/workspace.json
+!/.mentat/fas.json
+!/.mentat/verification/
 /.venv/
 /dist/
 __pycache__/
