@@ -186,3 +186,69 @@ def test_cross_cohort_review_rejected_before_remote_access(scenario, field):
         coordinator._publish(job, evidence)
     assert state["remote_calls"] == 0
     assert not state["merged"]
+
+
+@pytest.mark.parametrize('change', ['fas', 'cas'])
+def test_eventless_publication_rejects_changed_specification_before_github(scenario, change):
+    coordinator, job, evidence, state = scenario
+    repo = coordinator.repo
+    if change == 'fas':
+        path = repo / '.mentat/fas.json'
+        fas = json.loads(path.read_text())
+        fas['surfaces'][0]['status'] = 'unexamined'
+        path.write_text(json.dumps(fas))
+    else:
+        path = repo / 'openspec/specs/app/spec.md'
+        path.write_text(path.read_text() + '\nChanged semantics\n')
+    git(repo, 'add', '.')
+    git(repo, 'commit', '-qm', 'unreviewed specification change')
+    head = git(repo, 'rev-parse', 'HEAD')
+    digest = hashlib.sha256(_diff(repo, state['base'], head)).hexdigest()
+    key = coordinator._check_key(head, [], [], None)
+    job['payload']['proposal'].update(head=head, diff_digest=digest)
+    evidence.update(head=head, check_key=key)
+    for review in job['payload']['reviews']:
+        review.update(head=head, diff_digest=digest, check_key=key)
+    with pytest.raises(ValueError, match='specification|CAS|FAS|review'):
+        coordinator._publish(job, evidence)
+    assert state['remote_calls'] == 0
+
+
+@pytest.mark.parametrize("name", ["é", "leading é", "line\nbreak"])
+def test_eventless_unusual_cas_change_rejected_before_github(scenario, name):
+    coordinator, job, evidence, state = scenario
+    repo = coordinator.repo
+    git(repo, 'checkout', '-q', '--detach', state['base'])
+    unicode_path = f'openspec/specs/{name}/spec.md'
+    path = repo / unicode_path
+    path.parent.mkdir(parents=True)
+    path.write_text('original text\n')
+    fas_path = repo / '.mentat/fas.json'
+    fas = json.loads(fas_path.read_text())
+    fas['surfaces'].append({'path': unicode_path, 'status': 'unexamined', 'requirement_ids': []})
+    fas_path.write_text(json.dumps(fas, ensure_ascii=False))
+    git(repo, 'add', '.')
+    git(repo, 'commit', '-qm', 'base with unicode CAS')
+    base = git(repo, 'rev-parse', 'HEAD')
+    git(repo, 'update-ref', 'refs/remotes/origin/main', base)
+    path.write_text('changed text\n')
+    git(repo, 'commit', '-qam', 'unreviewed unicode CAS change')
+    head = git(repo, 'rev-parse', 'HEAD')
+    coordinator.session_id = coordinator.store.new_session(str(repo), base, base, coordinator.config, 1, 1000)
+    from mentat.autonomy import inventory
+
+    tracked = [entry['path'] for entry in inventory(repo, head)]
+    if name != 'line\nbreak':
+        validate_specification(repo, tracked=tracked)
+    else:
+        with pytest.raises(ValueError, match='unsafe'):
+            validate_specification(repo, tracked=tracked)
+    key = coordinator._check_key(head, [], [], None)
+    diff_digest = hashlib.sha256(_diff(repo, base, head)).hexdigest()
+    job['payload']['proposal'].update(head=head, diff_digest=diff_digest)
+    evidence.update(head=head, base=base, check_key=key)
+    for review in job['payload']['reviews']:
+        review.update(head=head, base=base, diff_digest=diff_digest, check_key=key)
+    with pytest.raises(ValueError, match='specification|CAS|review|unsafe'):
+        coordinator._publish(job, evidence)
+    assert state['remote_calls'] == 0
