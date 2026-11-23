@@ -193,6 +193,7 @@ def test_inventory_rejects_missing_surface(repo, tmp_path):
         (False, "accept"),
         (True, "accept"),
         (True, "repair_retry"),
+        (True, "verification_repair_retry"),
         (True, "out_of_domain"),
         (True, "rebound"),
     ],
@@ -249,9 +250,13 @@ def test_counterexample_requires_protected_reproduction(repo, tmp_path, protecte
     git(repo, "commit", "-qm", "record requirement")
     git(repo, "update-ref", "refs/remotes/origin/main", git(repo, "rev-parse", "HEAD"))
 
+    fix_review_prompts = []
+
     class FixAgent(Agent):
         def run(self, repo, job, output, *, timeout_seconds):
             if job["payload"]["kind"] in {"review_fix", "review_verification", "review_final"}:
+                if job["payload"]["kind"] == "review_fix":
+                    fix_review_prompts.append(job["payload"]["prompt"])
                 summary = job["payload"].get("check_summary")
                 assert summary and summary["status"] == "passed"
                 assert summary["head"] == git(repo, "rev-parse", "HEAD")
@@ -267,6 +272,17 @@ def test_counterexample_requires_protected_reproduction(repo, tmp_path, protecte
                     assert any(item["command"] == ["sidecar-check"] for item in summary["checks"])
                 assert '"check_summary"' in job["payload"]["prompt"]
             if job["payload"]["kind"] == "generate_spec":
+                if job["payload"].get("repair"):
+                    path = repo / ".mentat/fas.json"
+                    fas = json.loads(path.read_text())
+                    existing = {row["path"] for row in fas["surfaces"]}
+                    missing = set(git(repo, "ls-files").splitlines()) - existing
+                    if missing:
+                        fas["surfaces"].extend(
+                            {"path": p, "status": "unexamined", "requirement_ids": []}
+                            for p in sorted(missing)
+                        )
+                        path.write_text(json.dumps(fas))
                 return {
                     "status": "succeeded",
                     "session_id": job["id"],
@@ -286,7 +302,9 @@ def test_counterexample_requires_protected_reproduction(repo, tmp_path, protecte
                     "status": "succeeded",
                     "session_id": job["id"],
                     "result": {
-                        "decision": "accept" if domain in {"accept", "repair_retry"} else "defer",
+                        "decision": "accept"
+                        if domain in {"accept", "repair_retry", "verification_repair_retry"}
+                        else "defer",
                         "summary": "domain reviewed",
                         "findings": [],
                         "verification_requests": [],
@@ -310,10 +328,27 @@ def test_counterexample_requires_protected_reproduction(repo, tmp_path, protecte
                     failed = job["payload"]["feedback"]["check_summary"]["checks"][0]
                     assert failed["command"] == ["bad-repair-command"]
                     assert "not found" in failed["stderr_excerpt"]
+                    (repo / "src.py").write_text("def f(x):\n    return x + 1  # corrected\n")
+            if (
+                job["payload"]["kind"] == "generate_verification"
+                and (repo / "verification").exists()
+            ):
+                return {
+                    "status": "succeeded",
+                    "session_id": job["id"],
+                    "result": {
+                        "decision": "accept",
+                        "summary": "existing verification",
+                        "findings": [],
+                        "verification_requests": [
+                            {"argv": ["sidecar-check"], "claim_ids": [], "method": "test"}
+                        ],
+                    },
+                }
             result = super().run(repo, job, output, timeout_seconds=timeout_seconds)
             if (
                 job["payload"]["kind"] == "investigate_defect"
-                and domain == "repair_retry"
+                and domain in {"repair_retry", "verification_repair_retry"}
                 and job["payload"].get("round", 0) == 0
             ):
                 result["result"]["verification_requests"] = [
@@ -328,7 +363,9 @@ def test_counterexample_requires_protected_reproduction(repo, tmp_path, protecte
     class ProtectedWorker(Worker):
         def run(self, repo, rev, argv, *, timeout_seconds):
             result = super().run(repo, rev, argv, timeout_seconds=timeout_seconds)
-            if argv == ["bad-repair-command"]:
+            if argv == ["bad-repair-command"] and (
+                domain == "repair_retry" or self.commands.count(argv) == 2
+            ):
                 result.update(status="failed", returncode=127, stderr="not found")
             return result
 
@@ -361,20 +398,30 @@ def test_counterexample_requires_protected_reproduction(repo, tmp_path, protecte
     )
     assert any(j["payload"]["kind"] == "adjudicate_defect" for j in snapshot["jobs"])
     assert any(j["payload"]["kind"] == "reproduce_defect" for j in snapshot["jobs"])
-    fix_expected = protected and domain in {"accept", "repair_retry"}
+    fix_expected = protected and domain in {"accept", "repair_retry", "verification_repair_retry"}
     assert any(j["payload"]["kind"] == "adjudicate_domain" for j in snapshot["jobs"]) is protected
     assert (
         any(j["payload"]["kind"] == "investigate_defect" for j in snapshot["jobs"]) is fix_expected
     )
     if fix_expected:
-        assert github.published and worker.revisions[-1] == github.published[0]
-        assert len(worker.revisions) == (5 if domain == "repair_retry" else 3)
-        assert worker.commands.count(["check"]) == (3 if domain == "repair_retry" else 2)
-        assert worker.commands.count(["sidecar-check"]) == 1
-        if domain == "repair_retry":
-            assert worker.commands.count(["bad-repair-command"]) == 1
+        assert github.published and worker.revisions[-1] == github.published[0], snapshot[
+            "findings"
+        ]
+        if domain != "verification_repair_retry":
+            assert len(worker.revisions) == (5 if domain == "repair_retry" else 3)
+            assert worker.commands.count(["check"]) == (3 if domain == "repair_retry" else 2)
+            assert worker.commands.count(["sidecar-check"]) == 1
+        if domain in {"repair_retry", "verification_repair_retry"}:
+            assert worker.commands.count(["bad-repair-command"]) == (
+                1 if domain == "repair_retry" else 2
+            )
             fix_jobs = [j for j in snapshot["jobs"] if j["payload"]["kind"] == "investigate_defect"]
             assert len(fix_jobs) == 2 and len({j["item_id"] for j in fix_jobs}) == 1
+            assert len(fix_review_prompts) == (2 if domain == "repair_retry" else 4)
+            for prompt in fix_review_prompts[-2:]:
+                context = json.loads(prompt.split("SOURCE_CONTEXT_JSON:\n", 1)[1])
+                assert "return x - 1" in context["proposal_diff"]
+                assert "return x + 1  # corrected" in context["proposal_diff"]
         assert any(
             j["payload"]["kind"] == "generate_spec" and j["payload"].get("repair")
             for j in snapshot["jobs"]
@@ -665,18 +712,31 @@ def test_toolchain_change_invalidates_resume(repo, tmp_path, monkeypatch):
     assert store.snapshot(snapshot["session"]["id"])["session"]["status"] == "invalidated"
 
 
-def test_revision_feedback_regenerates_same_item_with_bounded_round(repo, tmp_path):
+@pytest.mark.parametrize("revise_record", [False, True])
+def test_revision_feedback_regenerates_same_item_with_bounded_round(repo, tmp_path, revise_record):
+    review_prompts = []
+
     class RevisingAgent(Agent):
         def run(self, repo, job, output, *, timeout_seconds):
             payload = job["payload"]
             if payload["kind"] == "generate_spec" and payload.get("round") == 1:
                 spec = repo / "openspec/specs/application/spec.md"
                 spec.write_text(spec.read_text() + "\nReviewed clarification\n")
-                fas_path = repo / ".mentat/fas.json"
-                fas = json.loads(fas_path.read_text())
-                for path in (".mentat/fas.json", "openspec/specs/application/spec.md"):
-                    fas["surfaces"].append({"path": path, "status": "gap", "requirement_ids": []})
-                fas_path.write_text(json.dumps(fas))
+                if revise_record:
+                    from mentat.autonomy import digest
+
+                    path = repo / ".mentat/fas.json"
+                    fas = json.loads(path.read_text())
+                    record = fas["requirements"][0]
+                    previous = digest(record)
+                    record["statement"] = "Clarified uncertainty"
+                    record["revision"] = {
+                        "version": 2,
+                        "previous_digest": previous,
+                        "reason": "Clarify the draft",
+                        "evidence": [{"path": "src.py"}],
+                    }
+                    path.write_text(json.dumps(fas))
                 return {
                     "status": "succeeded",
                     "session_id": job["id"],
@@ -687,6 +747,8 @@ def test_revision_feedback_regenerates_same_item_with_bounded_round(repo, tmp_pa
                         "verification_requests": [],
                     },
                 }
+            if payload["kind"] == "review_spec" and payload["proposal"].get("round") == 1:
+                review_prompts.append(payload["prompt"])
             result = super().run(repo, job, output, timeout_seconds=timeout_seconds)
             if payload["kind"] == "review_spec" and payload["proposal"].get("round") == 0:
                 result["result"]["decision"] = "revise"
@@ -698,10 +760,29 @@ def test_revision_feedback_regenerates_same_item_with_bounded_round(repo, tmp_pa
     assert len(generations) == 2
     assert {j["item_id"] for j in generations} == {"cas.inventory"}
     assert sorted(j["payload"].get("round", 0) for j in generations) == [0, 1]
-    assert any(
-        j["payload"]["kind"] == "review_spec" and j["payload"]["proposal"].get("round") == 1
+    reviews = [
+        j
         for j in snapshot["jobs"]
-    ), snapshot
+        if j["payload"]["kind"] == "review_spec" and j["payload"]["proposal"].get("round") == 1
+    ]
+    assert len(reviews) == 2, snapshot
+    assert len(review_prompts) == 2
+    for prompt in review_prompts:
+        context = json.loads(prompt.split("SOURCE_CONTEXT_JSON:\n", 1)[1])
+        assert "openspec/specs/application/spec.md" in context["proposal_diff"]
+        assert ".mentat/fas.json" in context["proposal_diff"]
+    proposal = reviews[0]["payload"]["proposal"]
+    assert proposal["parent"] == snapshot["session"]["base"]
+    changed = git(repo, "diff", "--name-only", proposal["parent"], proposal["head"])
+    assert "openspec/specs/application/spec.md" in changed
+    assert ".mentat/fas.json" in changed
+    fas = json.loads(git(repo, "show", f"{proposal['head']}:.mentat/fas.json"))
+    rows = {row["path"]: row for row in fas["surfaces"]}
+    assert (
+        set(git(repo, "ls-tree", "-r", "--name-only", proposal["head"]).splitlines()) <= rows.keys()
+    )
+    for path in (".mentat/fas.json", "openspec/specs/application/spec.md"):
+        assert rows[path] == {"path": path, "status": "unexamined", "requirement_ids": []}
 
 
 def test_refinement_requires_stable_id_versioned_lineage_and_evidence(repo, tmp_path):
@@ -1624,12 +1705,14 @@ def test_targeted_chunk_without_remaining_capacity_fails_explicitly(repo, tmp_pa
 def test_deferred_partial_spec_continues_and_revisits_uncommitted_batch(repo, tmp_path, revise):
     folder = repo / "src"
     folder.mkdir()
-    for index in range(10):
+    for index in range(30):
         (folder / f"file{index}.py").write_text("# " + "x" * 44990 + "\n")
     (repo / "too_large.py").write_text("# " + "x" * 240_001)
     git(repo, "add", ".")
     git(repo, "commit", "-qm", "large source inventory")
     git(repo, "update-ref", "refs/remotes/origin/main", git(repo, "rev-parse", "HEAD"))
+
+    retry_review_prompts = []
 
     class DeferredAgent(Agent):
         def run(self, repo, job, output, *, timeout_seconds):
@@ -1645,7 +1728,26 @@ def test_deferred_partial_spec_continues_and_revisits_uncommitted_batch(repo, tm
                         "verification_requests": [],
                     },
                 }
+            if (
+                revise
+                and payload["kind"] == "generate_spec"
+                and payload.get("round") == 1
+                and payload.get("chunk") == 1
+            ):
+                return {
+                    "status": "succeeded",
+                    "session_id": job["id"],
+                    "result": {
+                        "decision": "defer",
+                        "summary": "continue revised draft",
+                        "findings": [],
+                        "verification_requests": [],
+                    },
+                }
             if payload["kind"] == "generate_spec" and (repo / ".mentat/fas.json").is_file():
+                if revise and payload.get("round") == 1:
+                    spec = repo / "openspec/specs/application/spec.md"
+                    spec.write_text(spec.read_text() + "\nNext batch clarification\n")
                 path = repo / ".mentat/fas.json"
                 fas = json.loads(path.read_text())
                 existing = {surface["path"] for surface in fas["surfaces"]}
@@ -1665,6 +1767,8 @@ def test_deferred_partial_spec_continues_and_revisits_uncommitted_batch(repo, tm
                         "verification_requests": [],
                     },
                 }
+            if payload["kind"] == "review_spec" and payload["proposal"].get("round") == 1:
+                retry_review_prompts.append(payload["prompt"])
             result = super().run(repo, job, output, timeout_seconds=timeout_seconds)
             if (
                 revise
@@ -1688,6 +1792,16 @@ def test_deferred_partial_spec_continues_and_revisits_uncommitted_batch(repo, tm
         assert retries
         for key in ("targetfiles", "chunk", "batch_limit", "revisit_files", "unavailable_files"):
             assert retries[0]["payload"][key] == jobs[1]["payload"][key]
+        assert retries[0]["outcome"]["result"]["decision"] == "defer"
+        assert len(retry_review_prompts) == 2, [
+            (j["payload"].get("kind"), j["payload"].get("chunk"), j["status"], j.get("outcome"))
+            for j in jobs
+        ]
+        for prompt in retry_review_prompts:
+            context = json.loads(prompt.split("SOURCE_CONTEXT_JSON:\n", 1)[1])
+            assert "openspec/specs/application/spec.md" in context["proposal_diff"]
+            assert "Next batch clarification" in context["proposal_diff"]
+            assert ".mentat/fas.json" in context["proposal_diff"]
     revisited = set(jobs[1]["payload"]["revisit_files"])
     later_targets = set().union(*(set(j["payload"].get("targetfiles", [])) for j in jobs[2:]))
     assert revisited <= later_targets
@@ -1971,3 +2085,131 @@ def test_review_batch_scope_changes_never_pool_approvals(
     assert not published
     accept(one[1])
     assert len(published) == 1
+
+
+@pytest.mark.parametrize("fault", ["omitted", "duplicate"])
+def test_new_surface_gaps_do_not_repair_invalid_parent_inventory(repo, tmp_path, fault):
+    class InvalidInventoryAgent(Agent):
+        def run(self, repo, job, output, *, timeout_seconds):
+            result = super().run(repo, job, output, timeout_seconds=timeout_seconds)
+            if job["payload"]["kind"] == "generate_spec":
+                path = repo / ".mentat/fas.json"
+                fas = json.loads(path.read_text())
+                if fault == "omitted":
+                    fas["surfaces"] = [s for s in fas["surfaces"] if s["path"] != "src.py"]
+                else:
+                    fas["surfaces"].append(dict(fas["surfaces"][0]))
+                path.write_text(json.dumps(fas))
+            return result
+
+    snapshot, _, _ = run(repo, tmp_path, agent=InvalidInventoryAgent())
+    expected = (
+        "surface inventory omits tracked paths"
+        if fault == "omitted"
+        else "duplicate surface inventory path"
+    )
+    assert any(expected in finding.get("summary", "") for finding in snapshot["findings"])
+    assert not any(j["payload"]["kind"] == "review_spec" for j in snapshot["jobs"])
+
+
+@pytest.mark.parametrize("delete", [False, True])
+def test_existing_inventory_is_not_rewritten_for_noop_or_deletion(repo, tmp_path, delete):
+    spec_path = "openspec/specs/application/spec.md"
+    spec = repo / spec_path
+    spec.parent.mkdir(parents=True)
+    requirements = [
+        {
+            "id": str(uuid.uuid4()),
+            "area": area,
+            "origin": "uncertain",
+            "statement": "Unspecified",
+            "spec_path": spec_path,
+        }
+        for area in AREAS
+    ]
+    spec.write_text("\n".join(item["id"] for item in requirements))
+    obsolete = repo / "openspec/specs/obsolete/spec.md"
+    obsolete.parent.mkdir(parents=True)
+    obsolete.write_text("Obsolete note\n")
+    paths = [
+        ".mentat/workspace.json",
+        ".mentat/fas.json",
+        "src.py",
+        spec_path,
+        "openspec/specs/obsolete/spec.md",
+    ]
+    fas = {
+        "schema_version": 1,
+        "requirements": requirements,
+        "claims": [],
+        "surfaces": [{"path": path, "status": "gap", "requirement_ids": []} for path in paths],
+    }
+    original = json.dumps(fas, separators=(",", ":")) + "\n"
+    (repo / ".mentat/fas.json").write_text(original)
+    git(repo, "add", ".")
+    git(repo, "commit", "-qm", "existing inventory")
+    git(repo, "update-ref", "refs/remotes/origin/main", git(repo, "rev-parse", "HEAD"))
+
+    class ExistingAgent(Agent):
+        def run(self, repo, job, output, *, timeout_seconds):
+            if job["payload"]["kind"] == "generate_spec":
+                if delete:
+                    (repo / "openspec/specs/obsolete/spec.md").unlink()
+                return {
+                    "status": "succeeded",
+                    "session_id": job["id"],
+                    "result": {
+                        "decision": "accept",
+                        "summary": "unchanged inventory",
+                        "findings": [],
+                        "verification_requests": [],
+                    },
+                }
+            return super().run(repo, job, output, timeout_seconds=timeout_seconds)
+
+    snapshot, _, _ = run(repo, tmp_path, agent=ExistingAgent())
+    generation = next(j for j in snapshot["jobs"] if j["payload"]["kind"] == "generate_spec")
+    head = generation["outcome"]["head"]
+    assert git(repo, "show", f"{head}:.mentat/fas.json") == original.strip()
+    tracked = git(repo, "ls-tree", "-r", "--name-only", head).splitlines()
+    assert ("openspec/specs/obsolete/spec.md" not in tracked) is delete
+    assert any(j["payload"]["kind"] == "review_spec" for j in snapshot["jobs"])
+
+
+def test_revision_cannot_drop_previously_added_surface(repo, tmp_path):
+    class DroppingAgent(Agent):
+        def run(self, repo, job, output, *, timeout_seconds):
+            payload = job["payload"]
+            if payload["kind"] == "generate_spec" and payload.get("round") == 1:
+                path = repo / ".mentat/fas.json"
+                fas = json.loads(path.read_text())
+                fas["surfaces"] = [
+                    row
+                    for row in fas["surfaces"]
+                    if row["path"] != "openspec/specs/application/spec.md"
+                ]
+                path.write_text(json.dumps(fas))
+                return {
+                    "status": "succeeded",
+                    "session_id": job["id"],
+                    "result": {
+                        "decision": "accept",
+                        "summary": "dropped surface",
+                        "findings": [],
+                        "verification_requests": [],
+                    },
+                }
+            result = super().run(repo, job, output, timeout_seconds=timeout_seconds)
+            if payload["kind"] == "review_spec" and payload["proposal"].get("round") == 0:
+                result["result"]["decision"] = "revise"
+            return result
+
+    snapshot, _, _ = run(repo, tmp_path, agent=DroppingAgent())
+    assert any(
+        "surface inventory omits tracked paths" in f.get("summary", "")
+        for f in snapshot["findings"]
+    )
+    assert not any(
+        j["payload"]["kind"] == "review_spec" and j["payload"]["proposal"].get("round") == 1
+        for j in snapshot["jobs"]
+    )

@@ -67,3 +67,17 @@ The first actual self-run at `d95b45b` proved the committed clamp obligation, th
 The independently inspected [clean identity fixture](evidence/identity-fixture.json) reproduced value 0 returning 1 at baseline `ad4b817`, then verified candidate `984efb54` returning 0. Its native gate, one unique source obligation and protected repair replay passed. Fix, specification, verification and final review each had two independent accepting reviewers. Three engine proof checks covered the same single obligation; they are not three distinct properties. Publication paused solely because this deliberately disposable repository had no remote. The original checkout remained seeded, while the verified candidate was retained in Git.
 
 The renewed self-run at `da4f6e3` received the complete FAS, then conservatively deferred over omitted source material. The controller previously advanced bounded source batches only after an accepted draft. The follow-up makes incremental drafting explicit and advances deferred input batches automatically with strict frontier progress and a fixed inventory-based bound. It retains mandatory context, prior IDs, independent reviews, and explicit terminal capability gaps. Completion of a self-run remains required before Titanic onboarding.
+
+The batch follow-up at `90d034b` passed independent macOS and Linux checks with
+1,705 tests passed and 53 documented skips on each platform. Packaging and Pyright
+passed, with the 226-file manifest unchanged after verification. It merged through
+PR 54 as `c6b115a`. A fresh real self-run advanced input batches and proved the
+scoped clamp obligation, but stopped without publication after independent review
+requested a CAS correction and the revised draft failed inventory validation.
+The initial draft introduced a CAS file without inventorying it; revision then
+used the larger draft inventory. The correction inventories every staged candidate,
+adds explicit unexamined rows only for new paths, and keeps the original cumulative
+diff through review retries, failed prechecks and deferred source batches. Two
+independent reviews identified the additional continuation paths and sent them
+back to the owner for fixes and prompt-level regressions. Existing omissions remain errors. Full checks,
+independent acceptance and another real self-run remain required.

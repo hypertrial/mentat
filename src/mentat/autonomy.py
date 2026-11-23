@@ -1216,7 +1216,9 @@ class Coordinator:
                 if (worktree / directory).exists():
                     git(worktree, "add", "-f", "-A", "--", directory)
         if changes:
-            git(worktree, "add", "-A", "--", *sorted(changes))
+            # Earlier forced staging can already have removed deleted paths from
+            # the index, so naming those paths again would fail Git's pathspec check.
+            git(worktree, "add", "-A", "--", ".")
         staged = git(worktree, "diff", "--cached", "--name-only", "--no-renames").splitlines()
         if any(not _allowed_path(kind, path) for path in staged) or (
             not staged and kind == "investigate_defect" and not job["payload"].get("round")
@@ -1230,6 +1232,22 @@ class Coordinator:
                 else None
             )
             fas = validate_specification(worktree, tracked=tracked, prior=prior)
+            # New specification files are also tracked surfaces. Add only missing
+            # newly created paths as explicit gaps; an omitted parent path is an
+            # invalid inventory and was rejected above.
+            candidate_paths = set(git(worktree, "ls-files", "--cached").splitlines())
+            surface_paths = {surface["path"] for surface in fas["surfaces"]}
+            added = sorted(candidate_paths - set(tracked) - surface_paths)
+            if added:
+                fas["surfaces"].extend(
+                    {"path": path, "status": "unexamined", "requirement_ids": []} for path in added
+                )
+                (worktree / FAS_PATH).write_text(json.dumps(fas, indent=2) + "\n")
+                git(worktree, "add", "-f", "--", FAS_PATH)
+                staged = git(
+                    worktree, "diff", "--cached", "--name-only", "--no-renames"
+                ).splitlines()
+            fas = validate_specification(worktree, tracked=sorted(candidate_paths), prior=prior)
             old_surfaces = {item["path"]: item for item in (prior or {}).get("surfaces", [])}
             old_requirements = {item["id"]: item for item in (prior or {}).get("requirements", [])}
             new_requirements = {item["id"]: item for item in fas["requirements"]}
@@ -1286,7 +1304,7 @@ class Coordinator:
                 "Prepare reviewed assurance proposal",
             )
         head = git(worktree, "rev-parse", "HEAD")
-        review_base = parent if staged else session["base"]
+        review_base = job["payload"].get("review_base", parent if staged else session["base"])
         if _changed_paths(worktree):
             raise ValueError("proposal worktree is not clean after commit")
         return {
@@ -1295,7 +1313,7 @@ class Coordinator:
             "author_id": result["session_id"],
             "head": head,
             "parent": review_base,
-            "inventory_head": parent,
+            "inventory_head": head,
             "context_pending": deferred_paths,
             "context_unavailable": sorted(omitted_paths - set(deferred_paths)),
             "diff_digest": hashlib.sha256(_diff(worktree, review_base, head)).hexdigest(),
@@ -1567,6 +1585,7 @@ class Coordinator:
                 if evidence.get("status") != "passed":
                     repair = request["job"]["payload"].get("repair") or proposal.get("repair")
                     generator = proposal.get("generation_kind")
+                    original_generator = generator
                     root_item = proposal.get("root_item", request["job"]["item_id"])
                     round_number = proposal.get("round", 0)
                     failed_commands = [
@@ -1604,6 +1623,11 @@ class Coordinator:
                         payload = {
                             "kind": generator,
                             "target_head": proposal["head"],
+                            "review_base": (
+                                repair.get("review_base", session["base"])
+                                if generator != original_generator and isinstance(repair, dict)
+                                else proposal["parent"]
+                            ),
                             "root_item": root_item,
                             "round": round_number + 1,
                             "feedback": {
@@ -1878,6 +1902,11 @@ class Coordinator:
                             ),
                             "repair": job["payload"].get("repair"),
                             "prior_authors": job["payload"].get("prior_authors", []),
+                            **(
+                                {"review_base": job["payload"]["review_base"]}
+                                if "review_base" in job["payload"]
+                                else {}
+                            ),
                         },
                     )
                 else:
@@ -1922,6 +1951,7 @@ class Coordinator:
                             "commands": requested_commands,
                             "root_item": job["payload"].get("root_item", job["item_id"]),
                             "round": job["payload"].get("round", 0),
+                            "review_base": outcome["parent"],
                         },
                     },
                 }
@@ -2026,6 +2056,7 @@ class Coordinator:
                     {
                         "kind": original_kind,
                         "target_head": proposal["head"],
+                        "review_base": proposal["parent"],
                         "root_item": root_item,
                         "round": next_round,
                         "feedback": result.get("findings", []),
