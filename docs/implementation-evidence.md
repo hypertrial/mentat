@@ -101,3 +101,22 @@ The next edit necessarily produced another hash. Its generic prompt also called
 the static session head the repository head while supplying job-specific source.
 The correction distinguishes immutable observed source provenance from candidate
 identity; it does not relax exact-revision execution evidence or review freshness.
+
+## Required source in specification review
+
+The real self-run at `83ccc7a` successfully used compact FAS patches. Its first
+two candidates received two independent accepting reviews each, with explicit
+partial scope and immutable observed-source provenance. The third candidate newly
+mapped `src/mentat/evidence.py`; both reviewers deferred because the review context
+omitted that file after reserving the complete proposal diff. The run stopped
+before IVL, final review or publication and did not report readiness or a full
+implementation proof. The correction reserves sources required by changed FAS
+mappings before optional context and retains complete specifications and diffs.
+Required material that cannot fit produces an explicit capacity result with
+split/revise guidance. Targeted regressions, independent reviews, completion checks
+and a renewed self-run remain required.
+
+Two independent reviews additionally found that string-form or missing repository
+citations could be skipped. The owner added explicit local-citation resolution and
+failure handling, with external URLs labeled uninspected. Both reviewers confirmed
+their findings closed; full completion and renewed real-run checks remain pending.

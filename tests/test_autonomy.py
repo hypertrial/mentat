@@ -1891,7 +1891,7 @@ def test_deferred_spec_stops_at_fixed_batch_limit(repo, tmp_path):
 
 
 @pytest.mark.parametrize(
-    "mutation", ["unchanged", "surface", "requirement", "new_mapping", "unsupported"]
+    "mutation", ["unchanged", "surface", "requirement", "claim", "contract", "new_mapping", "unsupported"]
 )
 def test_budget_deferred_prior_mapping_requires_unchanged_lineage_and_is_revisited(
     repo, tmp_path, mutation
@@ -1970,6 +1970,20 @@ def test_budget_deferred_prior_mapping_requires_unchanged_lineage_and_is_revisit
                             item for item in fas["surfaces"] if item["path"] == "src/file9.py"
                         )
                         entry.update(status="mapped", requirement_ids=[requirements[0]["id"]])
+                    elif mutation == "claim":
+                        fas["claims"].append({
+                            "id": str(uuid.uuid4()), "requirement_ids": [requirements[0]["id"]],
+                            "statement": "A new obligation", "assumptions": [],
+                            "status": "unattempted", "formal_meaning": "unknown",
+                        })
+                    elif mutation == "contract":
+                        fas["claims"].append({
+                            "id": str(uuid.uuid4()), "requirement_ids": [requirements[1]["id"]],
+                            "statement": "A new obligation", "assumptions": [],
+                            "status": "unattempted", "formal_meaning": "unknown",
+                            "formal_contract": {"path": "src/file9.py", "function": "f",
+                                                "inputs": {}, "requires": "True", "ensures": "True"},
+                        })
                     elif mutation == "requirement":
                         old = dict(fas["requirements"][0])
                         fas["requirements"][0]["statement"] = "changed intent"
@@ -2004,7 +2018,8 @@ def test_budget_deferred_prior_mapping_requires_unchanged_lineage_and_is_revisit
     else:
         assert not github.published
         assert any(
-            "unexamined source cannot be marked mapped" in f.get("summary", "")
+            ("unexamined source cannot support a changed formal contract" if mutation == "contract"
+             else "unexamined source cannot be marked mapped") in f.get("summary", "")
             for f in snapshot["findings"]
         )
 
@@ -2229,7 +2244,12 @@ def test_structured_fas_patch_keeps_lineage_and_reaches_both_reviewers(repo, tmp
     spec = repo / 'openspec/specs/application/spec.md'
     spec.parent.mkdir(parents=True)
     spec.write_text('\n'.join(r['id'] for r in requirements))
-    paths = ['src.py', '.mentat/workspace.json', '.mentat/fas.json',
+    for index in range(5):
+        (repo / f'a{index}.py').write_text('# optional\n' + 'x' * 55_000)
+    cited_source = repo / 'z_cited.py'
+    cited_source.write_text('# cited\n' + 'x' * 60_000)
+    paths = [*[f'a{index}.py' for index in range(5)], 'z_cited.py',
+             'src.py', '.mentat/workspace.json', '.mentat/fas.json',
              'openspec/specs/application/spec.md']
     surfaces = [{'path': path, 'status': 'gap', 'requirement_ids': []} for path in paths]
     initial = {'schema_version': 1, 'requirements': requirements, 'claims': [], 'surfaces': surfaces}
@@ -2247,15 +2267,23 @@ def test_structured_fas_patch_keeps_lineage_and_reaches_both_reviewers(repo, tmp
                 current = (repo / '.mentat/fas.json').read_bytes()
                 context = json.loads(payload['prompt'].split('SOURCE_CONTEXT_JSON:\n', 1)[1])
                 old = json.loads(current)['requirements'][0]
+                assert context['files']['src.py'] == (repo / 'src.py').read_text()
+                assert context['files']['z_cited.py'] == cited_source.read_text()
                 assert context['fas_sha256'] == hashlib.sha256(current).hexdigest()
                 assert context['patch_record_digest_index']['requirements'][old['id']] == record_digest(old)
-                assert context['patch_record_digest_index']['surfaces']['src.py'] == record_digest(surfaces[0])
+                assert context['patch_record_digest_index']['surfaces']['src.py'] == record_digest(next(s for s in surfaces if s['path'] == 'src.py'))
                 updated = {**old, 'statement': 'Clarified', 'revision': {
                     'version': 2, 'previous_digest': digest(old),
-                    'reason': 'Reviewed source', 'evidence': ['src.py']}}
+                    'reason': 'Reviewed source', 'evidence': ['src.py']},
+                    'citations': ['z_cited.py:1']}
                 patch = {'schema_version': 1, 'expected_sha256': context['fas_sha256'], 'edits': [{
                     'collection': 'requirements', 'key': old['id'],
-                    'expected_digest': record_digest(old), 'record': updated}]}
+                    'expected_digest': record_digest(old), 'record': updated}, {
+                    'collection': 'surfaces', 'key': 'src.py',
+                    'expected_digest': record_digest(next(s for s in surfaces if s['path'] == 'src.py')), 'record': {
+                        'path': 'src.py', 'status': 'mapped', 'requirement_ids': [old['id']]}}]}
+                spec = repo / 'openspec/specs/application/spec.md'
+                spec.write_text(spec.read_text() + '\n' + 's' * 30_000)
                 return {'status': 'succeeded', 'session_id': job['id'], 'result': {
                     'decision': 'accept', 'summary': 'refined', 'findings': [],
                     'verification_requests': [], 'changes': [{
@@ -2274,10 +2302,17 @@ def test_structured_fas_patch_keeps_lineage_and_reaches_both_reviewers(repo, tmp
         context = json.loads(prompt.split('SOURCE_CONTEXT_JSON:\n', 1)[1])
         assert '.mentat/fas.json' in context['proposal_diff']
         assert 'Clarified' in context['proposal_diff']
+        assert context['files']['src.py'] == (repo / 'src.py').read_text()
+        assert context['files']['z_cited.py'] == cited_source.read_text()
+        assert any(item['reason'] == 'context budget exhausted' for item in context['omitted'])
+        assert context['files']['.mentat/fas.json'] == git(repo, 'show', f"{context['proposal_head']}:.mentat/fas.json") + '\n'
     review = next(j for j in snapshot['jobs'] if j['payload']['kind'] == 'review_spec')
     candidate = json.loads(git(repo, 'show', f"{review['payload']['proposal']['head']}:.mentat/fas.json"))
     assert candidate['requirements'][1:] == requirements[1:]
-    assert candidate['surfaces'] == surfaces
+    mapped = next(s for s in candidate['surfaces'] if s['path'] == 'src.py')
+    assert mapped == {'path': 'src.py', 'status': 'mapped', 'requirement_ids': [requirements[0]['id']]}
+    assert [s for s in candidate['surfaces'] if s['path'] != 'src.py'] == [
+        s for s in surfaces if s['path'] != 'src.py']
     assert github.published
 
 
@@ -2355,3 +2390,239 @@ def test_review_context_rejects_observation_from_unrelated_candidate(repo, tmp_p
     with pytest.raises(ValueError, match='ancestor'):
         coordinator._source_context(candidate, {'payload': {'kind': 'review_spec', 'proposal': {
             'parent': base, 'head': candidate, 'observed_source_revision': observed}}})
+
+
+@pytest.mark.parametrize("source_reason", ["mapping", "citation"])
+def test_review_reserves_newly_mapped_source_before_optional_targets(repo, tmp_path, source_reason):
+    source = repo / "z_source.py"
+    source.write_text("# mapped source\n" + "x" * 60_000)
+    for index in range(5):
+        (repo / f"a{index}.py").write_text("# optional\n" + "x" * 55_000)
+    fas_path = repo / ".mentat/fas.json"
+    fas = {
+        "schema_version": 1,
+        "requirements": [],
+        "claims": [],
+        "surfaces": [{"path": "z_source.py", "status": "gap", "requirement_ids": []}],
+    }
+    fas_path.write_text(json.dumps(fas))
+    git(repo, "add", ".")
+    git(repo, "commit", "-qm", "source and prior fas")
+    base = git(repo, "rev-parse", "HEAD")
+    coordinator = Coordinator(repo, Store(tmp_path / "state/state.db"), Agent(), Worker(), GitHub())
+    targets = [f"a{index}.py" for index in range(5)] + ["z_source.py"]
+    _, _, included, _ = coordinator._source_context(
+        base, {"payload": {"kind": "generate_spec", "targetfiles": targets}}
+    )
+    assert "z_source.py" in included
+    if source_reason == "mapping":
+        fas["surfaces"][0]["status"] = "mapped"
+    else:
+        fas["requirements"].append({"id": str(uuid.uuid4()), "citations": ["z_source.py#L1"]})
+    fas_path.write_text(json.dumps(fas))
+    spec = repo / "openspec/specs/app/spec.md"
+    spec.parent.mkdir(parents=True)
+    spec.write_text("new spec\n" + "s" * 30_000)
+    git(repo, "add", ".")
+    git(repo, "commit", "-qm", "map source")
+    head = git(repo, "rev-parse", "HEAD")
+    text, _, included, _ = coordinator._source_context(
+        head,
+        {"payload": {"kind": "review_spec", "targetfiles": targets, "proposal": {"parent": base}}},
+    )
+    context = json.loads(text.split("SOURCE_CONTEXT_JSON:\n", 1)[1])
+    assert context["files"]["z_source.py"] == source.read_text()
+    assert "z_source.py" in included
+    assert context["files"][".mentat/fas.json"] == fas_path.read_text()
+    assert context["proposal_head"] == head and context["proposal_base"] == base
+    assert context["proposal_diff"]
+
+
+def test_review_required_source_over_capacity_fails_closed(repo, tmp_path):
+    source = repo / 'large.py'
+    source.write_text('x' * 200_000)
+    fas_path = repo / '.mentat/fas.json'
+    fas = {'schema_version': 1, 'requirements': [], 'claims': [], 'surfaces': [
+        {'path': 'large.py', 'status': 'gap', 'requirement_ids': []}]}
+    fas_path.write_text(json.dumps(fas))
+    git(repo, 'add', '.')
+    git(repo, 'commit', '-qm', 'prior')
+    base = git(repo, 'rev-parse', 'HEAD')
+    fas['surfaces'][0]['status'] = 'mapped'
+    fas_path.write_text(json.dumps(fas))
+    spec = repo / 'openspec/specs/app/spec.md'
+    spec.parent.mkdir(parents=True)
+    spec.write_text('s' * 170_000)
+    git(repo, 'add', '.')
+    git(repo, 'commit', '-qm', 'map source')
+    head = git(repo, 'rev-parse', 'HEAD')
+    coordinator = Coordinator(repo, Store(tmp_path / 'state/state.db'), Agent(), Worker(), GitHub())
+    with pytest.raises(ValueError, match='required review source.*split or revise'):
+        coordinator._source_context(head, {'payload': {
+            'kind': 'review_spec', 'proposal': {'parent': base}}})
+
+
+def test_review_retry_retains_mapping_and_changed_claim_source(repo, tmp_path):
+    fas_path = repo / '.mentat/fas.json'
+    req = {'id': str(uuid.uuid4()), 'statement': 'requirement'}
+    claim = {'id': str(uuid.uuid4()), 'requirement_ids': [req['id']],
+             'formal_contract': {'path': 'src.py'}}
+    fas = {'schema_version': 1, 'requirements': [req], 'claims': [], 'surfaces': [
+        {'path': 'src.py', 'status': 'gap', 'requirement_ids': []}]}
+    fas_path.write_text(json.dumps(fas))
+    git(repo, 'add', '.')
+    git(repo, 'commit', '-qm', 'prior')
+    base = git(repo, 'rev-parse', 'HEAD')
+    fas['claims'].append(claim)
+    fas['surfaces'][0] = {'path': 'src.py', 'status': 'mapped', 'requirement_ids': [req['id']]}
+    fas_path.write_text(json.dumps(fas))
+    git(repo, 'add', '.')
+    git(repo, 'commit', '-qm', 'unreviewed mapping')
+    intermediate = git(repo, 'rev-parse', 'HEAD')
+    spec = repo / 'openspec/specs/app/spec.md'
+    spec.parent.mkdir(parents=True)
+    spec.write_text('retry clarification')
+    git(repo, 'add', '.')
+    git(repo, 'commit', '-qm', 'retry')
+    head = git(repo, 'rev-parse', 'HEAD')
+    coordinator = Coordinator(repo, Store(tmp_path / 'state/state.db'), Agent(), Worker(), GitHub())
+    text, _, _, _ = coordinator._source_context(head, {'payload': {
+        'kind': 'review_spec', 'targetfiles': [], 'proposal': {
+            'parent': base, 'observed_source_revision': intermediate}}})
+    context = json.loads(text.split('SOURCE_CONTEXT_JSON:\n', 1)[1])
+    assert context['files']['src.py'] == (repo / 'src.py').read_text()
+    assert context['proposal_base'] == base and context['proposal_head'] == head
+    assert 'unreviewed' not in context['proposal_diff']
+    assert 'mapped' in context['proposal_diff'] and 'retry clarification' in context['proposal_diff']
+
+
+@pytest.mark.parametrize('change', ['requirement', 'claim'])
+def test_review_requires_source_for_changed_semantics_on_existing_mapping(repo, tmp_path, change):
+    fas_path = repo / '.mentat/fas.json'
+    req = {'id': str(uuid.uuid4()), 'statement': 'original'}
+    claim = {'id': str(uuid.uuid4()), 'requirement_ids': [req['id']],
+             'statement': 'original', 'formal_contract': {'path': 'src.py'}}
+    fas = {'schema_version': 1, 'requirements': [req], 'claims': [claim], 'surfaces': [
+        {'path': 'src.py', 'status': 'mapped', 'requirement_ids': [req['id']]}]}
+    fas_path.write_text(json.dumps(fas))
+    git(repo, 'add', '.')
+    git(repo, 'commit', '-qm', 'prior')
+    base = git(repo, 'rev-parse', 'HEAD')
+    (req if change == 'requirement' else claim)['statement'] = 'revised'
+    fas_path.write_text(json.dumps(fas))
+    git(repo, 'add', '.')
+    git(repo, 'commit', '-qm', 'revise semantics')
+    head = git(repo, 'rev-parse', 'HEAD')
+    coordinator = Coordinator(repo, Store(tmp_path / 'state/state.db'), Agent(), Worker(), GitHub())
+    text, _, _, _ = coordinator._source_context(head, {'payload': {
+        'kind': 'review_spec', 'targetfiles': [], 'proposal': {'parent': base}}})
+    context = json.loads(text.split('SOURCE_CONTEXT_JSON:\n', 1)[1])
+    assert context['files']['src.py'] == (repo / 'src.py').read_text()
+
+
+@pytest.mark.parametrize('record_kind', ['requirements', 'claims'])
+@pytest.mark.parametrize(('citation', 'error'), [
+    ('missing.py', 'required review source unavailable'),
+    ({'path': 'missing.py'}, 'required review source unavailable'),
+    ('../outside.py', 'unsafe review citation'),
+    ('/etc/passwd', 'unsafe review citation'),
+    ({'unexpected': 'value'}, 'invalid review citation'),
+    (42, 'invalid review citation'),
+])
+def test_changed_citations_fail_closed(repo, tmp_path, record_kind, citation, error):
+    fas_path = repo / '.mentat/fas.json'
+    fas = {'schema_version': 1, 'requirements': [], 'claims': [], 'surfaces': []}
+    fas_path.write_text(json.dumps(fas))
+    git(repo, 'add', '.')
+    git(repo, 'commit', '-qm', 'prior')
+    base = git(repo, 'rev-parse', 'HEAD')
+    record = {'id': str(uuid.uuid4()), 'citations': [citation]}
+    if record_kind == 'claims':
+        record['requirement_ids'] = []
+    fas[record_kind].append(record)
+    fas_path.write_text(json.dumps(fas))
+    git(repo, 'add', '.')
+    git(repo, 'commit', '-qm', 'changed citation')
+    head = git(repo, 'rev-parse', 'HEAD')
+    coordinator = Coordinator(repo, Store(tmp_path / 'state/state.db'), Agent(), Worker(), GitHub())
+    with pytest.raises(ValueError, match=error):
+        coordinator._source_context(head, {'payload': {
+            'kind': 'review_spec', 'proposal': {'parent': base}}})
+
+
+@pytest.mark.parametrize('citations', [None, 'src.py', {'path': 'src.py'}])
+def test_changed_citations_require_list(repo, tmp_path, citations):
+    fas_path = repo / '.mentat/fas.json'
+    fas = {'schema_version': 1, 'requirements': [], 'claims': [], 'surfaces': []}
+    fas_path.write_text(json.dumps(fas))
+    git(repo, 'add', '.')
+    git(repo, 'commit', '-qm', 'prior')
+    base = git(repo, 'rev-parse', 'HEAD')
+    fas['requirements'].append({'id': str(uuid.uuid4()), 'citations': citations})
+    fas_path.write_text(json.dumps(fas))
+    git(repo, 'add', '.')
+    git(repo, 'commit', '-qm', 'changed citation')
+    head = git(repo, 'rev-parse', 'HEAD')
+    coordinator = Coordinator(repo, Store(tmp_path / 'state/state.db'), Agent(), Worker(), GitHub())
+    with pytest.raises(ValueError, match='invalid review citations'):
+        coordinator._source_context(head, {'payload': {
+            'kind': 'review_spec', 'proposal': {'parent': base}}})
+
+
+def test_external_citation_remains_uninspected_metadata(repo, tmp_path):
+    fas_path = repo / '.mentat/fas.json'
+    fas = {'schema_version': 1, 'requirements': [], 'claims': [], 'surfaces': []}
+    fas_path.write_text(json.dumps(fas))
+    git(repo, 'add', '.')
+    git(repo, 'commit', '-qm', 'prior')
+    base = git(repo, 'rev-parse', 'HEAD')
+    url = 'https://example.org/doc'
+    fas['requirements'].append({'id': str(uuid.uuid4()), 'citations': [url]})
+    fas_path.write_text(json.dumps(fas))
+    git(repo, 'add', '.')
+    git(repo, 'commit', '-qm', 'external citation')
+    head = git(repo, 'rev-parse', 'HEAD')
+    coordinator = Coordinator(repo, Store(tmp_path / 'state/state.db'), Agent(), Worker(), GitHub())
+    text, _, _, _ = coordinator._source_context(head, {'payload': {
+        'kind': 'review_spec', 'targetfiles': [], 'proposal': {'parent': base}}})
+    context = json.loads(text.split('SOURCE_CONTEXT_JSON:\n', 1)[1])
+    assert url not in context['files']
+    assert url in context['files']['.mentat/fas.json']
+
+
+def test_changed_citation_of_deleted_file_fails_closed(repo, tmp_path):
+    fas_path = repo / '.mentat/fas.json'
+    fas = {'schema_version': 1, 'requirements': [], 'claims': [], 'surfaces': []}
+    fas_path.write_text(json.dumps(fas))
+    git(repo, 'add', '.')
+    git(repo, 'commit', '-qm', 'prior')
+    base = git(repo, 'rev-parse', 'HEAD')
+    fas['requirements'].append({'id': str(uuid.uuid4()), 'citations': ['src.py']})
+    fas_path.write_text(json.dumps(fas))
+    (repo / 'src.py').unlink()
+    git(repo, 'add', '-A')
+    git(repo, 'commit', '-qm', 'citation and deletion')
+    head = git(repo, 'rev-parse', 'HEAD')
+    coordinator = Coordinator(repo, Store(tmp_path / 'state/state.db'), Agent(), Worker(), GitHub())
+    with pytest.raises(ValueError, match='required review source unavailable.*split or revise'):
+        coordinator._source_context(head, {'payload': {
+            'kind': 'review_spec', 'proposal': {'parent': base}}})
+
+
+def test_unchanged_historical_citation_does_not_block_unrelated_review(repo, tmp_path):
+    fas_path = repo / '.mentat/fas.json'
+    fas = {'schema_version': 1, 'requirements': [
+        {'id': str(uuid.uuid4()), 'citations': 'historical unsupported format'}],
+        'claims': [], 'surfaces': []}
+    fas_path.write_text(json.dumps(fas))
+    git(repo, 'add', '.')
+    git(repo, 'commit', '-qm', 'historic fas')
+    base = git(repo, 'rev-parse', 'HEAD')
+    (repo / 'src.py').write_text('unrelated change')
+    git(repo, 'add', '.')
+    git(repo, 'commit', '-qm', 'unrelated change')
+    head = git(repo, 'rev-parse', 'HEAD')
+    coordinator = Coordinator(repo, Store(tmp_path / 'state/state.db'), Agent(), Worker(), GitHub())
+    context, _, _, _ = coordinator._source_context(head, {'payload': {
+        'kind': 'review_spec', 'proposal': {'parent': base}}})
+    assert 'proposal_diff' in context
