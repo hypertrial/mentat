@@ -740,6 +740,17 @@ def test_project_snapshot_binds_only_matching_reviewed_current_source_proofs():
     assert view["status"] == "established-within-scope"
     assert view["evidence_ids"] == ["evidence-1"]
     assert view["proof_scope"]["assumptions"] == ["trusted solver"]
+    with_cases = deepcopy(snapshot)
+    with_cases["session"]["policy"]["source_checks"][0]["counterexample_cases"] = [
+        {"path": "bad.py", "function": "f"}]
+    with_cases["session"]["policy"]["source_checks"][0]["timeout_ms"] = 750
+    with_cases["session"]["policy"]["source_checks"].append(
+        {**contract, "claim_id": "different-claim", "ensures": "result >= x"})
+    assert project_snapshot(with_cases, identity=identity)["claims"][0]["status"] == "established-within-scope"
+    # A negative control can never replace the claim's independently proved source.
+    with_cases["evidence"] = [{**proof, "id": "control", "status": "counterexample",
+                                "source_identity": {**proof["source_identity"], "path": "bad.py"}}]
+    assert project_snapshot(with_cases, identity=identity)["claims"][0]["status"] != "established-within-scope"
     for key in ("frontend_sha256", "python_version", "solver_library_sha256"):
         assert (
             project_snapshot(snapshot, identity={**identity, key: "drift"})["claims"][0]["status"]

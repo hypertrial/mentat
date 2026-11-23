@@ -366,6 +366,80 @@ inconclusive path for missing/invalid checkpoints. Full Ruff, the configured
 Pyright test and ten targeted capacity/initial-review tests pass after the fix.
 Renewed exact-revision completion remains required before publication.
 
+Corrected initial-review candidate `c895fab4fa9e0c342cd08ca0a159e1f97caddfd9`
+passed independent completion: 1,810 passed and 53 documented optional skips on
+both platforms, both package gates, Ruff/Pyright and all 45 protected fixtures
+without skips. The 226 source hashes and clean head matched before/after. Both
+independent reviews accepted the commit. PR #64's hosted check passed in six
+seconds and merged as `e6016c5a917f5cf26c9c040569aa3a0cd3b52959`.
+
+## Candidate-bound counterexample acceptance cases
+
+The controller now supports declared negative-control paths/functions using the
+positive source contract. It obtains a real solver witness for the committed
+variant, independently checks its Git identity, assigns controller evidence
+identity and uses the existing protected runtime replay. Results are separate
+from positive claim proofs and do not authorize IIL repairs. Generators see a
+pending plan; acceptance reviewers receive the actual candidate-bound evidence.
+New local v2 policies pin the ordered source checks and controls; v1 no-case
+workflows retain their existing authority and cases require explicit new state.
+The worker profile remains unchanged.
+
+Initial focused development feedback passed 47 cases, including real Z3
+refutations, nullary witnesses, strict replay bindings, positive-proof projection,
+policy compatibility and complete thirteen-case review summaries. Independent
+review then found correction feedback type handling, cancellation/deadline and
+same-function multi-contract compatibility issues. Their owners must fix and
+regress these before freeze. A real isolated-VM replay, complete local gates and
+a renewed actual workflow remain pending; mocked worker results are not evidence
+of an actual protected runtime execution.
+
+The owners corrected the review findings, restored standalone/no-case generation
+and fix-review behavior, and retained multiple legacy contracts on one function.
+After source freeze, the escalated offline autonomy/static development gate
+passed all 343 tests in 253.32 seconds with unchanged source/test hashes. The
+earlier mixed-state/sandbox run remains diagnostic only. A final compatibility
+review found the public `timeout_ms` option; validated configured timeouts now
+remain pinned/keyed, are capped to the remaining budget, and are excluded from
+the logical five-field contract. Nine focused timeout/projection tests, full Ruff
+and the configured static gate pass. Independent exact-commit reviews, an actual
+protected VM case and complete native/Linux acceptance remain required.
+
+At frozen `adf0d13b5a4625af853b963d5bf9ef493481bc07`, the independent
+verifier executed the real case primitive. Z3 produced the integer witness
+`value=1, lower=-1, upper=0`; protected CPython 3.12.13 confirmed a true
+precondition and false postcondition with matching source/blob/contract/tool and
+evidence identities. This is direct selected-function replay, with module
+binding/callers outside scope. Both package gates, static analysis and all 45
+protected fixtures passed. The complete suites each had 1,876 passes, 53 optional
+skips and one failure: the repository's module-boundary rule prohibits importing
+the private replay constant across modules. The verifier confirmed 227 unchanged
+source/script/test hashes and a clean exact head.
+
+The implementation now exposes an immutable public replay-program getter;
+execution and program contents remain unchanged. Getter parity is checked against
+actual CPython execution and review-context source/hash. Boundary/source-case/
+static checks pass (159 tests), alongside full Ruff. Renewed exact-revision VM
+and completion evidence remains required.
+
+## Renewed real repair-loop fixture
+
+Using controller `adf0d13` and an explicitly initialized v2 local policy, the
+identity fixture again produced the actual SAT witness `value=0` against
+`ad4b817979cca46316944debcfe4ff98abc9caf1`. Protected reproduction and distinct
+entailment/domain adjudicators confirmed the defect. Repair candidate
+`5797f66cfb0048cb3f0ff1133a9e2898beceae25` passed its actual gates, source
+proof and original-witness repair replay, followed by independent fix, refreshed
+specification, verification and final review pairs. Session
+`90389eb32c654b9895753df1b670b12e` retained 26 jobs, six requirements and one
+claim. The original-head failing-check branch remained inconclusive while the
+repair branch continued.
+
+The disposable repository deliberately has no `origin`; publication failed and
+the session paused with an unconfirmed remote outcome. No publication or merge
+is claimed. This exercise demonstrates the actual repair/review path under the
+new policy; real Mentat publication and whole-workflow readiness remain pending.
+
 ## Current self-run acceptance gap
 
 The renewed real self-run from `cebafba` completed SCL, including substantive

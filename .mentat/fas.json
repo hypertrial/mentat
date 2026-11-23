@@ -647,6 +647,14 @@
       "reason": "Awaiting independently reviewed source correspondence."
     },
     {
+      "path": "examples/source-proof/clamp_faulty.py",
+      "status": "mapped",
+      "requirement_ids": [
+        "2bcfa241-162e-5b32-8b37-79deae3acd37"
+      ],
+      "note": "Deliberate negative control for the declared clamp contract; expected refutation and protected witness replay are separate controller evidence, not an application repair target."
+    },
+    {
       "path": "examples/source-proof/contract.json",
       "status": "gap",
       "requirement_ids": [],
@@ -1725,6 +1733,14 @@
       "status": "gap",
       "requirement_ids": [],
       "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/test_autonomy_source_cases.py",
+      "status": "mapped",
+      "requirement_ids": [
+        "2bcfa241-162e-5b32-8b37-79deae3acd37"
+      ],
+      "note": "Regression specification for candidate-bound solver counterexamples, protected replay, policy minima and review context; test execution is separate exact-revision evidence."
     },
     {
       "path": "tests/test_autonomy_state.py",
