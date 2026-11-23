@@ -3392,6 +3392,8 @@ class Coordinator:
         recovery_review_base = accepted_base
         if (
             retry
+            and isinstance(accepted_base, str)
+            and accepted_base
             and session["head"] != session["base"]
             and proposal["parent"] == session["base"]
             and not self._has_ancestral_spec_review(accepted_base, snapshot)

@@ -356,6 +356,16 @@ development feedback was 163 passes and one invalid legacy fixture using literal
 with real commits while retaining the consumed-once assertions; six affected
 cases then passed. Independent exact-revision completion remains pending.
 
+Frozen `dab7e5805be64416246a1868dab19e2f1e8d1deb` failed the static type
+gate: Pyright could not narrow an optional recovery checkpoint through the
+separate validity booleans. This was the sole failure in both full suites
+(1,809 passed and 53 documented optional skips on each). Both package checks
+and all 45 protected fixtures passed; source hashes remained unchanged. The
+debugger added an explicit nonempty-string guard, retaining the existing
+inconclusive path for missing/invalid checkpoints. Full Ruff, the configured
+Pyright test and ten targeted capacity/initial-review tests pass after the fix.
+Renewed exact-revision completion remains required before publication.
+
 ## Current self-run acceptance gap
 
 The renewed real self-run from `cebafba` completed SCL, including substantive
