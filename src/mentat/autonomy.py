@@ -1149,6 +1149,16 @@ class Coordinator:
                 },
             }
         parent = job["payload"].get("target_head", session["head"])
+        promotion = None
+        if kind == "investigate_defect" and not job["payload"].get("round"):
+            try:
+                selected = self._repair_checkpoint(job, parent)
+            except (ValueError, OSError, RuntimeError, KeyError, TypeError, subprocess.SubprocessError) as exc:
+                return {"status": "succeeded", "repair_checkpoint_gap": str(exc)}
+            if selected != parent:
+                promotion = {"original_target": parent, "checkpoint": selected}
+                parent = selected
+                job = {**job, "payload": {**job["payload"], "target_head": parent}}
         worktree = self._worktree(job, parent)
         output = self.store.path.parent / "agents" / job["id"] / str(job["attempt"])
         output.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -1437,6 +1447,7 @@ class Coordinator:
             raise ValueError("proposal worktree is not clean after commit")
         return {
             **result,
+            **({"repair_checkpoint": promotion} if promotion else {}),
             "worktree": str(worktree),
             "author_id": result["session_id"],
             "head": head,
@@ -1447,6 +1458,85 @@ class Coordinator:
             "context_unavailable": sorted(omitted_paths - set(deferred_paths)),
             "diff_digest": hashlib.sha256(_diff(worktree, review_base, head)).hexdigest(),
         }
+
+    def _repair_checkpoint(self, job: dict, original: str) -> str:
+        """Select a reviewed metadata-only descendant without changing witness identity."""
+        assert self.session_id
+        events = [
+            event["payload"] for event in self.store.snapshot(self.session_id)["events"]
+            if event["kind"] == "fas_reviewed"
+        ]
+        source_revision = job["payload"]["evidence"]["source_identity"]["revision"]
+        if not events:
+            if original != source_revision:
+                raise ValueError("repair target differs from original counterexample")
+            return original
+        heads = [event.get("head") for event in events]
+        if any(not isinstance(head, str) or not head for head in heads):
+            raise ValueError("invalid accepted specification checkpoint")
+        checkpoint = heads[-1]
+        if (
+            git(self.repo, "merge-base", source_revision, original) != source_revision
+            or git(self.repo, "merge-base", original, checkpoint) != original
+            or any(
+            git(self.repo, "merge-base", head, checkpoint) != head for head in heads
+            )
+        ):
+            raise ValueError("accepted specification checkpoints are incompatible with repair")
+        composition = self._review_composition(checkpoint)
+        if composition["checkpoint"] != checkpoint or composition["excluded_sibling_heads"]:
+            raise ValueError("accepted specification checkpoint lacks a complete review chain")
+        if checkpoint == source_revision:
+            return original
+
+        changed = git(self.repo, "diff", "--name-only", "--no-renames", source_revision, checkpoint).splitlines()
+        if any(path != FAS_PATH for path in changed):
+            # CAS documents are semantic context, and all other paths include
+            # source, callers, tests, configuration, and their Git modes.
+            raise ValueError("repair context changed since the original counterexample")
+
+        def records(revision: str) -> tuple[dict, dict]:
+            fas = json.loads(gitio.read_file(self.repo, revision, FAS_PATH))
+            requirements, claims = fas["requirements"], fas["claims"]
+            if not isinstance(requirements, list) or not isinstance(claims, list):
+                raise ValueError("invalid repair specification context")
+            reqs = {item["id"]: item for item in requirements}
+            clms = {item["id"]: item for item in claims}
+            if len(reqs) != len(requirements) or len(clms) != len(claims):
+                raise ValueError("ambiguous repair specification context")
+            return reqs, clms
+
+        old_reqs, old_claims = records(source_revision)
+        new_reqs, new_claims = records(checkpoint)
+        requirement = {k: v for k, v in job["payload"]["requirement"].items() if k != "freshness"}
+        target = requirement["id"]
+        if old_reqs.get(target) != requirement or new_reqs.get(target) != requirement:
+            raise ValueError("repair requirement changed since adjudication")
+        # Claims sharing a requirement can connect further requirements and
+        # claims; retain that complete semantic component, not only one ID.
+        connected = {target}
+        while True:
+            related = {
+                claim_id for claims in (old_claims, new_claims)
+                for claim_id, claim in claims.items()
+                if connected.intersection(claim.get("requirement_ids", []))
+            }
+            expanded = connected | {
+                req_id for claims in (old_claims, new_claims)
+                for claim_id, claim in claims.items() if claim_id in related
+                for req_id in claim.get("requirement_ids", [])
+            }
+            if expanded == connected:
+                break
+            connected = expanded
+        if any(old_reqs.get(key) != new_reqs.get(key) for key in connected) or any(
+            old_claims.get(key) != new_claims.get(key) for key in related
+        ):
+            raise ValueError("repair claim or semantic context changed since adjudication")
+        claim_id = job["payload"]["evidence"].get("claim_id")
+        if claim_id is not None and claim_id not in related:
+            raise ValueError("counterexample claim is not linked to the repair requirement")
+        return checkpoint
 
     def _spec_correspondence_refresh(self, proposal: dict) -> dict | None:
         assert self.session_id
@@ -2377,6 +2467,16 @@ class Coordinator:
             return digest({"job": job["id"], "record": label})
 
         session = self.store.snapshot(self.session_id)["session"]
+        if kind == "investigate_defect" and "repair_checkpoint_gap" in outcome:
+            self.store.put_record(
+                self.session_id, "finding", {
+                    "id": record_id("repair-checkpoint-gap"), "status": "inconclusive",
+                    "loop": "iil", "summary": outcome["repair_checkpoint_gap"],
+                },
+            )
+            return
+        if kind == "investigate_defect" and "repair_checkpoint" in outcome:
+            self._event("repair_checkpoint_selected", {"job_id": job["id"], **outcome["repair_checkpoint"]})
         if kind == "generate_spec" and "spec_context_capacity" in outcome:
             capacity = outcome["spec_context_capacity"]
             if (

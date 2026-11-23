@@ -193,6 +193,8 @@ def test_inventory_rejects_missing_surface(repo, tmp_path):
         (False, "accept"),
         (True, "accept"),
         (True, "chained_refresh"),
+        (True, "changed_requirement"),
+        (True, "changed_cas"),
         (True, "ancestral_refresh"),
         (True, "repair_retry"),
         (True, "verification_repair_retry"),
@@ -201,6 +203,7 @@ def test_inventory_rejects_missing_surface(repo, tmp_path):
     ],
 )
 def test_counterexample_requires_protected_reproduction(repo, tmp_path, protected, domain, monkeypatch):
+    checkpoint_domains = {"chained_refresh", "ancestral_refresh", "changed_requirement", "changed_cas"}
     requirements = [
         {
             "id": str(uuid.uuid4()),
@@ -237,7 +240,7 @@ def test_counterexample_requires_protected_reproduction(repo, tmp_path, protecte
     )
     config_path = repo / ".mentat/workspace.json"
     config = json.loads(config_path.read_text())
-    if domain in {"chained_refresh", "ancestral_refresh"}:
+    if domain in checkpoint_domains:
         config["concurrency"] = 1
     config["source_checks"] = [
         {
@@ -257,10 +260,11 @@ def test_counterexample_requires_protected_reproduction(repo, tmp_path, protecte
     fix_review_prompts = []
     spec_review_contexts = []
     final_contexts = []
+    repair_inputs = []
 
     class FixAgent(Agent):
         def run(self, repo, job, output, *, timeout_seconds):
-            if domain in {"chained_refresh", "ancestral_refresh"} and job["payload"]["kind"] in {"review_spec", "review_final"}:
+            if domain in checkpoint_domains and job["payload"]["kind"] in {"review_spec", "review_final"}:
                 context = json.loads(job["payload"]["prompt"].split("SOURCE_CONTEXT_JSON:\n", 1)[1])
                 (spec_review_contexts if job["payload"]["kind"] == "review_spec" else final_contexts).append(
                     (job["payload"], context))
@@ -282,11 +286,21 @@ def test_counterexample_requires_protected_reproduction(repo, tmp_path, protecte
                     assert any(item["command"] == ["sidecar-check"] for item in summary["checks"])
                 assert '"check_summary"' in job["payload"]["prompt"]
             if job["payload"]["kind"] == "generate_spec":
-                if domain in {"chained_refresh", "ancestral_refresh"} and not job["payload"].get("repair"):
+                if domain in checkpoint_domains and not job["payload"].get("repair"):
                     path = repo / ".mentat/fas.json"
                     fas = json.loads(path.read_text())
                     next(row for row in fas["surfaces"] if row["path"] == "src.py").update(
                         status="mapped", requirement_ids=[requirements[0]["id"]])
+                    if domain == "changed_requirement":
+                        from mentat.autonomy import digest
+
+                        record = fas["requirements"][0]
+                        record["revision"] = {"version": 2, "previous_digest": digest(record),
+                            "reason": "Changed requirement", "evidence": [{"path": "src.py"}]}
+                        record["statement"] = "The function increments only nonnegative inputs"
+                    if domain == "changed_cas":
+                        spec = repo / "openspec/specs/application/spec.md"
+                        spec.write_text(spec.read_text() + "\nNew semantic qualification\n")
                     path.write_text(json.dumps(fas))
                 if job["payload"].get("repair"):
                     path = repo / ".mentat/fas.json"
@@ -303,7 +317,7 @@ def test_counterexample_requires_protected_reproduction(repo, tmp_path, protecte
                     "status": "succeeded",
                     "session_id": job["id"],
                     "result": {
-                        "decision": "accept" if job["payload"].get("repair") or domain in {"chained_refresh", "ancestral_refresh"} else "defer",
+                        "decision": "accept" if job["payload"].get("repair") or domain in checkpoint_domains else "defer",
                         "summary": "inventory reviewed"
                         if job["payload"].get("repair")
                         else "inventory needs work",
@@ -319,7 +333,7 @@ def test_counterexample_requires_protected_reproduction(repo, tmp_path, protecte
                     "session_id": job["id"],
                     "result": {
                         "decision": "accept"
-                        if domain in {"accept", "chained_refresh", "ancestral_refresh", "repair_retry", "verification_repair_retry"}
+                        if domain in {"accept", *checkpoint_domains, "repair_retry", "verification_repair_retry"}
                         else "defer",
                         "summary": "domain reviewed",
                         "findings": [],
@@ -335,6 +349,7 @@ def test_counterexample_requires_protected_reproduction(repo, tmp_path, protecte
                     },
                 }
             if job["payload"]["kind"] == "investigate_defect":
+                repair_inputs.append((job["payload"], git(repo, "rev-parse", "HEAD")))
                 if job["payload"].get("round", 0) == 0:
                     (repo / "src.py").write_text("def f(x):\n    return x + 1\n")
                 else:
@@ -424,19 +439,30 @@ def test_counterexample_requires_protected_reproduction(repo, tmp_path, protecte
         monkeypatch.setattr(Coordinator, "_enqueue", start_fix_at_reviewed_checkpoint)
     snapshot, worker, github = run(
         repo, tmp_path, agent=FixAgent(), worker=ProtectedWorker() if protected else Worker(),
-        concurrency=1 if domain in {"chained_refresh", "ancestral_refresh"} else 3,
+        concurrency=1 if domain in checkpoint_domains else 3,
     )
+    if domain == "changed_requirement":
+        assert any(e["kind"] == "fas_reviewed" for e in snapshot["events"])
+        assert not repair_inputs and not github.published
+        assert snapshot["session"]["status"] == "blocked"
+        return
     assert any(j["payload"]["kind"] == "adjudicate_defect" for j in snapshot["jobs"])
     assert any(j["payload"]["kind"] == "reproduce_defect" for j in snapshot["jobs"])
-    fix_expected = protected and domain in {"accept", "chained_refresh", "ancestral_refresh", "repair_retry", "verification_repair_retry"}
+    fix_expected = protected and domain in {"accept", *checkpoint_domains, "repair_retry", "verification_repair_retry"}
     assert any(j["payload"]["kind"] == "adjudicate_domain" for j in snapshot["jobs"]) is protected
     assert (
         any(j["payload"]["kind"] == "investigate_defect" for j in snapshot["jobs"]) is fix_expected
     )
-    if domain == "chained_refresh":
+    if domain in {"changed_requirement", "changed_cas"}:
+        accepted = [event["payload"]["head"] for event in snapshot["events"]
+                    if event["kind"] == "fas_reviewed"]
+        assert accepted and accepted[0] != snapshot["session"]["base"]
+        assert not repair_inputs
         assert not github.published
         assert snapshot["session"]["status"] == "blocked"
-        assert any("reconciliation" in finding.get("summary", "").lower()
+        assert any(finding.get("status") in {"gap", "inconclusive"} and
+                   ("checkpoint" in finding.get("summary", "").lower() or
+                    "repair" in finding.get("summary", "").lower())
                    for finding in snapshot["findings"])
         return
     if fix_expected:
@@ -466,9 +492,21 @@ def test_counterexample_requires_protected_reproduction(repo, tmp_path, protecte
             j["payload"]["kind"] == "generate_verification" and j["payload"].get("repair")
             for j in snapshot["jobs"]
         )
-        if domain in {"chained_refresh", "ancestral_refresh"}:
+        if domain in checkpoint_domains:
             import hashlib
 
+            first_checkpoint = next(e["payload"]["head"] for e in snapshot["events"]
+                                    if e["kind"] == "fas_reviewed")
+            fix = next(j for j in snapshot["jobs"] if j["payload"]["kind"] == "investigate_defect")
+            assert repair_inputs[0][1] == first_checkpoint
+            assert fix["outcome"]["observed_source_revision"] == first_checkpoint
+            assert git(repo, "merge-base", first_checkpoint, fix["outcome"]["head"]) == first_checkpoint
+            assert snapshot["session"]["base"] == fix["payload"]["evidence"]["source_identity"]["revision"]
+            assert repair_inputs[0][0]["evidence"] == fix["payload"]["evidence"]
+            assert repair_inputs[0][0]["reproduction"] == fix["payload"]["reproduction"]
+            domain_review = next(j for j in snapshot["jobs"] if j["payload"]["kind"] == "adjudicate_domain")
+            assert domain_review["payload"]["evidence"] == fix["payload"]["evidence"]
+            assert domain_review["payload"]["reproduction"] == fix["payload"]["reproduction"]
             assert len(spec_review_contexts) >= 4
             fresh = [(payload, context) for payload, context in spec_review_contexts
                      if "return x + 1" in context["files"].get("src.py", "")]
