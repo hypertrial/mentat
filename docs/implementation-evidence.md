@@ -450,10 +450,14 @@ was 494,872 bytes including its wrapper with sixteen synthetic 4,097-byte
 findings, one byte above each review's allowed maximum. These are capacity
 measurements, not real acceptances, and no historical decisions were changed.
 
-Independent pre-commit review found two defects: structured accepted output could
-be omitted from aggregate findings, and an artifact replaced with a FIFO could
-block before file-type validation. Accepted source reviews now require the other
-structured output arrays to be present and empty; nonblocking reads reject
+Independent review found three defects: structured accepted output could
+be omitted from aggregate findings, an artifact replaced with a FIFO could
+block before file-type validation, and a CAS-only edit could leave its unchanged
+FAS requirement and mapped source outside the source plan. The planner now follows
+both baseline and current CAS paths; the repeated v6 sizing measurements above
+are unchanged. Final independent review of that fix remains pending. Accepted
+source reviews require the other structured output arrays to be present and
+empty; nonblocking reads reject
 nonregular artifacts before consuming them. Regression checks cover the actual
 runner's prompt, scope and receipt tampering, private path/content boundaries,
 growing reads, FIFO substitutions and publication before any GitHub effect.

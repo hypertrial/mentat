@@ -54,6 +54,10 @@ def build_plan(base_fas: dict, current_fas: dict, changed_paths: list[str],
     changed = set(changed_paths)
     affected = {key for key in old_requirements.keys() | requirements.keys()
                 if old_requirements.get(key) != requirements.get(key)}
+    changed_cas = {path for path in changed if path.startswith("openspec/specs/")}
+    affected.update(record["id"] for fas in (base_fas, current_fas)
+                    for record in fas.get("requirements", [])
+                    if record.get("spec_path") in changed_cas)
     for key in old_claims.keys() | claims.keys():
         if old_claims.get(key) != claims.get(key):
             for claim in (old_claims.get(key), claims.get(key)):

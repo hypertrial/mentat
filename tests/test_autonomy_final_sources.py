@@ -564,3 +564,88 @@ sys.exit(1)
     result = subprocess.run([sys.executable, '-c', script, str(payload_path)],
                             capture_output=True, text=True, timeout=5, check=False)
     assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize('variant', ['edit', 'deleted_old', 'renamed_old', 'renamed_new'])
+def test_changed_cas_selects_sources_from_both_fas_versions(variant):
+    from mentat.autonomy_final_review import build_plan
+
+    old_path = 'openspec/specs/old/spec.md'
+    new_path = 'openspec/specs/new/spec.md'
+    requirement = {'id': 'req', 'spec_path': old_path, 'citations': ['evidence.py#L1']}
+    claim = {'id': 'claim', 'requirement_ids': ['req'],
+             'formal_contract': {'path': 'contract.py', 'function': 'f', 'inputs': {},
+                                 'requires': 'True', 'ensures': 'True'}, 'citations': []}
+    surface = {'path': 'mapped.py', 'status': 'mapped', 'requirement_ids': ['req']}
+    base = {'requirements': [requirement], 'claims': [claim], 'surfaces': [surface]}
+    if variant == 'renamed_new':
+        base['requirements'][0]['spec_path'] = new_path
+    current = deepcopy(base)
+    changed = [old_path, new_path] if variant.startswith('renamed') else [old_path]
+    identity = {'mode': '100644', 'type': 'blob', 'blob': '1' * 40}
+    entries = {path: {'base': identity, 'current': identity}
+               for path in ['mapped.py', 'evidence.py', 'contract.py']}
+    plan = build_plan(base, current, changed, entries, {})
+    assert plan['affected_requirements'] == ['req']
+    assert {item['path'] for item in plan['obligations']} == set(entries)
+    assert base['requirements'][0] in plan['records']['base']['requirements']
+    if variant == 'edit':
+        assert current == base
+        assert requirement in plan['records']['current']['requirements']
+
+
+def test_cas_only_change_requires_current_source_review_before_publication(tmp_path):
+    from test_autonomy import _valid_publication_spec
+
+    repo = repo_fixture.__wrapped__(tmp_path)
+    _valid_publication_spec(repo)
+    fas_path = repo / '.mentat/fas.json'
+    fas = json.loads(fas_path.read_text())
+    requirement_id = fas['requirements'][0]['id']
+    fas['requirements'][0]['citations'] = ['src.py']
+    for surface in fas['surfaces']:
+        if surface['path'] == 'src.py':
+            surface.update(status='mapped', requirement_ids=[requirement_id])
+    fas_path.write_text(json.dumps(fas))
+    git(repo, 'add', '.')
+    git(repo, 'commit', '-qm', 'existing mapped specification')
+    base = git(repo, 'rev-parse', 'HEAD')
+    git(repo, 'update-ref', 'refs/remotes/origin/main', base)
+    spec = repo / 'openspec/specs/app/spec.md'
+    spec.write_text(spec.read_text() + '\nChanged intended behavior.\n')
+    git(repo, 'commit', '-qam', 'change CAS only')
+    candidate = git(repo, 'rev-parse', 'HEAD')
+    assert git(repo, 'diff', '--name-only', base, candidate) == 'openspec/specs/app/spec.md'
+    calls = []
+
+    class NoopAgent(Agent):
+        def run(self, repo, job, output, *, timeout_seconds):
+            kind = job['payload']['kind']
+            data = json.loads(job['payload']['prompt'].split('SOURCE_CONTEXT_JSON:\n', 1)[1])
+            calls.append((job['id'], kind, job['payload'], data))
+            if kind in {'generate_spec', 'generate_verification'}:
+                return {'status': 'succeeded', 'session_id': job['id'], 'result': {
+                    'decision': 'accept', 'summary': 'No changes', 'findings': [],
+                    'verification_requests': []}}
+            return super().run(repo, job, output, timeout_seconds=timeout_seconds)
+
+    snapshot, _, github = run(repo, tmp_path, agent=NoopAgent())
+    assert github.published, snapshot
+    source = [row for row in calls if row[1] == 'review_final_source']
+    aggregate = [row for row in calls if row[1] == 'review_final']
+    matching = [row for row in source if any(
+        item['path'] == 'src.py' for item in row[3]['source_batch']['obligations'])]
+    assert len(matching) == 2
+    assert len({row[0] for row in matching}) == 2
+    for _, _, _, data in matching:
+        assert data['revision'] == github.published[0]
+        assert data['files']['src.py'] == (repo / 'src.py').read_text()
+        assert any(row['id'] == requirement_id
+                   for row in data['source_batch']['records']['current']['requirements'])
+    assert len(aggregate) == 2
+    assert max(i for i, row in enumerate(calls) if row in matching) < min(
+        i for i, row in enumerate(calls) if row[1] == 'review_final')
+    assert all(row[3]['source_coverage']['batches'] for row in aggregate)
+    assert git(repo, 'show', f'{base}:.mentat/fas.json') == git(
+        repo, 'show', f'{candidate}:.mentat/fas.json')
+    assert git(repo, 'show', f'{base}:src.py') == git(repo, 'show', f'{candidate}:src.py')

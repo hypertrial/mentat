@@ -39,6 +39,8 @@ Before source changes: `scripts/verify` completed with 1,479 passed and 53 skipp
 
 ## Decisions
 
+- 2026-11-24: changing a CAS document affects every baseline or current requirement whose `spec_path` names that document, even when its FAS record and source bytes are unchanged. Include deleted and renamed CAS paths when deriving that set, then reserve the associated mapped sources, citations and linked formal targets for fresh source reviews. Regress the CAS-only semantic-edit case through both independent source reviewers and publication; an empty plan cannot silently bypass the changed requirement.
+
 - 2026-11-24: an accepted source review must carry all substantive observations in the complete bounded summary/findings passed to aggregate review. Its other structured output arrays (`requirements`, `claims`, `verification_requests`, `defects`, `changes`) must be present and empty; missing, malformed or nonempty fields cannot silently disappear into a qualifying acceptance. Revalidate this rule against the actual stored outcome. Preserve non-accept outcomes and their existing history/routing.
 
 - 2026-11-24: separate private prompt/manifest persistence and validation into `autonomy_review_inputs.py`, with explicit current bindings and no coordinator import. Keep the planning module pure and state/lease/outcome authority in the coordinator. This keeps each source file within the unchanged review limit. Source batches supply complete relevant FAS records and identities; aggregate review retains the entire FAS. Bind every counted acceptance to the actual successful discriminator decision and recomputed cohort, job kind, source, prompt and current mandatory evidence.
