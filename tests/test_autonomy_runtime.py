@@ -447,3 +447,162 @@ def test_discriminator_rejects_changes_and_generator_persists_private_logs(tmp_p
     assert result["status"] == "succeeded" and result["events"] == [{"type": "thread.started", "thread_id": "id"}]
     for name in ("codex-events.jsonl", "codex-result.json"):
         assert stat.S_IMODE((tmp_path / "generate" / name).stat().st_mode) == 0o600
+
+
+def _fas_patch_fixture(tmp_path):
+    import hashlib
+
+    from mentat.autonomy_state import record_digest
+
+    path = tmp_path / '.mentat/fas.json'
+    path.parent.mkdir(exist_ok=True)
+    old = {'id': '00000000-0000-0000-0000-000000000001', 'statement': 'old'}
+    other = {'path': 'src.py', 'status': 'gap', 'requirement_ids': []}
+    data = {'schema_version': 1, 'requirements': [old], 'claims': [], 'surfaces': [other]}
+    path.write_text(json.dumps(data, indent=2) + '\n')
+    patch = {
+        'schema_version': 1,
+        'expected_sha256': hashlib.sha256(path.read_bytes()).hexdigest(),
+        'edits': [{'collection': 'requirements', 'key': old['id'],
+                   'expected_digest': record_digest(old),
+                   'record': {**old, 'statement': 'new'}}],
+    }
+    return path, data, patch
+
+
+def _fas_change(patch, path='.mentat/fas.json'):
+    return {'path': path, 'operation': 'patch_fas', 'content': json.dumps(patch)}
+
+
+def test_patch_fas_updates_and_inserts_without_changing_other_records(tmp_path):
+    path, data, patch = _fas_patch_fixture(tmp_path)
+    inserted = {'path': 'other.py', 'status': 'unexamined', 'requirement_ids': []}
+    patch['edits'].append({'collection': 'surfaces', 'key': 'other.py',
+                           'expected_digest': None, 'record': inserted})
+    runtime.apply_changes(tmp_path, [_fas_change(patch)], kind='generate_spec')
+    result = json.loads(path.read_text())
+    assert result['requirements'] == [patch['edits'][0]['record']]
+    assert result['surfaces'] == data['surfaces'] + [inserted]
+    assert result['claims'] == []
+
+
+def test_patch_fas_rejects_invalid_edits_without_writing(tmp_path):
+    import copy
+
+    import pytest
+
+    path, _, valid = _fas_patch_fixture(tmp_path)
+    original = path.read_bytes()
+    cases = []
+    def case():
+        patch = copy.deepcopy(valid)
+        cases.append(patch)
+        return patch
+    case()['expected_sha256'] = '0' * 64
+    case()['expected_sha256'] = 'A' * 64
+    case()['edits'][0]['expected_digest'] = '0' * 64
+    case()['edits'][0]['key'] = '00000000-0000-0000-0000-000000000002'
+    case()['edits'][0]['expected_digest'] = None
+    case()['edits'][0]['record']['id'] = '00000000-0000-0000-0000-000000000002'
+    case()['edits'][0]['collection'] = 'unknown'
+    patch = case()
+    patch['edits'].append(copy.deepcopy(patch['edits'][0]))
+    case()['schema_version'] = True
+    case()['edits'] = [{'collection': 'surfaces', 'key': f'file{i}.py',
+                        'expected_digest': None, 'record': {'path': f'file{i}.py'}}
+                       for i in range(129)]
+    case()['edits'][0]['record']['statement'] = 'x' * 300_001
+    for patch in cases:
+        with pytest.raises((ValueError, OSError)):
+            runtime.apply_changes(tmp_path, [_fas_change(patch)], kind='generate_spec')
+        assert path.read_bytes() == original
+    for content in ('{', '{"schema_version":1,"schema_version":1}',
+                    json.dumps(valid)[:-1] + ',"edits":[]}'):
+        with pytest.raises((ValueError, OSError)):
+            runtime.apply_changes(tmp_path, [{'path': '.mentat/fas.json',
+                'operation': 'patch_fas', 'content': content}], kind='generate_spec')
+        assert path.read_bytes() == original
+
+
+def test_patch_fas_rejects_scope_symlinks_and_missing_file(tmp_path):
+    import pytest
+
+    path, _, patch = _fas_patch_fixture(tmp_path)
+    original = path.read_bytes()
+    for kind, name in [('generate_verification', '.mentat/fas.json'),
+                       ('investigate_defect', '.mentat/fas.json'),
+                       ('generate_spec', 'openspec/specs/fas.json'),
+                       ('generate_spec', '.mentat/../.mentat/fas.json')]:
+        with pytest.raises((ValueError, OSError)):
+            runtime.apply_changes(tmp_path, [_fas_change(patch, name)], kind=kind)
+    path.unlink()
+    with pytest.raises((ValueError, OSError)):
+        runtime.apply_changes(tmp_path, [_fas_change(patch)], kind='generate_spec')
+    outside = tmp_path / 'outside'
+    outside.write_bytes(original)
+    path.symlink_to(outside)
+    with pytest.raises((ValueError, OSError)):
+        runtime.apply_changes(tmp_path, [_fas_change(patch)], kind='generate_spec')
+    assert outside.read_bytes() == original
+
+
+def test_invalid_later_patch_does_not_write_earlier_change(tmp_path):
+    import pytest
+
+    path, _, patch = _fas_patch_fixture(tmp_path)
+    spec = tmp_path / 'openspec/specs/a/spec.md'
+    spec.parent.mkdir(parents=True)
+    spec.write_text('original')
+    original = path.read_bytes()
+    patch['expected_sha256'] = '0' * 64
+    with pytest.raises((ValueError, OSError)):
+        runtime.apply_changes(tmp_path, [
+            {'path': 'openspec/specs/a/spec.md', 'operation': 'write', 'content': 'changed'},
+            _fas_change(patch),
+        ], kind='generate_spec')
+    assert spec.read_text() == 'original'
+    assert path.read_bytes() == original
+
+
+def test_patch_fas_compact_change_to_large_file(tmp_path):
+    path, data, patch = _fas_patch_fixture(tmp_path)
+    data['surfaces'][0]['description'] = 'x' * 70_000
+    path.write_text(json.dumps(data))
+    import hashlib
+    patch['expected_sha256'] = hashlib.sha256(path.read_bytes()).hexdigest()
+    assert len(json.dumps(patch)) < 1_000
+    runtime.apply_changes(tmp_path, [_fas_change(patch)], kind='generate_spec')
+    result = json.loads(path.read_text())
+    assert result['requirements'][0]['statement'] == 'new'
+    assert result['surfaces'] == data['surfaces']
+
+
+def test_patch_fas_rejects_oversized_materialized_output(tmp_path):
+    import hashlib
+
+    import pytest
+
+    path, data, patch = _fas_patch_fixture(tmp_path)
+    data['surfaces'][0]['description'] = 'x' * 300_000
+    path.write_text(json.dumps(data))
+    original = path.read_bytes()
+    patch['expected_sha256'] = hashlib.sha256(original).hexdigest()
+    assert len(json.dumps(patch)) < 1_000
+    with pytest.raises((ValueError, OSError)):
+        runtime.apply_changes(tmp_path, [_fas_change(patch)], kind='generate_spec')
+    assert path.read_bytes() == original
+
+
+def test_patch_fas_rejects_malformed_existing_json(tmp_path):
+    import hashlib
+
+    import pytest
+
+    path, _, patch = _fas_patch_fixture(tmp_path)
+    for raw in (b'{"schema_version": 1, "schema_version": 1}',
+                b'{"schema_version": 1, "requirements": NaN}'):
+        path.write_bytes(raw)
+        patch['expected_sha256'] = hashlib.sha256(raw).hexdigest()
+        with pytest.raises((ValueError, OSError)):
+            runtime.apply_changes(tmp_path, [_fas_change(patch)], kind='generate_spec')
+        assert path.read_bytes() == raw

@@ -81,3 +81,23 @@ diff through review retries, failed prechecks and deferred source batches. Two
 independent reviews identified the additional continuation paths and sent them
 back to the owner for fixes and prompt-level regressions. Existing omissions remain errors. Full checks,
 independent acceptance and another real self-run remain required.
+
+## Large-specification edit interface
+
+The next real self-run at `37cda52` advanced source batches and independently
+reviewed both unchanged drafts and a CAS addition. Several generator responses
+explicitly identified supported observations but deferred because safely replacing
+the complete 70 KB FAS was impractical without editing tools. Independent review
+confirmed this as a specification-editing bottleneck. The optional `patch_fas`
+protocol addresses individual records with exact file/record digests and preserves
+the existing complete-candidate validation and independent review gates. It grants
+no execution or filesystem tools to agents. Protocol checks and renewed real-run
+evidence remain required before that capability counts as ready.
+
+That run later stopped after repeated provenance revision requests. A generator
+cited its actual input revision; the resulting candidate had a different hash,
+and reviewers asked the versioned document to cite that resulting hash instead.
+The next edit necessarily produced another hash. Its generic prompt also called
+the static session head the repository head while supplying job-specific source.
+The correction distinguishes immutable observed source provenance from candidate
+identity; it does not relax exact-revision execution evidence or review freshness.
