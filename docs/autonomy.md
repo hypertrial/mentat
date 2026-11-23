@@ -58,6 +58,20 @@ identity. Reviewers check the observed ancestor and relevant changed content;
 a versioned specification does not need to embed its own resulting commit hash.
 Execution results and approvals still bind to the exact candidate head and base.
 
+Later reviews carry bounded controller-validated evidence of earlier source
+correspondence reviews. It binds the reviewed records and source blobs to actual
+independent decisions; unchanged baseline records retain their unreviewed status.
+This process evidence accompanies the complete final diff and current proof
+source, contracts, frontend and check results. Changed content requires fresh review.
+
+An IIL repair queued before SCL accepts a newer specification can start from that
+accepted checkpoint while retaining the original witness, reproduction and
+adjudicator identities. Reuse currently requires byte-unchanged application and
+CAS context and unchanged linked obligations; changed or incomparable context
+remains explicitly inconclusive and needs fresh assessment. Correction retries
+retain the already repaired head. Protected checks and independent reviews bind
+the resulting candidate, and later accepted work is checked again before publishing.
+
 Review context prioritizes the complete sources needed to assess changed FAS
 mappings and source contracts, alongside mandatory specifications and the full
 proposal diff. A mapping is not accepted when its required source cannot be
