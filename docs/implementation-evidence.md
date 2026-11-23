@@ -278,3 +278,26 @@ The review-diff command also explicitly disables Git text conversion so configur
 converters cannot run on the host while constructing review context or digests.
 A marker-converter regression must verify that the fixture would execute without
 the flag, then confirm raw source diff output without converter execution.
+
+Corrected candidate `5d6212d9d58f0bb05415bec6dcf9e691b3ca9fb8` passed
+Linux completion (1,789 passed, 53 documented optional skips), both package
+gates, static analysis and all 45 protected checker fixtures without skips.
+Native completion had one failure, 1,788 passes and 53 skips: Git worktree
+registration failed while reading another job's `commondir` with `Result too
+large`. A similar intermittent native failure occurred in an earlier candidate.
+Source manifests and the exact clean head remained unchanged. The failure
+escaped future result handling; concurrent registration is a plausible cause,
+not established by the now-deleted temporary fixture. A bounded registration
+critical section, explicit job failure handling and deterministic concurrency
+regressions are required before another exact-revision completion attempt.
+
+The test engineer reproduced three overlapping registrations on the prior code.
+After the fix, registration overlap was one while an agent barrier confirmed
+three agents still execute concurrently. An injected registration error after
+actual Git creation exhausts exactly three attempts, records an inconclusive
+finding, preserves the three branches/worktrees and makes no remote calls;
+the prior code escaped the future. Both regressions and the previously failing
+native case pass. The critical section is per coordinator; the normal workspace
+lock excludes another controller using the same store. Independent state roots
+or external Git administration remain outside that lock. Renewed independent
+reviews and exact-revision full native/Linux gates remain pending.

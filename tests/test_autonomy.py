@@ -3660,3 +3660,115 @@ def test_review_diff_never_executes_configured_git_textconv(repo, tmp_path):
     assert context['proposal_diff'].encode() == raw_diff
     assert hashlib.sha256(context['proposal_diff'].encode()).digest() == hashlib.sha256(expected_diff).digest()
     assert not marker.exists()
+
+
+def test_concurrent_review_jobs_serialize_git_registration_but_not_agents(repo, tmp_path, monkeypatch):
+    import threading
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+
+    from mentat import autonomy
+
+    git_call = autonomy.git
+    registration_guard = threading.Lock()
+    registration_overlap = threading.Event()
+    in_registration = 0
+    max_registration = 0
+    started = threading.Barrier(3)
+    agents_started = threading.Barrier(3, timeout=10)
+    agent_guard = threading.Lock()
+    active_agents = 0
+    max_agents = 0
+
+    def observed_git(path, *args):
+        nonlocal in_registration, max_registration
+        if args[:2] != ('worktree', 'add'):
+            return git_call(path, *args)
+        with registration_guard:
+            in_registration += 1
+            max_registration = max(max_registration, in_registration)
+            if in_registration > 1:
+                registration_overlap.set()
+        try:
+            # Give other already-started jobs an opportunity to enter Git. The
+            # event makes overlap deterministic on the previous implementation.
+            registration_overlap.wait(1)
+            return git_call(path, *args)
+        finally:
+            with registration_guard:
+                in_registration -= 1
+
+    class ConcurrentAgent(Agent):
+        def run(self, repo, job, output, *, timeout_seconds):
+            nonlocal active_agents, max_agents
+            with agent_guard:
+                active_agents += 1
+                max_agents = max(max_agents, active_agents)
+            try:
+                agents_started.wait()
+                return super().run(repo, job, output, timeout_seconds=timeout_seconds)
+            finally:
+                with agent_guard:
+                    active_agents -= 1
+
+    monkeypatch.setattr(autonomy, 'git', observed_git)
+    head = git(repo, 'rev-parse', 'HEAD')
+    store = Store(tmp_path / 'state/state.db')
+    config = default_config(repo)
+    coordinator = Coordinator(repo, store, ConcurrentAgent(), Worker(), GitHub())
+    coordinator.config = config
+    now = time.time()
+    coordinator.session_id = store.new_session(str(repo), head, head, config, now, now + 60)
+    for index in range(3):
+        store.enqueue_job(coordinator.session_id, 'scl', 'code-reviewer', f'review-{index}',
+                          f'input-{index}', {'kind': 'review_spec', 'target_head': head,
+                          'proposal': {'head': head, 'parent': head, 'diff_digest': 'diff'}})
+    jobs = [store.claim_job(coordinator.session_id, f'worker-{index}', now=now, lease_seconds=50)
+            for index in range(3)]
+    assert all(job is not None for job in jobs)
+
+    def execute(job):
+        started.wait(timeout=10)
+        return coordinator._execute(job, now + 50)
+
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        outcomes = list(pool.map(execute, jobs))
+    assert all(outcome['status'] == 'succeeded' for outcome in outcomes)
+    assert max_registration == 1
+    assert not registration_overlap.is_set()
+    assert max_agents == 3
+    for job, outcome in zip(jobs, outcomes, strict=True):
+        store.finish_job(job['id'], job['lease_token'], outcome, now=time.time())
+        assert git(outcome['worktree'], 'rev-parse', 'HEAD') == head
+    assert len([job for job in store.snapshot(coordinator.session_id)['jobs']
+                if job['status'] == 'succeeded']) == 3
+
+
+def test_worktree_registration_runtime_error_is_bounded_and_preserves_evidence(repo, tmp_path, monkeypatch):
+    from mentat import autonomy
+
+    git_call = autonomy.git
+    registered = []
+
+    def failing_registration(path, *args):
+        result = git_call(path, *args)
+        if args[:2] == ('worktree', 'add'):
+            registered.append((args[3], args[4]))
+            raise RuntimeError('worktree registration failed after creation')
+        return result
+
+    monkeypatch.setattr(autonomy, 'git', failing_registration)
+    snapshot, _, github = run(repo, tmp_path)
+    job = next(job for job in snapshot['jobs'] if job['payload']['kind'] == 'generate_spec')
+    events = [event for event in snapshot['events'] if event['kind'] == 'job_claimed'
+              and event['payload']['job_id'] == job['id']]
+    assert [event['payload']['attempt'] for event in events] == [1, 2, 3]
+    assert job['attempt'] == 3 and job['outcome'].get('exhausted')
+    assert snapshot['session']['status'] == 'blocked'
+    assert any('worktree registration failed after creation' in finding.get('summary', '')
+               for finding in snapshot['findings'])
+    assert not github.published and not github.merged
+    assert len(registered) == 3
+    for branch, path in registered:
+        assert Path(path).is_dir()
+        assert git(repo, 'rev-parse', '--verify', branch)

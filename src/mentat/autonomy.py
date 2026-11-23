@@ -944,16 +944,24 @@ class Coordinator:
             return project_snapshot(self.store.snapshot(self.session_id), identity=current_identity)
 
     def _worktree(self, job: dict, head: str) -> Path:
-        root = self.store.path.parent / "worktrees"
-        root.mkdir(exist_ok=True, mode=0o700)
-        path = root / f"{job['id']}-{job['attempt']}"
-        if path.exists():
-            if git(path, "rev-parse", "HEAD") != head:
-                raise ValueError("existing worktree has different pinned source")
+        # Git writes shared worktree registration files before they are fully
+        # readable. Serialize registration, not the work performed afterward.
+        with self._lock:
+            root = self.store.path.parent / "worktrees"
+            root.mkdir(exist_ok=True, mode=0o700)
+            path = root / f"{job['id']}-{job['attempt']}"
+            try:
+                if path.exists():
+                    if git(path, "rev-parse", "HEAD") != head:
+                        raise ValueError("existing worktree has different pinned source")
+                    return path
+                branch = "mentat/" + self.session_id[:10] + "/" + job["id"][:10] + "-" + str(job["attempt"])  # type: ignore[index]
+                git(self.repo, "worktree", "add", "-b", branch, str(path), head)
+            except RuntimeError as exc:
+                # Route Git failures through the controller's bounded job
+                # failure handling; never remove a partially created worktree.
+                raise ValueError(f"worktree registration failed: {exc}") from exc
             return path
-        branch = "mentat/" + self.session_id[:10] + "/" + job["id"][:10] + "-" + str(job["attempt"])  # type: ignore[index]
-        git(self.repo, "worktree", "add", "-b", branch, str(path), head)
-        return path
 
     def _check_plan(self, commands: list) -> list[list[str]]:
         """Validate and deduplicate executable gates while preserving their order."""
