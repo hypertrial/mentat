@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")/.."
+if [[ $# != 1 || "$1" != /* || -e "$1" ]]; then
+    echo 'Usage: scripts/record-fixtures /absolute/new-output-directory' >&2
+    exit 1
+fi
+out=$1
+scratch=$(mktemp -d "${TMPDIR:-/tmp}/mentat-records.XXXXXXXX")
+trap 'rm -rf -- "$scratch"' EXIT
+mkdir -p "$(dirname "$out")" "$out" "$scratch/src" "$scratch/run"
+sha=9e1fb56221e51a5cb7f843bc49022a340f685adb
+mkdir "$scratch/src/v0.1.2"
+git archive "$sha" | tar -x -C "$scratch/src/v0.1.2"
+(cd "$scratch/src/v0.1.2" && uv sync --locked)
+python3 scripts/generate_record_fixtures.py \
+    --mentat "$scratch/src/v0.1.2/.venv/bin/mentat" \
+    --examples "$scratch/src/v0.1.2/examples" --work "$scratch/run/v0.1.2" \
+    --out "$out/v0.1.2" --label v0.1.2 --source-sha "$sha" --features basic --require-all
+sha=4be09f995b144254ad024b2d5501e88b3568f26f
+mkdir "$scratch/src/main-pre-split"
+git archive "$sha" | tar -x -C "$scratch/src/main-pre-split"
+(cd "$scratch/src/main-pre-split" && uv sync --locked)
+python3 scripts/generate_record_fixtures.py \
+    --mentat "$scratch/src/main-pre-split/.venv/bin/mentat" \
+    --examples "$scratch/src/main-pre-split/examples" --work "$scratch/run/main-pre-split" \
+    --out "$out/main-pre-split" --label main-pre-split --source-sha "$sha" --features full --require-all

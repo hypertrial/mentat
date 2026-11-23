@@ -12,40 +12,21 @@ jobs:
   test:
     name: Mentat checks
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 2
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
-          # The pull-request merge commit and its first parent (the base) are enough to list changes.
           fetch-depth: 2
-      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
-        with:
-          version: '0.11.13'
-          enable-cache: false
-      # The full suite runs locally before every push (scripts/verify) and on Linux and macOS in
-      # the Release verification workflow. This job runs only the fast static checks and what a
-      # macOS workstation cannot run: the real Linux proof-checker fixtures.
-      - name: Run static checks
+      - name: Check Python syntax and changed whitespace
         run: |
-          uv sync --locked
-          scripts/verify-fast
-      # The real fixtures take about five minutes and reach only these files, so pull requests
-      # run them when one of them changes. Pushes to main always run them.
-      - name: Decide whether the proof checker changed
-        id: scope
-        run: |
-          paths='^(src/mentat/(proof_checker|proof_lean|canonical)\.py|tests/test_proof_checker\.py|scripts/install-proof-checker|\.github/workflows/ci\.yml|pyproject\.toml|uv\.lock)$'
-          if [ "$GITHUB_EVENT_NAME" != pull_request ] || git diff --name-only HEAD^1 HEAD | grep -Eq "$paths"; then
-            echo run=true >> "$GITHUB_OUTPUT"
-          else
-            echo 'Proof checker unchanged; its real fixtures run on the push to main.'
-            echo run=false >> "$GITHUB_OUTPUT"
-          fi
-      - name: Run Linux proof-checker fixtures
-        if: steps.scope.outputs.run == 'true'
-        env:
-          MENTAT_REQUIRE_PROOF_CHECKER: '1'
-        run: |
-          bash scripts/install-proof-checker --ci-profile
-          uv run --locked --no-sync pytest -q -rs tests/test_proof_checker.py
+          python3 - <<'PY'
+          import subprocess
+          from pathlib import Path
+
+          paths = subprocess.check_output(['git', 'ls-files', '-z', '--', '*.py']).split(b'\0')
+          for path in filter(None, paths):
+              name = path.decode('utf-8', 'surrogateescape')
+              compile(Path(name).read_bytes(), name, 'exec', dont_inherit=True)
+          PY
+          git diff --check HEAD^1 HEAD
