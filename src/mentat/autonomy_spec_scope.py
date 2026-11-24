@@ -292,7 +292,46 @@ def _endpoint(controller: Any, revision: str, inventory: Any, *, allow_absent: b
 
 
 
-def derive_for_review(controller: Any, review_job_id: str, decision_id: str, inventory: Any, git_paths: Any) -> dict:
+def _initial_pair(controller: Any, snapshot: dict, review: dict, proposal: dict, cohort: str) -> tuple[list[str], int]:
+    """Authenticate the original scheduling boundary for the complete review pair."""
+    root, round_number = proposal.get("root_item"), proposal.get("round", 0)
+    if not isinstance(root, str) or not root or type(round_number) is not int or round_number < 0:
+        raise ValueError("invalid initial specification review identity")
+    jobs = snapshot["jobs"]
+    events = snapshot["events"]
+    pair = []
+    sequences = []
+    for slot in (1, 2):
+        item = f"{root}.review_spec..{round_number}.{slot}"
+        matches = [j for j in jobs if j.get("item_id") == item
+                   and j.get("payload", {}).get("review_cohort") == cohort]
+        if len(matches) != 1:
+            raise ValueError("initial specification review pair is missing or ambiguous")
+        member = matches[0]
+        payload = member.get("payload", {})
+        enqueued = [e for e in events if e.get("kind") == "job_enqueued"
+                    and e.get("payload", {}).get("job_id") == member.get("id")]
+        if (member.get("session_id") != controller.session_id or member.get("loop") != "scl"
+            or member.get("role") != "code-reviewer" or payload != review["payload"]
+            or payload.get("proposal") != proposal or payload.get("kind") != "review_spec"
+            or controller._review_cohort("review_spec", proposal, payload, None, None) != cohort
+            or len(enqueued) != 1):
+            raise ValueError("initial specification review pair is inconsistent")
+        event = enqueued[0]
+        recorded = event.get("payload", {})
+        if (type(event.get("seq")) is not int or recorded.get("loop") != "scl"
+            or recorded.get("role") != "code-reviewer" or recorded.get("item_id") != item
+            or recorded.get("payload") != payload
+            or recorded.get("input_digest") != member.get("input_digest")):
+            raise ValueError("initial specification review scheduling is inconsistent")
+        pair.append(member["id"])
+        sequences.append(event["seq"])
+    if len(set(pair)) != 2 or review["id"] not in pair:
+        raise ValueError("initial specification review slots are not distinct")
+    return pair, max(sequences)
+
+
+def derive_for_review(controller: Any, review_job_id: str, decision_id: str, inventory: Any, git_paths: Any, *, legacy: bool = False) -> dict:
     """Reconstruct scope from the durable review and validated immutable endpoint trees."""
     from . import gitio
     from .autonomy_runtime import git
@@ -327,10 +366,26 @@ def derive_for_review(controller: Any, review_job_id: str, decision_id: str, inv
         or git(controller.repo, "merge-base", binding["review_base"], binding["accepted"]) != binding["review_base"]):
         raise ValueError("correction endpoints are not ancestral")
 
-    old, new = _endpoint(controller, binding["accepted"], inventory, allow_absent=True), _endpoint(controller, binding["draft"], inventory)
+    delta_base = binding["accepted"]
+    initial = None
+    if not legacy and binding["review_base"] == snapshot["session"]["base"] and delta_base != binding["review_base"]:
+        pair, cutoff = _initial_pair(controller, snapshot, review, proposal, cohort)
+        if not any(e.get("kind") == "fas_reviewed" and e.get("seq", 0) <= cutoff
+                   for e in snapshot["events"]):
+            delta_base = binding["review_base"]
+            initial = {"basis": "initial", "delta_base": delta_base,
+                       "review_jobs": pair, "cutoff": cutoff}
+    old, new = _endpoint(controller, delta_base, inventory, allow_absent=True), _endpoint(controller, binding["draft"], inventory)
     paths = git_paths(controller.repo, "diff", "--name-only", "-z", "--no-renames",
-                       "--no-ext-diff", "--no-textconv", binding["accepted"], binding["draft"])
-    return derive(old, new, paths, binding)
+                       "--no-ext-diff", "--no-textconv", delta_base, binding["draft"])
+    if initial is not None:
+        paths = [p for p in paths if p == FAS_PATH or p.startswith("openspec/specs/")]
+    result = derive(old, new, paths, binding)
+    if initial is not None:
+        value = {**{k: v for k, v in result.items() if k != "id"},
+                 "schema_version": 2, "binding": {**binding, **initial}}
+        return {**value, "id": digest(value)}
+    return result
 
 
 def authenticate(controller: Any, job: dict, inventory: Any, git_paths: Any) -> dict | None:
@@ -348,7 +403,10 @@ def authenticate(controller: Any, job: dict, inventory: Any, git_paths: Any) -> 
     if not isinstance(scope, dict) or not isinstance(scope.get("binding"), dict):
         raise ValueError("invalid correction scope")
     binding = scope["binding"]
-    expected = derive_for_review(controller, binding.get("review_job_id"), binding.get("decision_id"), inventory, git_paths)
+    version = scope.get("schema_version")
+    if version not in (1, 2):
+        raise ValueError("unsupported correction scope version")
+    expected = derive_for_review(controller, binding.get("review_job_id"), binding.get("decision_id"), inventory, git_paths, legacy=version == 1)
     if scope != expected or payload.get("review_base") != binding["review_base"]:
         raise ValueError("correction scope or review baseline changed")
     from .autonomy_runtime import git
@@ -362,3 +420,18 @@ def authenticate(controller: Any, job: dict, inventory: Any, git_paths: Any) -> 
                         "--no-ext-diff", "--no-textconv", binding["accepted"], parent)
     validate_delta(scope, original, current, changed)
     return scope
+
+
+def validate_live_frontier(controller: Any, scope: dict, head: str) -> None:
+    """Do not let an initial correction discard a later accepted checkpoint."""
+    if scope.get("schema_version") != 2:
+        return
+    from .autonomy_runtime import git
+
+    cutoff = scope["binding"]["cutoff"]
+    for event in controller.store.snapshot(controller.session_id)["events"]:
+        if event.get("kind") != "fas_reviewed" or event.get("seq", 0) <= cutoff:
+            continue
+        accepted = event.get("payload", {}).get("head")
+        if not isinstance(accepted, str) or not accepted or git(controller.repo, "merge-base", accepted, head) != accepted:
+            raise ValueError("initial correction does not retain a newer accepted specification")

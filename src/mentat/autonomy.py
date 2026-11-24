@@ -1423,6 +1423,7 @@ class Coordinator:
         worktree = self._worktree(job, parent)
         correction_scope = autonomy_spec_scope.authenticate(self, job, inventory, _git_paths) if kind == "generate_spec" else None
         if correction_scope:
+            autonomy_spec_scope.validate_live_frontier(self, correction_scope, parent)
             tracked_input = [item["path"] for item in inventory(self.repo, parent)]
             if FAS_PATH in tracked_input:
                 validate_specification(worktree, tracked=tracked_input)
@@ -3710,6 +3711,8 @@ class Coordinator:
         if len({d["reviewer_id"] for d in decisions}) < 2:
             return
         if kind == "review_spec":
+            if job["payload"].get("correction_scope"):
+                autonomy_spec_scope.validate_live_frontier(self, job["payload"]["correction_scope"], proposal["head"])
             worktree = Path(proposal["worktree"])
             fas = validate_specification(
                 worktree,

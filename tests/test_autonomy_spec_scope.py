@@ -510,3 +510,389 @@ def test_oversized_mandatory_scope_stops_before_agent_call(repo, tmp_path, monke
     with pytest.raises(ReviewContextCapacity):
         coordinator._execute(job, time.time() + 60)
     assert job == saved
+
+
+@pytest.mark.parametrize('base_has_fas', [False, True])
+@pytest.mark.parametrize('operation', ['write', 'patch_fas'])
+def test_initial_manual_feature_scope_authorizes_only_reviewed_spec_delta(repo, tmp_path, base_has_fas, operation):
+    import uuid
+
+    from test_autonomy import _valid_publication_spec
+
+    from mentat.autonomy import AREAS
+
+    if base_has_fas:
+        _valid_publication_spec(repo)
+    base = git(repo, 'rev-parse', 'HEAD')
+    (repo / 'src.py').write_text('def value(): return 1  # manual feature\n')
+    spec = repo / 'openspec/specs/app/spec.md'
+    if base_has_fas:
+        fas = json.loads((repo / '.mentat/fas.json').read_text())
+        req_id = fas['requirements'][0]['id']
+        next(row for row in fas['surfaces'] if row['path'] == 'src.py').update(
+            status='mapped', requirement_ids=[req_id])
+        spec.write_text(spec.read_text() + '\nManual feature requirement.\n')
+    else:
+        spec.parent.mkdir(parents=True)
+        requirements = [{'id': str(uuid.uuid4()), 'area': area, 'origin': 'uncertain',
+                         'statement': 'Manual feature intent', 'spec_path': str(spec.relative_to(repo))}
+                        for area in AREAS]
+        spec.write_text('\n'.join(row['id'] for row in requirements) + '\nManual feature requirement.\n')
+        req_id = requirements[0]['id']
+        fas = {'schema_version': 1, 'requirements': requirements, 'claims': [], 'surfaces': [
+            {'path': path, 'status': 'mapped' if path == 'src.py' else 'unexamined',
+             'requirement_ids': [req_id] if path == 'src.py' else []}
+            for path in ('src.py', '.mentat/workspace.json', '.mentat/fas.json', 'openspec/specs/app/spec.md')]}
+    (repo / '.mentat/fas.json').write_text(json.dumps(fas))
+    git(repo, 'add', '.')
+    git(repo, 'commit', '-qm', 'manual feature and specification')
+    feature = git(repo, 'rev-parse', 'HEAD')
+    calls = []
+
+    class FeatureAgent(Agent):
+        def run(self, repo, job, output, *, timeout_seconds):
+            payload = job['payload']
+            kind = payload['kind']
+            context = json.loads(payload['prompt'].split('SOURCE_CONTEXT_JSON:\n', 1)[1])
+            calls.append((kind, job['id'], job['attempt'], payload, context, git(repo, 'rev-parse', 'HEAD')))
+            if kind == 'generate_spec':
+                if payload.get('round') != 1:
+                    return response(job)
+                data = (repo / '.mentat/fas.json').read_bytes()
+                current = json.loads(data)
+                row = next(row for row in current['surfaces'] if row['path'] == 'src.py')
+                original = dict(row)
+                row['note'] = 'Clarified observed feature.'
+                if operation == 'write':
+                    change = {'path': '.mentat/fas.json', 'operation': 'write', 'content': json.dumps(current)}
+                else:
+                    patch = {'schema_version': 1, 'expected_sha256': hashlib.sha256(data).hexdigest(),
+                             'edits': [{'collection': 'surfaces', 'key': 'src.py',
+                                        'expected_digest': record_digest(original), 'record': row}]}
+                    change = {'path': '.mentat/fas.json', 'operation': 'patch_fas', 'content': json.dumps(patch)}
+                changes = [change, {'path': 'openspec/specs/app/spec.md', 'operation': 'write',
+                                    'content': (repo / 'openspec/specs/app/spec.md').read_text() + '\nClarified.\n'}]
+                if job['attempt'] == 1:
+                    changes.append({'path': 'src.py', 'operation': 'write', 'content': 'value = 99\n'})
+                return response(job, changes)
+            if kind == 'generate_verification':
+                return response(job)
+            result = super().run(repo, job, output, timeout_seconds=timeout_seconds)
+            if kind == 'review_spec' and payload['proposal'].get('round', 0) == 0 and job['item_id'].endswith('.1'):
+                result['result']['decision'] = 'revise'
+                result['result']['findings'] = [{'summary': 'Clarify the reviewed feature.'}]
+            return result
+
+    snapshot, _, _ = run(repo, tmp_path, agent=FeatureAgent())
+    initial = [call for call in calls if call[0] == 'generate_spec' and not call[3].get('round')]
+    retry = [call for call in calls if call[0] == 'generate_spec' and call[3].get('round') == 1]
+    assert len(initial) == 1 and initial[0][5] == feature
+    assert len(retry) == 2, snapshot
+    assert retry[0][1] == retry[1][1] and [entry[2] for entry in retry] == [1, 2]
+    assert retry[0][5] == retry[1][5] == feature
+    assert retry[0][4]['correction_scope'] == retry[1][4]['correction_scope']
+    correction = next(job for job in snapshot['jobs'] if job['id'] == retry[1][1])
+    corrected = correction['outcome']['head']
+    assert corrected != feature
+    assert git(repo, 'show', f'{corrected}:src.py') == 'def value(): return 1  # manual feature'
+    assert 'Clarified.' in git(repo, 'show', f'{corrected}:openspec/specs/app/spec.md')
+    corrected_fas = json.loads(git(repo, 'show', f'{corrected}:.mentat/fas.json'))
+    assert next(row for row in corrected_fas['surfaces'] if row['path'] == 'src.py')['note'] == 'Clarified observed feature.'
+    reviews = [call for call in calls if call[0] == 'review_spec' and call[3]['proposal']['head'] == corrected]
+    assert len(reviews) == 2 and len({call[1] for call in reviews}) == 2
+    assert all(call[3]['proposal']['parent'] == base for call in reviews)
+
+    if base_has_fas or operation != 'write':
+        return
+
+    import sqlite3
+    import time
+
+    from test_autonomy import GitHub, Worker
+
+    from mentat.autonomy import Coordinator, _git_paths, current_tool_identity, digest, inventory
+    from mentat.autonomy_spec_scope import authenticate
+    from mentat.autonomy_spec_scope import digest as scope_digest
+    from mentat.autonomy_state import Store
+
+    store = Store(tmp_path / 'state/state.db')
+    sid = snapshot['session']['id']
+    controller = Coordinator(repo, store, Agent(), Worker(), GitHub())
+    controller.session_id = sid
+    controller.authority_digest = digest(json.loads((store.path.parent / 'policy.json').read_text()))
+    controller.tool_identity = current_tool_identity()
+    original_scope = correction['payload']['correction_scope']
+    assert authenticate(controller, correction, inventory, _git_paths) == original_scope
+    store.append_event(sid, 'fas_reviewed', {'head': corrected})
+    controller.store = Store(store.path)
+    assert authenticate(controller, correction, inventory, _git_paths) == original_scope
+
+    # The historical proof must remain stable, while a fresh write based on
+    # that old input cannot supersede the later accepted correction.
+    class StaleAgent(Agent):
+        def run(self, *args, **kwargs):
+            pytest.fail('stale correction must not reach the agent')
+
+    controller.agents = StaleAgent()
+    controller.config = json.loads((repo / '.mentat/workspace.json').read_text())
+    stale_id = store.enqueue_job(sid, 'scl', 'implementer', 'stale-manual-correction',
+                                 'stale-manual-input', correction['payload'])
+    stale = next(job for job in store.snapshot(sid)['jobs'] if job['id'] == stale_id)
+    stale['attempt'] = 1
+    with pytest.raises(ValueError):
+        controller._execute(stale, time.time() + 60)
+
+    first_reviews = [job for job in snapshot['jobs'] if job['payload'].get('kind') == 'review_spec'
+                     and job['payload']['proposal'].get('head') == feature
+                     and job['payload']['proposal'].get('round', 0) == 0]
+    assert len(first_reviews) == 2
+    first_ids = {job['id'] for job in first_reviews}
+    events = [event for event in snapshot['events'] if event['kind'] == 'job_enqueued'
+              and event['payload'].get('job_id') in first_ids]
+    assert len(events) == 2
+    events.sort(key=lambda event: event['seq'])
+
+    # Mutate disposable DB copies only, leaving the real review decisions and
+    # jobs in place. A missing, changed, or raced scheduling proof must fail.
+    for variant in ('missing', 'changed', 'between'):
+        copied = tmp_path / f'tampered-{variant}.db'
+        with sqlite3.connect(store.path) as original, sqlite3.connect(copied) as duplicate:
+            original.backup(duplicate)
+        with sqlite3.connect(copied) as db:
+            if variant == 'missing':
+                db.execute('DELETE FROM events WHERE seq = ?', (events[0]['seq'],))
+            elif variant == 'changed':
+                altered = json.loads(json.dumps(events[0]['payload']))
+                altered['payload']['review_cohort'] = 'unrelated-cohort'
+                db.execute('UPDATE events SET payload = ? WHERE seq = ?',
+                           (json.dumps(altered), events[0]['seq']))
+            else:
+                second = events[1]['seq']
+                db.execute('UPDATE events SET seq = seq + 1000000 WHERE seq >= ?', (second,))
+                db.execute('INSERT INTO events(seq, session_id, kind, payload) VALUES (?, ?, ?, ?)',
+                           (second, sid, 'fas_reviewed', json.dumps({'head': feature})))
+        controller.store = Store(copied)
+        with pytest.raises(ValueError):
+            authenticate(controller, correction, inventory, _git_paths)
+
+    # A model or caller cannot rehash any altered binding into valid authority.
+    controller.store = store
+    for key, value in original_scope['binding'].items():
+        forged = json.loads(json.dumps(correction['payload']))
+        binding = forged['correction_scope']['binding']
+        if isinstance(value, str):
+            binding[key] = value + '-forged'
+        elif type(value) is int:
+            binding[key] = value + 1
+        elif isinstance(value, list):
+            binding[key] = [*value, 'forged']
+        else:
+            pytest.fail(f'unexpected correction binding type for {key}')
+        scope = forged['correction_scope']
+        scope['id'] = scope_digest({field: item for field, item in scope.items() if field != 'id'})
+        jid = store.enqueue_job(sid, 'scl', 'implementer', 'forged-manual-' + key,
+                                'forged-input-' + key, forged)
+        forged_job = next(job for job in store.snapshot(sid)['jobs'] if job['id'] == jid)
+        with pytest.raises(ValueError):
+            authenticate(controller, forged_job, inventory, _git_paths)
+
+
+def test_initial_manual_feature_does_not_treat_invalid_present_baseline_as_empty(repo, tmp_path):
+    from test_autonomy import _valid_publication_spec
+
+    _valid_publication_spec(repo)
+    path = repo / '.mentat/fas.json'
+    valid = path.read_text()
+    path.write_text('{invalid')
+    git(repo, 'commit', '-qam', 'invalid existing baseline')
+    base = git(repo, 'rev-parse', 'HEAD')
+    git(repo, 'update-ref', 'refs/remotes/origin/main', base)
+    path.write_text(valid)
+    (repo / 'src.py').write_text('def value(): return 1  # feature\n')
+    spec = repo / 'openspec/specs/app/spec.md'
+    spec.write_text(spec.read_text() + '\nFeature specification\n')
+    git(repo, 'commit', '-qam', 'feature fixes FAS but does not validate old baseline')
+    calls = []
+
+    class InitialAgent(Agent):
+        def run(self, repo, job, output, *, timeout_seconds):
+            payload = job['payload']
+            calls.append((payload['kind'], payload.get('round', 0)))
+            if payload['kind'] in {'generate_spec', 'generate_verification'}:
+                return response(job)
+            result = super().run(repo, job, output, timeout_seconds=timeout_seconds)
+            if payload['kind'] == 'review_spec' and job['item_id'].endswith('.1'):
+                result['result']['decision'] = 'revise'
+                result['result']['findings'] = [{'summary': 'Clarify feature.'}]
+            return result
+
+    snapshot, _, github = run(repo, tmp_path, agent=InitialAgent())
+    assert not any(kind == 'generate_spec' and round_number > 0 for kind, round_number in calls)
+    assert not github.published
+    assert snapshot['session']['status'] != 'completed'
+
+
+def test_previously_accepted_checkpoint_noop_cannot_widen_to_unrelated_spec(repo, tmp_path):
+    requirements, paths = _review_capacity_repo(repo)
+    for path in paths:
+        (repo / path).write_text('# ' + 'x' * 55_000 + '\n')
+    git(repo, 'commit', '-qam', 'source exceeds one context')
+    git(repo, 'update-ref', 'refs/remotes/origin/main', git(repo, 'rev-parse', 'HEAD'))
+    calls = []
+
+    class PriorAcceptedAgent(Agent):
+        def run(self, repo, job, output, *, timeout_seconds):
+            payload = job['payload']
+            kind = payload['kind']
+            calls.append((kind, job['id'], job['attempt'], payload, git(repo, 'rev-parse', 'HEAD')))
+            if kind == 'generate_spec':
+                if payload.get('round', 0) > 0:
+                    doc = repo / 'openspec/specs/application/spec.md'
+                    return response(job, [{'path': str(doc.relative_to(repo)), 'operation': 'write',
+                                           'content': doc.read_text() + '\nUnrelated after approval.\n'}])
+                if not payload.get('targetfiles'):
+                    fas = json.loads((repo / '.mentat/fas.json').read_text())
+                    next(row for row in fas['surfaces'] if row['path'] == paths[0]).update(
+                        status='mapped', requirement_ids=[requirements[0]['id']])
+                    return response(job, [{'path': '.mentat/fas.json', 'operation': 'write',
+                                           'content': json.dumps(fas)}])
+                return response(job)
+            result = super().run(repo, job, output, timeout_seconds=timeout_seconds)
+            if (kind == 'review_spec' and payload.get('targetfiles')
+                    and payload['proposal'].get('round', 0) == 0 and job['item_id'].endswith('.1')):
+                result['result']['decision'] = 'revise'
+                result['result']['findings'] = [{'summary': 'Clarify unrelated specification.'}]
+            return result
+
+    snapshot, _, _ = run(repo, tmp_path, agent=PriorAcceptedAgent())
+    revisions = [call for call in calls if call[0] == 'generate_spec' and call[3].get('round', 0) > 0]
+    assert len(revisions) == 3, snapshot
+    assert len({call[1] for call in revisions}) == 1 and [call[2] for call in revisions] == [1, 2, 3]
+    head = revisions[0][4]
+    assert all(call[4] == head for call in revisions)
+    assert 'Unrelated after approval.' not in git(repo, 'show', f'{head}:openspec/specs/application/spec.md')
+    event = next(event for event in snapshot['events'] if event['kind'] == 'fas_reviewed'
+                 and event['payload'].get('head') == head)
+    reviewers = [job for job in snapshot['jobs'] if job['payload'].get('kind') == 'review_spec'
+                 and job['payload'].get('targetfiles') and job['payload']['proposal']['head'] == head]
+    enqueues = [event2 for event2 in snapshot['events'] if event2['kind'] == 'job_enqueued'
+                and event2['payload'].get('job_id') in {job['id'] for job in reviewers}]
+    assert len(reviewers) == len(enqueues) == 2
+    assert event['seq'] < min(item['seq'] for item in enqueues)
+
+
+def test_newer_genuinely_reviewed_checkpoint_fences_inflight_correction_acceptance(repo, tmp_path, monkeypatch):
+    import time
+    import uuid
+
+    from mentat.autonomy import AREAS, Coordinator, _git_paths, inventory
+    from mentat.autonomy_spec_scope import authenticate
+    from mentat.autonomy_state import Store
+
+    base = git(repo, 'rev-parse', 'HEAD')
+    spec = repo / 'openspec/specs/application/spec.md'
+    spec.parent.mkdir(parents=True)
+    requirements = [{'id': str(uuid.uuid4()), 'area': area, 'origin': 'uncertain',
+                     'statement': 'Feature intent', 'spec_path': 'openspec/specs/application/spec.md'}
+                    for area in AREAS]
+    spec.write_text('\n'.join(row['id'] for row in requirements))
+    fas = {'schema_version': 1, 'requirements': requirements, 'claims': [], 'surfaces': [
+        {'path': path, 'status': 'unexamined', 'requirement_ids': []} for path in (
+            'src.py', '.mentat/workspace.json', '.mentat/fas.json', 'openspec/specs/application/spec.md')]}
+    (repo / '.mentat/fas.json').write_text(json.dumps(fas))
+    (repo / 'src.py').write_text('def value(): return 1  # manual feature\n')
+    git(repo, 'add', '.')
+    git(repo, 'commit', '-qm', 'initial manual feature')
+    feature = git(repo, 'rev-parse', 'HEAD')
+    extra_id = str(uuid.uuid4())
+    state = {'coordinator': None, 'newer': None, 'injected': False}
+    calls = []
+    original_execute = Coordinator._execute
+
+    def execute_and_finish(controller, expected_kind):
+        claimed = controller.store.claim_job(controller.session_id, 'race-fixture', now=time.time(), lease_seconds=120)
+        assert claimed and claimed['payload']['kind'] == expected_kind
+        outcome = original_execute(controller, claimed, time.time() + 120)
+        assert outcome['status'] == 'succeeded'
+        controller.store.finish_job(claimed['id'], claimed['lease_token'], outcome, now=time.time())
+        if expected_kind == 'generate_spec':
+            state['newer'] = outcome['head']
+        controller._drain_transitions()
+        return claimed, outcome
+
+    class RaceAgent(Agent):
+        def run(self, worktree, job, output, *, timeout_seconds):
+            payload = job['payload']
+            kind = payload['kind']
+            calls.append((kind, job['id'], payload, git(worktree, 'rev-parse', 'HEAD')))
+            if kind == 'generate_spec' and payload.get('race_competitor'):
+                current = json.loads((worktree / '.mentat/fas.json').read_text())
+                current['requirements'].append({**current['requirements'][0], 'id': extra_id,
+                                                'statement': 'Independently reviewed later intent'})
+                doc = worktree / 'openspec/specs/application/spec.md'
+                return response(job, [
+                    {'path': '.mentat/fas.json', 'operation': 'write', 'content': json.dumps(current)},
+                    {'path': 'openspec/specs/application/spec.md', 'operation': 'write',
+                     'content': doc.read_text() + '\n' + extra_id + '\n'},
+                ])
+            if kind == 'generate_spec' and payload.get('round') == 1 and not state['injected']:
+                state['injected'] = True
+                controller = state['coordinator']
+                assert controller is not None
+                controller._enqueue('scl', 'implementer', 'race.competitor', {
+                    'kind': 'generate_spec', 'target_head': feature, 'accepted_spec_base': feature,
+                    'review_base': base, 'surfaces': inventory(repo, feature), 'race_competitor': True})
+                execute_and_finish(controller, 'generate_spec')
+                assert state['newer'] and state['newer'] != feature
+                for _ in range(2):
+                    review, _ = execute_and_finish(controller, 'review_spec')
+                    assert review['payload']['proposal']['head'] == state['newer']
+                saved = controller.store.snapshot(controller.session_id)
+                assert any(event['kind'] == 'fas_reviewed' and event['payload']['head'] == state['newer']
+                           for event in saved['events'])
+                doc = worktree / 'openspec/specs/application/spec.md'
+                return response(job, [{'path': 'openspec/specs/application/spec.md', 'operation': 'write',
+                                       'content': doc.read_text() + '\nStale clarification.\n'}])
+            if kind in {'generate_spec', 'generate_verification'}:
+                return response(job)
+            result = super().run(worktree, job, output, timeout_seconds=timeout_seconds)
+            if (kind == 'review_spec' and payload['proposal']['head'] == feature
+                    and payload['proposal'].get('round', 0) == 0 and job['item_id'].endswith('.1')):
+                result['result']['decision'] = 'revise'
+                result['result']['findings'] = [{'summary': 'Clarify the feature.'}]
+            return result
+
+    def observe_controller(controller, job, deadline):
+        state['coordinator'] = controller
+        return original_execute(controller, job, deadline)
+
+    monkeypatch.setattr(Coordinator, '_execute', observe_controller)
+    # The shared test harness sets a GitHub adapter; its returned
+    # instance lets us check the actual publication targets.
+    snapshot, _, github = run(repo, tmp_path, agent=RaceAgent())
+    assert state['injected'] and state['newer']
+    correction = next(job for job in snapshot['jobs'] if job['payload'].get('kind') == 'generate_spec'
+                      and job['payload'].get('correction_scope') and (job.get('outcome') or {}).get('head'))
+    stale = correction['outcome']['head']
+    assert stale not in {feature, state['newer']}
+    real_reviews = [job for job in snapshot['jobs'] if job['payload'].get('kind') == 'review_spec'
+                    and job['payload']['proposal']['head'] == stale and job['status'] == 'succeeded']
+    assert len(real_reviews) == 2
+    assert all(job['outcome']['result']['decision'] == 'accept' for job in real_reviews)
+    assert len({job['outcome']['author_id'] for job in real_reviews}) == 2
+    newer_event = next(event for event in snapshot['events'] if event['kind'] == 'fas_reviewed'
+                       and event['payload']['head'] == state['newer'])
+    fresh_enqueues = [event for event in snapshot['events'] if event['kind'] == 'job_enqueued'
+                      and event['payload'].get('job_id') in {job['id'] for job in real_reviews}]
+    assert len(fresh_enqueues) == 2 and newer_event['seq'] < min(event['seq'] for event in fresh_enqueues)
+    assert not any(event['kind'] == 'fas_reviewed' and event['payload']['head'] == stale
+                   for event in snapshot['events'])
+    assert any(row.get('id') == extra_id for row in snapshot['requirements'])
+    assert not any(job['payload'].get('kind') == 'generate_verification'
+                   and job['payload'].get('target_head') == stale for job in snapshot['jobs'])
+    assert stale not in github.published
+    assert any('does not retain a newer accepted specification' in row.get('summary', '')
+               for row in snapshot['findings'])
+    controller = state['coordinator']
+    controller.store = Store(tmp_path / 'state/state.db')
+    assert authenticate(controller, correction, inventory, _git_paths) == correction['payload']['correction_scope']
