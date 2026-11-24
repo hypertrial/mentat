@@ -13,6 +13,30 @@ FAS_PATH = ".mentat/fas.json"
 MAX_ARTIFACT = 1_000_000
 
 
+def ordinary_review(job: dict) -> bool:
+    payload = job["payload"]
+    return (payload.get("kind") == "review_spec" and not payload.get("source_cycle_id")
+            and not isinstance(payload.get("repair"), dict))
+
+
+def superseded_spec(repo: Path, job: dict, head: str, snapshot: dict, git) -> bool:
+    """Require repair work to retain checkpoints and later ordinary work to retain repairs."""
+    payload = job["payload"]
+    if payload.get("source_cycle_id"):
+        return False
+    repair = isinstance(payload.get("repair"), dict)
+    heads = [event["payload"].get("head") for event in snapshot["events"]
+             if event["kind"] == "fas_reviewed" and (repair or event["payload"].get("repair_backed") is True)]
+    if not repair:
+        heads = heads[-1:]
+    for checkpoint in heads:
+        if not isinstance(checkpoint, str) or not checkpoint:
+            raise ValueError("invalid specification review checkpoint")
+        if git(repo, "merge-base", checkpoint, head) != checkpoint:
+            return True
+    return False
+
+
 def digest(value: Any) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, allow_nan=False).encode()).hexdigest()
 

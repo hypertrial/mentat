@@ -1164,6 +1164,20 @@ class Store:
                 db.execute("INSERT INTO transitions(job_id, status) VALUES (?, 'pending')", (job_id,))
             db.commit()
 
+    def repair_work_active(self, session_id: str) -> bool:
+        """Check durable work that can still establish repair specification authority."""
+        with self._connect() as db:
+            self._session(db, session_id)
+            return db.execute("""SELECT 1 FROM jobs j
+                LEFT JOIN transitions t ON t.job_id=j.id
+                LEFT JOIN stale_transitions s ON s.job_id=j.id
+                WHERE j.session_id=? AND s.job_id IS NULL
+                  AND (j.status IN ('queued','running') OR
+                       (j.status='succeeded' AND t.status='pending'
+                        AND coalesce(json_extract(j.outcome,'$.exhausted'),0)=0))
+                  AND j.loop='scl' AND json_type(j.payload,'$.repair')='object'
+                LIMIT 1""", (session_id,)).fetchone() is not None
+
     def pending_transitions(self, session_id: str) -> list[dict]:
         """Return successful jobs whose advancement has not been acknowledged."""
         with self._connect() as db:

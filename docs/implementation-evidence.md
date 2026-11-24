@@ -1164,3 +1164,48 @@ worker timeout verifies the incomplete result. Controller timeout policy
 and proof qualification are unchanged. The full native gate must run again.
 The focused rerun passed 16 cases with 53 deselected in 24.36 seconds:
 `uv run --locked --no-sync pytest -n 0 -q -ra tests/test_autonomy_source_cases.py -k 'timeout or deadline or real_solver_counterexample'`.
+
+## 2026-11-24 — verified headless checkpoint and private rehearsal
+
+Independent verification passed on `a9320f4cc98fed8c601591a4c6e2943a2433dc4b`,
+tree `5b4df49fd270424eaec46e8317ee459aececfef7`. The normal
+`scripts/verify` passed 2,276 tests with 53 documented skips on both macOS
+and the dedicated Ubuntu ARM64 worker. The skips were 26 optional Lean
+4.31.0 cases, two optional upstream mirrors, and 25 protected checker cases
+requiring their separate trusted environment. Both package checks passed.
+`scripts/verify-worker` passed 45 tests without skips using the real checker
+and unchanged protected inputs from `8a5bb66`. The retained wheel and sdist
+passed installed-artifact checks, including the headless CLI boundary.
+
+[PR 79](https://github.com/hypertrial/mentat/pull/79) passed the lightweight
+required check and merged normally as
+`6328736f4bcd23b6c3d923a412f1438215c3ba13`. The merged tree exactly matched
+the independently verified tree. The hosted push check also passed.
+
+The first real private rehearsal used a disposable five-file increment
+fixture and actual GPT-6.1 Terra high agents on Codex CLI 0.159.0. Z3 found
+the original witness `value=0` at baseline `41fa5e67d16d`. The isolated
+worker reproduced the violation, the repair `27cd4f383d39` passed behavior
+and source checks and protected replay, and two independent repair reviewers
+accepted that exact candidate. No remote publication was authorized.
+
+The controller then accepted an ordinary specification cohort on the
+unrepaired sibling `404bdbf7933b`. The record revisions staled the repair's
+queued specification continuation. Verification of the unrepaired sibling
+failed on three attempts and the session blocked. This is a controller
+ordering defect; the negative checks correctly prevented publication.
+The original ledger, witness, verified repair and reviewer decisions are
+preserved in private state. The lost-acknowledgement rehearsal, fresh
+protected Mentat self-run, and Titanic readiness remain open.
+
+The new regression reproduces the loss of the accepted repair on `ab6db9c`.
+It uses real Git revisions and durable jobs with controlled reviewer results
+and check evidence. With the hold in place, pending sibling reviews survive a
+Store reopen, the accepted repair reaches implementation verification, and a
+terminal specification defer releases the sibling in the same drain.
+
+An early draft held ordinary specifications during source checks and defect
+investigation. The three existing ancestral-refresh, chained-refresh, and
+changed-CAS scenarios failed on that draft. All three passed in 64.05 seconds
+after narrowing the hold to the already accepted fix's specification work.
+`scripts/verify-fast` passed after the same change.

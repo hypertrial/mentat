@@ -79,17 +79,19 @@ The sibling's record revisions correctly staled the repair's pending
 specification continuation. Repeated verification of the unrepaired sibling
 could not qualify. Keep that session and its independent decisions as history.
 
-- Let specification generation and review continue concurrently, but defer the
-  application of ordinary specification review transitions while initial
-  configured source checks, defect work, or repair-linked specification work
-  can still advance. Derive the hold from durable queued/running jobs and
-  pending outcomes in the single coordinator. Source-correction authority
-  keeps precedence over ordinary repair scheduling.
+- Let specification generation and review continue concurrently. Once an
+  independently accepted fix has queued its specification continuation, defer
+  ordinary specification review transitions while that continuation can still
+  advance. Derive the hold from its durable queued or running jobs and pending
+  outcomes. Ordinary specification reviews can apply during source checks and
+  defect investigation before fix acceptance. Source-correction authority keeps
+  precedence over ordinary repair scheduling.
 - Release the hold when no repair lineage still needs specification authority.
   Drain newly eligible work before declaring the invocation idle. If a held
-  ordinary draft no longer descends from the latest applied specification
-  checkpoint, retain its reviewed proposal and decisions as history without
+  ordinary draft no longer retains the applied repair-backed specification
+  checkpoint, retain its reviewed proposal and outcomes as history without
   applying records or enqueuing verification from the superseded head.
+  A repair-linked acceptance must retain all previously applied checkpoints.
 - Keep blanket dependency invalidation and existing repair-base verification.
   A compatible already-applied specification may be reused only through the
   existing source-aware checkpoint rules. No automatic graft of an incompatible

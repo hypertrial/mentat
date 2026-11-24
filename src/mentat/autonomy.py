@@ -579,12 +579,14 @@ class Coordinator:
 
     def _drain_transitions(self) -> None:
         assert self.session_id
-        for job in self.store.pending_transitions(self.session_id):
+        for job in sorted(self.store.pending_transitions(self.session_id), key=autonomy_spec_scope.ordinary_review):
             if self.store.transition_status(job["id"]) != "pending":
                 continue
             if self.stop.is_set():
                 return
             if not self.store.source_transition_ready(self.session_id, job):
+                continue
+            if autonomy_spec_scope.ordinary_review(job) and self.store.repair_work_active(self.session_id):
                 continue
             outcome = job["outcome"]
             if not outcome.get("exhausted"):
@@ -3735,6 +3737,10 @@ class Coordinator:
         if len({d["reviewer_id"] for d in decisions}) < 2:
             return
         if kind == "review_spec":
+            before = self.store.snapshot(self.session_id)
+            if autonomy_spec_scope.superseded_spec(self.repo, job, proposal["head"], before, git):
+                self._event("spec_superseded", {"job_id": job["id"], "head": proposal["head"]})
+                return
             if job["payload"].get("correction_scope"):
                 autonomy_spec_scope.validate_live_frontier(self, job["payload"]["correction_scope"], proposal["head"])
             worktree = Path(proposal["worktree"])
@@ -3769,7 +3775,6 @@ class Coordinator:
                         "summary": "Some requirements remain uncertain",
                     },
                 )
-            before = self.store.snapshot(self.session_id)
             for record_kind, records in (
                 ("requirement", fas["requirements"]),
                 ("claim", fas["claims"]),
@@ -3800,6 +3805,7 @@ class Coordinator:
                     "head": proposal["head"],
                     "claims": {claim["id"]: digest(claim) for claim in fas["claims"]},
                     "decision_ids": [d["id"] for d in decisions],
+                    **({"repair_backed": True} if isinstance(job["payload"].get("repair"), dict) else {}),
                 },
             )
             pending_paths = proposal.get("context_pending", [])

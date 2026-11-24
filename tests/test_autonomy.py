@@ -4300,3 +4300,130 @@ def test_initial_feature_missing_citation_is_not_approved(repo, tmp_path):
     assert not [e for e in snapshot['events'] if e['kind'] == 'fas_reviewed']
     assert not github.published and not github.merged
     assert any('missing.py' in finding.get('summary', '') for finding in snapshot['findings'])
+
+
+@pytest.mark.parametrize('repair_decision', ['accept', 'defer'])
+def test_repair_review_precedes_finished_sibling_and_survives_reopen(repo, tmp_path, repair_decision):
+    from mentat.autonomy import digest
+
+    requirements = [
+        {'id': str(uuid.uuid4()), 'area': area, 'origin': 'uncertain',
+         'statement': 'Original requirement', 'spec_path': 'openspec/specs/application/spec.md'}
+        for area in AREAS
+    ]
+    spec = repo / 'openspec/specs/application/spec.md'
+    spec.parent.mkdir(parents=True)
+    spec.write_text('\n'.join(item['id'] for item in requirements))
+    fas_path = repo / '.mentat/fas.json'
+    paths = ['src.py', '.mentat/workspace.json', '.mentat/fas.json',
+             'openspec/specs/application/spec.md']
+    fas = {'schema_version': 1, 'requirements': requirements, 'claims': [],
+           'surfaces': [{'path': path, 'status': 'gap', 'requirement_ids': []} for path in paths]}
+    fas_path.write_text(json.dumps(fas))
+    git(repo, 'add', '.')
+    git(repo, 'commit', '-qm', 'baseline specification')
+    base = git(repo, 'rev-parse', 'HEAD')
+    revised = {**requirements[0], 'statement': 'Sibling revision', 'revision': {
+        'version': 2, 'previous_digest': digest(requirements[0]),
+        'reason': 'Additional observation', 'evidence': [{'path': 'src.py'}]}}
+    sibling_fas = {**fas, 'requirements': [revised, *requirements[1:]]}
+    fas_path.write_text(json.dumps(sibling_fas))
+    git(repo, 'commit', '-qam', 'ordinary sibling specification')
+    sibling = git(repo, 'rev-parse', 'HEAD')
+    sibling_tree = tmp_path / 'sibling'
+    git(repo, 'worktree', 'add', '--detach', str(sibling_tree), sibling)
+    git(repo, 'checkout', '-q', '--detach', base)
+    (repo / 'src.py').write_text('def value(): return 2  # accepted repair\n')
+    git(repo, 'commit', '-qam', 'accepted repair')
+    repair = git(repo, 'rev-parse', 'HEAD')
+    repair_tree = tmp_path / 'repair'
+    git(repo, 'worktree', 'add', '--detach', str(repair_tree), repair)
+
+    store = Store(tmp_path / 'state/state.db')
+    config = default_config(repo)
+    coordinator = Coordinator(repo, store, Agent(), Worker(), GitHub())
+    coordinator.config = config
+    coordinator.session_id = store.new_session(str(repo), base, base, config, 1, 100)
+    for requirement in requirements:
+        store.put_record(coordinator.session_id, 'requirement', requirement)
+    repair_metadata = {'source': 'accepted fix'}
+    fix_generator = {'id': 'fix', 'item_id': 'fix', 'loop': 'iil',
+                     'payload': {'kind': 'investigate_defect', 'repair': repair_metadata}}
+    fix_proposal = {'head': repair, 'parent': base, 'worktree': str(repair_tree),
+                    'diff_digest': 'fix-diff', 'author_id': 'fix-author', 'root_item': 'fix',
+                    'round': 0, 'commands': [], 'source_checks': [], 'repair': repair_metadata}
+    key = coordinator._check_key(repair, [], [], repair_metadata)
+    evidence = {'id': 'fix-check', 'status': 'passed', 'head': repair, 'base': base,
+                'check_key': key, 'checks': [], 'source': []}
+    store.put_record(coordinator.session_id, 'evidence', evidence)
+    coordinator._enqueue_reviewers(fix_generator, fix_proposal, 'review_fix', evidence)
+
+    def finish_review(index, decision='accept'):
+        job = store.claim_job(coordinator.session_id, f'reviewer-{index}', now=2, lease_seconds=50)
+        assert job is not None
+        proposal = job['payload']['proposal']
+        store.finish_job(job['id'], job['lease_token'], {
+            'status': 'succeeded', 'author_id': f'reviewer-{index}', 'head': proposal['head'],
+            'diff_digest': proposal['diff_digest'],
+            'result': {'decision': decision, 'summary': 'independently reviewed', 'findings': []},
+        }, now=3)
+        return job
+
+    assert finish_review('fix-1')['payload']['kind'] == 'review_fix'
+    assert finish_review('fix-2')['payload']['kind'] == 'review_fix'
+    coordinator._drain_transitions()
+    accepted_fixes = [decision for decision in store.snapshot(coordinator.session_id)['decisions']
+                      if decision['review_kind'] == 'review_fix']
+    assert len(accepted_fixes) == 2
+    assert len({decision['reviewer_id'] for decision in accepted_fixes}) == 2
+    assert all(decision['decision'] == 'accept' for decision in accepted_fixes)
+    repair_job = store.claim_job(coordinator.session_id, 'repair-author', now=4, lease_seconds=50)
+    assert repair_job is not None and repair_job['payload']['kind'] == 'generate_spec'
+    assert repair_job['payload']['target_head'] == repair
+    assert repair_job['payload']['repair'] == repair_metadata
+
+    generator = {'id': 'ordinary', 'item_id': 'ordinary', 'loop': 'scl',
+                 'payload': {'kind': 'generate_spec', 'repair': None}}
+    proposal = {'head': sibling, 'parent': base, 'inventory_head': sibling,
+                'worktree': str(sibling_tree), 'diff_digest': 'ordinary', 'author_id': 'ordinary-author',
+                'root_item': 'ordinary', 'round': 0, 'generation_kind': 'generate_spec'}
+    coordinator._enqueue_reviewers(generator, proposal, 'review_spec')
+    assert finish_review('ordinary-1')['payload']['kind'] == 'review_spec'
+    assert finish_review('ordinary-2')['payload']['kind'] == 'review_spec'
+    coordinator._drain_transitions()
+    held = store.snapshot(coordinator.session_id)
+    assert held['requirements'][0] == requirements[0]
+    assert not any(job['payload'].get('kind') == 'generate_verification' for job in held['jobs'])
+    ordinary = [job for job in held['jobs'] if job['payload'].get('kind') == 'review_spec']
+    assert all(store.transition_status(job['id']) == 'pending' for job in ordinary)
+    coordinator.store = store = Store(store.path)
+    assert all(store.transition_status(job['id']) == 'pending' for job in ordinary)
+
+    store.finish_job(repair_job['id'], repair_job['lease_token'], {
+        'status': 'succeeded', 'head': repair, 'parent': base, 'inventory_head': repair,
+        'worktree': str(repair_tree), 'diff_digest': 'repair-spec', 'author_id': 'repair-author',
+        'result': {'decision': repair_decision, 'summary': 'repair specification',
+                   'findings': [], 'verification_requests': []},
+    }, now=5)
+    coordinator._drain_transitions()
+    if repair_decision == 'accept':
+        assert finish_review('repair-1')['payload']['kind'] == 'review_spec'
+        assert finish_review('repair-2')['payload']['kind'] == 'review_spec'
+        coordinator._drain_transitions()
+    snapshot = store.snapshot(coordinator.session_id)
+    reviewed_heads = [event['payload']['head'] for event in snapshot['events']
+                      if event['kind'] == 'fas_reviewed']
+    verification = [job for job in snapshot['jobs']
+                    if job['payload'].get('kind') == 'generate_verification']
+    if repair_decision == 'accept':
+        assert snapshot['requirements'][0] == requirements[0]
+        assert repair in reviewed_heads and sibling not in reviewed_heads
+        assert verification and all(job['payload']['target_head'] == repair for job in verification)
+        assert all(job['payload'].get('repair') for job in verification)
+    else:
+        assert snapshot['requirements'][0] == revised
+        assert sibling in reviewed_heads and repair not in reviewed_heads
+        assert verification and all(job['payload']['target_head'] == sibling for job in verification)
+    reviews = [job for job in snapshot['jobs'] if job['payload'].get('kind') == 'review_spec']
+    assert all(job['status'] == 'succeeded' for job in reviews)
+    assert len({job['outcome']['author_id'] for job in reviews}) == len(reviews)
