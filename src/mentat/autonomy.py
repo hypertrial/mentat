@@ -515,7 +515,7 @@ class Coordinator:
 
     def _enqueue(self, loop: str, role: str, item: str, payload: dict, *, predecessor: dict | None = None, end_correction_scope: bool = False) -> str:
         assert self.session_id
-        if predecessor and payload.get("kind") == "generate_spec":
+        if predecessor:
             prior = predecessor.get("payload", {})
             human = prior.get("human_feedback")
             if human is None and prior.get("kind") == "generate_spec" and isinstance(prior.get("feedback"), str):
@@ -677,7 +677,11 @@ class Coordinator:
                     self._enqueue_reviewers(final_job, final, "review_final", evidence)
                     self.store.mark_source_aggregate_scheduled(self.session_id, cycle_id, head)
                 elif "revise" in outcomes:
+                    human = jobs[0]["payload"].get("human_feedback")
+                    if any(j["payload"].get("human_feedback") != human for j in jobs):
+                        raise ValueError("source pass human feedback lineage changed")
                     payload = {"kind": "generate_spec", "target_head": head, "accepted_spec_base": head,
+                        **({"human_feedback": human} if human is not None else {}),
                         "review_base": cycle["origin_base"], "root_item": cycle["root_item"],
                         "source_cycle_id": cycle_id, "source_cycle_round": cycle["failed_passes"] + 1,
                         "feedback": feedback, "surfaces": inventory(self.repo, head),
@@ -3865,10 +3869,12 @@ class Coordinator:
                     end_correction_scope=True,
                 )
                 return
+            human = job["payload"].get("human_feedback")
+            verification_item = "verification.inventory" + ("." + digest(human) if human is not None else "")
             self._enqueue(
                 "ivl",
                 "implementer",
-                "verification.inventory",
+                verification_item,
                 {
                     "kind": "generate_verification",
                     **{key: job["payload"][key] for key in ("source_cycle_id", "source_cycle_round") if key in job["payload"]},
@@ -3886,6 +3892,7 @@ class Coordinator:
                     ],
                     "repair": job["payload"].get("repair"),
                 },
+                predecessor=job,
             )
         elif kind == "review_fix":
             repair = job["payload"].get("repair")
@@ -3904,6 +3911,7 @@ class Coordinator:
                     "surfaces": inventory(self.repo, proposal["head"]),
                     "prior_authors": [proposal["author_id"]],
                 },
+                predecessor=job,
             )
         elif kind == "review_verification":
             commands = proposal.get("commands", [])
@@ -4173,6 +4181,7 @@ class Coordinator:
                 "check_key": check_key,
                 "authority_digest": self.authority_digest,
                 "tool_identity": self.tool_identity,
+                **({"human_feedback": payload["human_feedback"]} if "human_feedback" in payload else {}),
                 **({"source_batch": payload["source_batch"]} if payload.get("source_batch") is not None else {}),
                 **{key: payload[key] for key in ("source_cycle_id", "source_cycle_round", "source_epoch") if key in payload},
                 **({"source_coverage": payload["source_coverage"]} if payload.get("source_coverage") is not None else {}),
@@ -4191,6 +4200,8 @@ class Coordinator:
         check_id = evidence.get("id") if evidence else None
         check_key = evidence.get("check_key") if evidence else None
         review_payload = dict(job["payload"])
+        if "human_feedback" not in review_payload and review_payload.get("kind") == "generate_spec" and isinstance(review_payload.get("feedback"), str):
+            review_payload["human_feedback"] = review_payload["feedback"]
         epoch = self.store.source_finalization_epoch(self.session_id, {**review_payload, "kind": kind})
         if epoch:
             review_payload["source_epoch"] = epoch
@@ -4207,7 +4218,7 @@ class Coordinator:
                     "target_head": proposal["head"],
                     "proposal": proposal,
                     "prior_authors": proposal["prior_authors"],
-                    **({"human_feedback": job["payload"]["human_feedback"]} if "human_feedback" in job["payload"] else ({"human_feedback": job["payload"]["feedback"]} if isinstance(job["payload"].get("feedback"), str) and job["payload"].get("kind") == "generate_spec" else {})),
+                    **({"human_feedback": review_payload["human_feedback"]} if "human_feedback" in review_payload else {}),
                     "source_checks": job["payload"].get("source_checks", []),
                     "repair": job["payload"].get("repair"),
                     "targetfiles": job["payload"].get("targetfiles"),

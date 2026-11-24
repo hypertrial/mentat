@@ -186,8 +186,10 @@ def test_human_feedback_survives_source_correction_handoff(repo, tmp_path):
     store.register_source_pass(session, "cycle", "final-item", head, head,
                                "plan", "check", ["batch"], continuing=False)
     for index, role in enumerate(("code-reviewer", "data-reviewer")):
+        source_payload = {**_source_job_payload(head, "plan", "check"),
+                          "human_feedback": "Preserve original user intent"}
         store.enqueue_job(session, "ivl", role, f"source-{index}", f"input-{index}",
-                          _source_job_payload(head, "plan", "check"))
+                          source_payload)
     jobs = [store.claim_job(session, f"worker-{index}", now=2) for index in range(2)]
     feedback = []
     for index, source_job in enumerate(jobs):
@@ -231,3 +233,137 @@ def test_human_feedback_survives_source_correction_handoff(repo, tmp_path):
     cycle = reopened.source_cycles(session)[0]
     assert cycle["correction_job_id"] == successor["id"] and cycle["failed_passes"] == 1
     assert reopened.claim_job(session, "next-corrector", now=6)["id"] == successor["id"]
+
+
+def test_human_feedback_reaches_first_durable_source_correction(repo, tmp_path, monkeypatch):
+    """Drive a human SCL draft through IVL and independent final source review."""
+    from test_autonomy import _valid_publication_spec
+    from test_autonomy_source_corrections import _review_result
+
+    config_path = repo / ".mentat/workspace.json"
+    config = json.loads(config_path.read_text())
+    config["concurrency"] = 1
+    config_path.write_text(json.dumps(config))
+    _valid_publication_spec(repo)
+    message = "Please consider the source mapping intent"
+    original_consume = Coordinator._consume_feedback
+    injected = []
+
+    def deliver_feedback(self):
+        if not injected:
+            injected.append(True)
+            self.control("feedback", {"message": message})
+        return original_consume(self)
+
+    monkeypatch.setattr(Coordinator, "_consume_feedback", deliver_feedback)
+    saw_source_revision = []
+
+    class FeedbackPipelineAgent(Agent):
+        def run(self, repo, job, output, *, timeout_seconds):
+            payload = job["payload"]
+            kind = payload["kind"]
+            if kind == "generate_spec" and job["item_id"] == "cas.inventory":
+                return {"status": "succeeded", "session_id": job["id"], "result": {
+                    "decision": "defer", "summary": "await focused feedback", "findings": [],
+                    "verification_requests": [],
+                }}
+            if kind == "generate_spec" and payload.get("source_cycle_id"):
+                return {"status": "succeeded", "session_id": job["id"], "result": {
+                    "decision": "defer", "summary": "retain correction for inspection", "findings": [],
+                    "verification_requests": [],
+                }}
+            if kind == "generate_spec" and job["item_id"].startswith("feedback."):
+                path = repo / ".mentat/fas.json"
+                fas = json.loads(path.read_text())
+                row = next(row for row in fas["surfaces"] if row["path"] == "src.py")
+                row.update(status="mapped", requirement_ids=[fas["requirements"][0]["id"]],
+                           note="Source observation")
+                path.write_text(json.dumps(fas))
+                return {"status": "succeeded", "session_id": job["id"], "result": {
+                    "decision": "accept", "summary": "record source mapping", "findings": [],
+                    "verification_requests": [],
+                }}
+            if kind == "review_final_source":
+                scope = payload["source_batch"]
+                has_source = any(row["path"] == "src.py" for row in scope["obligations"])
+                if has_source and not saw_source_revision:
+                    saw_source_revision.append(True)
+                    return {"status": "succeeded", "session_id": job["id"], "result": _review_result()}
+            return super().run(repo, job, output, timeout_seconds=timeout_seconds)
+
+    snapshot, _, github = run(repo, tmp_path, agent=FeedbackPipelineAgent(), concurrency=1)
+    store = Store(tmp_path / "state/state.db")
+    snapshot = store.snapshot(snapshot["session"]["id"])
+    original = [j for j in snapshot["jobs"] if j["item_id"].startswith("feedback.")
+                and j["payload"]["kind"] == "generate_spec" and not j["payload"].get("source_cycle_id")]
+    assert len(original) == 1 and original[0]["payload"]["human_feedback"] == message
+    assert any(j["payload"]["kind"] == "generate_verification" and j["status"] == "succeeded"
+               for j in snapshot["jobs"])
+    corrections = [j for j in snapshot["jobs"] if j["payload"].get("source_cycle_id")
+                   and j["payload"]["kind"] == "generate_spec"]
+    assert len(corrections) == 1, snapshot
+    correction = corrections[0]["payload"]
+    assert correction["human_feedback"] == message
+    assert "Narrow the observation" in json.dumps(correction["feedback"])
+    assert correction["source_cycle_round"] == 1
+    assert store.source_cycles(snapshot["session"]["id"])[0]["id"] == correction["source_cycle_id"]
+    assert not github.published
+
+
+def test_distinct_human_inputs_do_not_share_same_head_verification(repo, tmp_path, monkeypatch):
+    from test_autonomy import _valid_publication_spec
+
+    config_path = repo / ".mentat/workspace.json"
+    config = json.loads(config_path.read_text())
+    config["concurrency"] = 1
+    config_path.write_text(json.dumps(config))
+    _valid_publication_spec(repo)
+    fas_path = repo / ".mentat/fas.json"
+    fas = json.loads(fas_path.read_text())
+    row = next(row for row in fas["surfaces"] if row["path"] == "src.py")
+    row.update(status="mapped", requirement_ids=[fas["requirements"][0]["id"]], note="Source")
+    fas_path.write_text(json.dumps(fas))
+    git(repo, "commit", "-qam", "map source")
+    git(repo, "update-ref", "refs/remotes/origin/main", git(repo, "rev-parse", "HEAD"))
+    spec = repo / "openspec/specs/app/spec.md"
+    spec.write_text(spec.read_text() + "\nReview source correspondence.\n")
+    git(repo, "commit", "-qam", "change specification")
+    head = git(repo, "rev-parse", "HEAD")
+    messages = ["Consider input one", "Consider input two"]
+    original_consume = Coordinator._consume_feedback
+    injected = []
+
+    def deliver(self):
+        if not injected:
+            injected.append(True)
+            for message in messages:
+                self.control("feedback", {"message": message})
+        return original_consume(self)
+
+    monkeypatch.setattr(Coordinator, "_consume_feedback", deliver)
+
+    class NoOpReviewAgent(Agent):
+        def run(self, repo, job, output, *, timeout_seconds):
+            kind = job["payload"]["kind"]
+            if kind == "generate_spec" and job["item_id"] == "cas.inventory":
+                decision = "defer"
+            elif kind in {"generate_spec", "generate_verification"}:
+                decision = "accept"
+            elif kind == "review_final_source":
+                decision = "defer"
+            else:
+                return super().run(repo, job, output, timeout_seconds=timeout_seconds)
+            return {"status": "succeeded", "session_id": job["id"], "result": {
+                "decision": decision, "summary": "no changes", "findings": [],
+                "verification_requests": [], "requirements": [], "claims": [],
+                "defects": [], "changes": [],
+            }}
+
+    snapshot, _, _ = run(repo, tmp_path, agent=NoOpReviewAgent(), concurrency=1)
+    verifications = [j for j in snapshot["jobs"] if j["payload"]["kind"] == "generate_verification"]
+    assert len(verifications) == 2, snapshot
+    assert {j["payload"]["human_feedback"] for j in verifications} == set(messages)
+    assert {j["payload"]["target_head"] for j in verifications} == {head}
+    assert len({j["item_id"] for j in verifications}) == 2
+    sources = [j for j in snapshot["jobs"] if j["payload"]["kind"] == "review_final_source"]
+    assert {j["payload"]["human_feedback"] for j in sources} == set(messages)

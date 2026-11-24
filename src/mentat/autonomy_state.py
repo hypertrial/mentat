@@ -678,7 +678,8 @@ class Store:
                 counts[scope] = counts.get(scope, 0) + 1
                 matching = [entry for entry in feedback if entry.get("job_id") == j["id"]]
                 record = db.execute("SELECT data FROM records WHERE session_id=? AND kind='decision' AND id=?", (session_id, matching[0].get("decision_id") if matching else None)).fetchone()
-                if (len(matching) != 1 or matching[0].get("result") != outcome.get("result")
+                if (data.get("human_feedback") != payload.get("human_feedback")
+                        or len(matching) != 1 or matching[0].get("result") != outcome.get("result")
                         or not record or json.loads(record[0]).get("job_id") != j["id"]
                         or json.loads(record[0]).get("decision") != outcome.get("result", {}).get("decision")
                         or data.get("source_batch", {}).get("plan_id") != current["plan_id"]
@@ -830,6 +831,7 @@ class Store:
             if (payload.get("kind") != "generate_spec" or payload.get("source_cycle_id") != cycle_id
                     or payload.get("source_cycle_round") != cycle["failed_passes"]
                     or payload.get("feedback") != original.get("feedback")
+                    or payload.get("human_feedback") != original.get("human_feedback")
                     or payload.get("review_base") != cycle["origin_base"]):
                 raise ValueError("correction successor lost its lineage or feedback")
             if (not (prior.get("kind") == "review_spec" and any(d.get("decision") == "revise" for d in [json.loads(r[0]) for r in db.execute("SELECT data FROM records WHERE session_id=? AND kind='decision' AND json_extract(data,'$.review_cohort')=?", (session_id, prior.get("review_cohort")))]))
@@ -1286,7 +1288,10 @@ def ordinary_review_pair(self: Any, kind: str, cohort: str, proposal: dict) -> l
     if len(jobs) != 2 or any(j["status"] != "succeeded" for j in jobs):
         return None
     pair = []
-    expected_items = {f"{proposal.get('root_item')}.{kind}..{proposal.get('round', 0)}.{slot}" for slot in (1, 2)}
+    batch = jobs[0]["payload"].get("source_batch") or {}
+    if not isinstance(batch, dict) or not isinstance(batch.get("id", ""), str):
+        raise ValueError("invalid review batch identity")
+    expected_items = {f"{proposal.get('root_item')}.{kind}.{batch.get('id', '')}.{proposal.get('round', 0)}.{slot}" for slot in (1, 2)}
     if {j["item_id"] for j in jobs} != expected_items or any(j["role"] != "code-reviewer" for j in jobs):
         raise ValueError("review cohort slots are inconsistent")
     if jobs[0]["payload"] != jobs[1]["payload"]:
