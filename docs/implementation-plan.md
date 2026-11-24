@@ -71,6 +71,35 @@ standalone Cockpit build and a tagged public release are separate milestones.
    the separate improvement-loop demonstration. Titanic work starts only after
    these gates pass; its private repository, coverage and data stay intact.
 
+### Repair continuity across concurrent specification reviews
+
+The first live private rehearsal independently accepted a checked repair, then
+accepted an ordinary specification proposal from the unrepaired sibling.
+The sibling's record revisions correctly staled the repair's pending
+specification continuation. Repeated verification of the unrepaired sibling
+could not qualify. Keep that session and its independent decisions as history.
+
+- Let specification generation and review continue concurrently, but defer the
+  application of ordinary specification review transitions while initial
+  configured source checks, defect work, or repair-linked specification work
+  can still advance. Derive the hold from durable queued/running jobs and
+  pending outcomes in the single coordinator. Source-correction authority
+  keeps precedence over ordinary repair scheduling.
+- Release the hold when no repair lineage still needs specification authority.
+  Drain newly eligible work before declaring the invocation idle. If a held
+  ordinary draft no longer descends from the latest applied specification
+  checkpoint, retain its reviewed proposal and decisions as history without
+  applying records or enqueuing verification from the superseded head.
+- Keep blanket dependency invalidation and existing repair-base verification.
+  A compatible already-applied specification may be reused only through the
+  existing source-aware checkpoint rules. No automatic graft of an incompatible
+  sibling, inherited review for a changed candidate, or retry-budget reset.
+- Regress the live completion order with actual stored jobs and independent
+  decisions, verify the continuation still targets the repair, and exercise
+  release on terminal repair outcomes, checkpoint/reopen, source-correction
+  priority and the unchanged existing opposite-order checkpoint behavior.
+  Reverify the finished engine and repeat the actual private rehearsal.
+
 ## Baseline evidence
 
 Before source changes: `scripts/verify` completed with 1,479 passed and 53 skipped in 105.85 seconds. Skips concern unavailable Lean, dedicated Linux checker, and upstream mirrors; this is not the full no-gap readiness gate. Python 3.12.16 and locked development dependencies were installed into the ignored local environment. GitHub CLI and Lima were not available on the initial sandbox PATH.
