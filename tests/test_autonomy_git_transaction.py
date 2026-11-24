@@ -24,11 +24,17 @@ RELAY = r'''
 import os, subprocess, sys, threading
 server = subprocess.Popen(["git", "receive-pack", sys.argv[1]], stdin=subprocess.PIPE,
                           stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+def read_exact(source, count):
+    data = bytearray()
+    while len(data) < count:
+        chunk = os.read(source.fileno(), count - len(data))
+        if not chunk: raise EOFError()
+        data.extend(chunk)
+    return bytes(data)
 def packet(source):
-    h = source.read(4)
-    if len(h) != 4: raise EOFError()
+    h = read_exact(source, 4)
     n = int(h, 16)
-    return h if n == 0 else h + source.read(n-4)
+    return h if n == 0 else h + read_exact(source, n-4)
 while True:
     p = packet(server.stdout); sys.stdout.buffer.write(p); sys.stdout.buffer.flush()
     if p == b"0000": break
@@ -47,8 +53,16 @@ def copy(source, dest):
     except (BrokenPipeError, OSError): pass
 threading.Thread(target=copy, args=(sys.stdin.buffer, server.stdin), daemon=True).start()
 threading.Thread(target=copy, args=(server.stderr, sys.stderr.buffer), daemon=True).start()
-copy(server.stdout, sys.stdout.buffer)
-sys.exit(server.wait())
+response = bytearray()
+while True:
+    data = os.read(server.stdout.fileno(), 65536)
+    if not data: break
+    response.extend(data)
+    os.write(sys.stdout.fileno(), data)
+code = server.wait()
+if code == 0:
+    open(sys.argv[3], "wb").write(response)
+sys.exit(code)
 '''
 
 
@@ -110,7 +124,7 @@ def install_relay(monkeypatch, tmp_path, bare):
     script.write_text(RELAY)
     processes = []
     def launch(*args, **kwargs):
-        process = subprocess.Popen([sys.executable, "-u", str(script), str(bare), str(capture)],
+        process = subprocess.Popen([sys.executable, "-u", str(script), str(bare), str(capture), str(tmp_path / "status")],
                                    stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                    stderr=subprocess.PIPE, start_new_session=True)
         processes.append(process)
@@ -294,7 +308,10 @@ def test_cleanup_falls_back_when_group_signal_is_denied(repo, tmp_path, monkeypa
     work, _, base, head, merge, _, _ = repo
     _, processes = install_peer(monkeypatch, tmp_path, b"", mode="stall-advert")
     denied = []
+    real_killpg = os.killpg
     def deny_group(pid, sig):
+        if not processes or pid != processes[0].pid:
+            return real_killpg(pid, sig)
         denied.append((pid, sig))
         raise PermissionError("fixture denies group signal")
     with monkeypatch.context() as patch:
@@ -324,13 +341,49 @@ def test_cleanup_failure_never_reports_success_after_applied_transaction(repo, t
     work, bare, base, head, merge, _, _ = repo
     _, processes = install_relay(monkeypatch, tmp_path, bare)
     dispatched = []
+    real_killpg = os.killpg
     def deny_group(pid, sig):
+        if not processes or pid != processes[0].pid:
+            return real_killpg(pid, sig)
+        # This marker is written by the relay only after the real receive-pack
+        # exits successfully, after forwarding its complete status response.
+        assert (tmp_path / "status").exists(), "receive-pack did not finish before cleanup"
+        assert packets((tmp_path / "status").read_bytes()) == [
+            b"unpack ok\n", b"ok refs/heads/main\n",
+            f"ok refs/heads/{BRANCH}\n".encode(),
+        ]
+        assert ref(bare, "main") == ref(bare, BRANCH) == merge
         raise PermissionError("fixture denies group signal")
     with monkeypatch.context() as patch:
         patch.setattr(transaction.os, "killpg", deny_group)
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="receive-pack process group cleanup failed"):
             transaction.transact(work, "org/private", base, head, merge, BRANCH,
                                  lambda: dispatched.append(True), timeout=4)
     assert dispatched == [True]
     assert ref(bare, "main") == ref(bare, BRANCH) == merge
+    assert_groups_gone(processes)
+
+
+def test_cleanup_failure_keeps_preapply_cancellation_unknown(repo, tmp_path, monkeypatch):
+    work, bare, base, head, merge, _, _ = repo
+    capture, processes = install_peer(monkeypatch, tmp_path, advert(base, head), mode="stall-status")
+    active = [True]
+    dispatched = []
+    real_killpg = os.killpg
+    def before_send():
+        dispatched.append(True)
+        active[0] = False
+    def deny_group(pid, sig):
+        if not processes or pid != processes[0].pid:
+            return real_killpg(pid, sig)
+        raise PermissionError("fixture denies group signal")
+    with monkeypatch.context() as patch:
+        patch.setattr(transaction.os, "killpg", deny_group)
+        with pytest.raises(ValueError, match="receive-pack process group cleanup failed") as exc:
+            transaction.transact(work, "org/private", base, head, merge, BRANCH, before_send,
+                                 active=lambda: active[0], timeout=4)
+    assert isinstance(exc.value.__context__, ValueError)
+    assert str(exc.value.__context__) == "receive-pack cancelled"
+    assert dispatched == [True] and not capture.exists()
+    assert ref(bare, "main") == base and ref(bare, BRANCH) == head
     assert_groups_gone(processes)
