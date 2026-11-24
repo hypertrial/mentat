@@ -251,6 +251,7 @@ def bind_gateway(controller: Any, job: dict, evidence: dict) -> None:
     gateway = controller.github
     gateway.private_prepare = None
     gateway.private_dispatch = None
+    gateway.private_resolve = None
     gateway.private_lookup = None
     if validate_policy(getattr(gateway, "merge_policy", None)) is None:
         return
@@ -334,6 +335,13 @@ def bind_gateway(controller: Any, job: dict, evidence: dict) -> None:
             session_id, kind, payload, job_id=source_job, now=controller.clock()
         )
 
+    def resolve(head: str, base: str, branch: str) -> None:
+        record = lookup(head, base, branch)
+        if not record or not record.get("dispatched"):
+            raise ValueError("private resolution lacks dispatched authority")
+        controller.store.resolve_private_dispatch(session_id, {k: v for k, v in record.items() if k != "dispatched"})
+
+    gateway.private_resolve = resolve
     gateway.private_lookup = lookup
     gateway.private_prepare = lambda intent: persist("private_merge_prepared", intent)
     gateway.private_dispatch = lambda intent: persist("private_merge_dispatched", intent)
@@ -410,6 +418,7 @@ def reconcile(
     git: Git,
     api: API,
     lookup: Callable[[str, str, str], dict | None],
+    resolve: Callable[[str, str, str], None],
 ) -> dict:
     """Distinguish an untouched open PR from its explicit derived merge shape."""
     inspect_repository(repo, policy, git, api)
@@ -438,7 +447,7 @@ def reconcile(
     if not record or not record.get("dispatched"):
         raise ValueError("private merge was never durably authorized for dispatch")
     oid = pr.get("merge_commit_sha")
-    if oid != intended["merge_commit"]:
+    if not isinstance(oid, str) or oid != intended["merge_commit"]:
         raise ValueError("observed private merge is not the durable intended commit")
     if (
         pr.get("state") != "closed"
@@ -448,6 +457,8 @@ def reconcile(
         raise ValueError("private merge outcome is not confirmed")
     tree = git(repo, "rev-parse", "--verify", head + "^{tree}")
     _commit(api, policy, oid, head, base, tree)
+    _expect_refs(repo, git, branch, oid, oid, policy)
+    resolve(head, base, branch)
     return {
         **result,
         "state": "merged",
@@ -469,6 +480,7 @@ def merge(
     prepare: Callable[[dict], None],
     lookup: Callable[[str, str, str], dict | None],
     dispatch: Callable[[dict], None],
+    resolve: Callable[[str, str, str], None],
 ) -> dict:
     """Atomically fence both original refs while preserving the exact tested tree."""
     inspect_repository(repo, policy, git, api)
@@ -485,7 +497,7 @@ def merge(
         return {"status": "incomplete", "reason": "session is not active"}
     record = lookup(head, base, branch)
     if record is not None and record.get("dispatched"):
-        result = reconcile(repo, policy, branch, number, head, base, git, api, lookup)
+        result = reconcile(repo, policy, branch, number, head, base, git, api, lookup, resolve)
         if result.get("state") == "merged":
             return {**result, "status": "succeeded", "pr_number": number}
         raise ValueError("previous private dispatch outcome remains unknown")
@@ -586,7 +598,7 @@ def merge(
     reason = "private merge awaits remote reconciliation"
     for attempt in range(5):
         try:
-            result = reconcile(repo, policy, branch, number, head, base, git, api, lookup)
+            result = reconcile(repo, policy, branch, number, head, base, git, api, lookup, resolve)
             if result.get("state") == "merged" and result.get("merge_commit") == oid:
                 return {**result, "status": "succeeded", "pr_number": number}
         except ValueError as exc:

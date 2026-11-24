@@ -1104,6 +1104,7 @@ class GitHub:
         self.merge_policy = autonomy_private_merge.validate_policy(merge_policy)
         self.private_prepare: Callable[[dict], None] | None = None
         self.private_dispatch: Callable[[dict], None] | None = None
+        self.private_resolve: Callable[[str, str, str], None] | None = None
         self.private_lookup: Callable[[str, str, str], dict | None] | None = None
 
     def reconcile(self, repo: Path, branch: str, expected_head: str, expected_base: str) -> dict:
@@ -1118,7 +1119,7 @@ class GitHub:
                 return {"status": "incomplete", "reason": "pull request search is incomplete"}
             expected_pr = None
             if policy is not None:
-                if not callable(self.private_lookup):
+                if not callable(self.private_lookup) or not callable(self.private_resolve):
                     return {"status": "incomplete", "reason": "durable private merge authority unavailable"}
                 saved = self.private_lookup(expected_head, expected_base, branch)
                 if saved is not None:
@@ -1134,9 +1135,9 @@ class GitHub:
             if policy is not None:
                 def api(path: str) -> Any:
                     return json.loads(_gh(repo, "api", "--hostname", policy["host"], path))
-                if not callable(self.private_lookup):
+                if not callable(self.private_lookup) or not callable(self.private_resolve):
                     return {"status": "incomplete", "reason": "durable private merge authority unavailable"}
-                return autonomy_private_merge.reconcile(repo, policy, branch, pr["number"], expected_head, expected_base, git, api, self.private_lookup)
+                return autonomy_private_merge.reconcile(repo, policy, branch, pr["number"], expected_head, expected_base, git, api, self.private_lookup, self.private_resolve)
             if pr.get("state") == "OPEN":
                 if pr.get("baseRefOid") != expected_base:
                     return {"status": "incomplete", "reason": "pull request base changed"}
@@ -1221,7 +1222,7 @@ class GitHub:
             if not isinstance(files, list) or len(files) >= 100 or any(not isinstance(f.get("filename"), str) for f in files):
                 return {"status": "incomplete", "reason": "changed files cannot be completely verified"}
             sensitive = any(re.search(r"(^|/)(proof|checker|autonomy|source_verify|requirements|CAS)|^\.github/", f["filename"], re.I) for f in files)
-            raw_diff = gitio.run(repo, "diff", "--binary", "--no-ext-diff", expected_base, expected_head, limit=16_000_000)
+            raw_diff = gitio.run(repo, "diff", "--binary", "--no-ext-diff", "--no-textconv", expected_base, expected_head, limit=16_000_000)
             digest = hashlib.sha256(raw_diff).hexdigest()
             reviewers = set()
             for review in reviews:
@@ -1232,9 +1233,9 @@ class GitHub:
             if len(reviewers) < (2 if sensitive else 1):
                 return {"status": "incomplete", "reason": "not enough independent reviews"}
             if policy is not None:
-                if not callable(self.private_prepare) or not callable(self.private_lookup) or not callable(self.private_dispatch):
+                if not callable(self.private_prepare) or not callable(self.private_lookup) or not callable(self.private_dispatch) or not callable(self.private_resolve):
                     return {"status": "incomplete", "reason": "durable private merge authority unavailable"}
-                return autonomy_private_merge.merge(repo, policy, pr_number, expected_head, expected_base, git, api, is_active, self.private_prepare, self.private_lookup, self.private_dispatch)
+                return autonomy_private_merge.merge(repo, policy, pr_number, expected_head, expected_base, git, api, is_active, self.private_prepare, self.private_lookup, self.private_dispatch, self.private_resolve)
             rulesets = api(f"repos/{name}/rulesets?includes_parents=true&per_page=100")
             if not isinstance(rulesets, list) or len(rulesets) >= 100:
                 return {"status": "incomplete", "reason": "repository rulesets are not fully visible"}

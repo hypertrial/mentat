@@ -945,3 +945,183 @@ def test_private_publication_pins_github_repository_explicitly(remote, tmp_path,
     result = remote.gateway().publish(remote.repo, remote.branch, "Reviewed fixture", body)
     assert result["status"] == "succeeded" and len(calls) == 1
     assert remote.ref("main") == remote.base
+
+
+def test_unresolved_dispatch_fences_new_and_existing_sessions(remote):
+    other = remote.store.new_session(
+        str(remote.repo), remote.base, remote.head, {}, now=0, deadline=7200
+    )
+    gateway = remote.gateway()
+    dispatch = gateway.private_dispatch
+
+    def interrupted(intent):
+        dispatch(intent)
+        raise RuntimeError("unknown push")
+
+    gateway.private_dispatch = interrupted
+    remote.store.begin_remote_effect(
+        remote.sid,
+        "merge_started",
+        {"head": remote.head, "base": remote.base},
+        job_id=remote.job_id,
+    )
+    checks, reviews = remote.evidence()
+    assert (
+        gateway.merge(
+            remote.repo, 7, remote.head, remote.base, checks=checks, reviews=reviews, active=True
+        )["status"]
+        == "incomplete"
+    )
+    reopened = Store(remote.store.path)
+    with pytest.raises(ValueError, match="unresolved private"):
+        reopened.new_session(str(remote.repo), remote.base, "f" * 40, {}, now=0, deadline=7200)
+    record = reopened.private_merge_intent(
+        remote.sid, remote.head, remote.base, remote.branch, remote.authority
+    )
+    assert record and record["dispatched"]
+    reopened.append_event(other, "authority_pinned", {"digest": remote.authority})
+    reopened.append_event(other, "toolchain_pinned", {"identity": remote.tools})
+    job = reopened.enqueue_job(
+        other,
+        "ivl",
+        "verifier",
+        "other",
+        "other",
+        {"kind": "final_checks", "target_head": remote.head},
+    )
+    claimed = reopened.claim_job(other, "other", now=1)
+    reopened.finish_job(job, claimed["lease_token"], {"status": "succeeded"}, now=2)
+    reopened.begin_remote_effect(
+        other, "merge_started", {"head": remote.head, "base": remote.base}, job_id=job
+    )
+    payload = {k: v for k, v in record.items() if k != "dispatched"}
+    payload["source_job_id"] = job
+    reopened.begin_remote_effect(other, "private_merge_prepared", payload, job_id=job, now=3)
+    with pytest.raises(ValueError, match="unresolved private"):
+        reopened.begin_remote_effect(other, "private_merge_dispatched", payload, job_id=job, now=3)
+    assert other != remote.sid and not remote.pushes
+
+
+def test_positive_exact_recovery_clears_cross_session_fence(remote):
+    assert remote.merge()["status"] == "succeeded"
+    reopened = Store(remote.store.path)
+    new = reopened.new_session(str(remote.repo), remote.base, remote.head, {}, now=0, deadline=7200)
+    assert new != remote.sid
+
+
+def test_merged_metadata_with_original_branch_ref_is_not_accepted(remote):
+    assert remote.merge()["status"] == "succeeded"
+    # Remove resolution solely in disposable fixture to model an interrupted recovery.
+    with remote.store._connect() as db:
+        db.execute("DELETE FROM events WHERE kind='private_merge_resolved'")
+        db.commit()
+    oid = remote.ref("main")
+    run(remote.bare, "update-ref", "refs/heads/" + remote.branch, remote.head)
+    original = remote.pr
+
+    def spoof():
+        value = original()
+        value.update(state="closed", merged=True, merge_commit_sha=oid)
+        return value
+
+    remote.pr = spoof
+    assert (
+        remote.gateway().reconcile(remote.repo, remote.branch, remote.head, remote.base)["status"]
+        == "incomplete"
+    )
+    with pytest.raises(ValueError, match="unresolved private"):
+        remote.store.new_session(
+            str(remote.repo), remote.base, remote.head, {}, now=0, deadline=7200
+        )
+
+
+def test_candidate_textconv_never_runs_on_controller(remote, tmp_path):
+    marker = tmp_path / "converter-ran"
+    converter = tmp_path / "converter"
+    converter.write_text("#!/bin/sh\ntouch '" + str(marker) + '\'\ncat "$1"\n')
+    converter.chmod(0o755)
+    run(remote.repo, "config", "diff.trap.textconv", str(converter))
+    (remote.repo / ".gitattributes").write_text("app.py diff=trap\n")
+    # Committed attributes affect the actual revision-bound diff, not just the worktree.
+    run(remote.repo, "add", ".gitattributes")
+    run(remote.repo, "commit", "-qm", "attributes")
+    head = run(remote.repo, "rev-parse", "HEAD")
+    raw = runtime.gitio.run(
+        remote.repo,
+        "diff",
+        "--binary",
+        "--no-ext-diff",
+        "--no-textconv",
+        remote.base,
+        head,
+        limit=16_000_000,
+    )
+    assert b"value = 2" in raw and not marker.exists()
+    checks = [
+        {
+            "head": head,
+            "base": remote.base,
+            "status": "passed",
+            "command": ["verify"],
+            "tools": {"fixture": "pinned"},
+            "returncode": 0,
+        }
+    ]
+    reviews = [
+        {
+            "head": head,
+            "base": remote.base,
+            "status": "passed",
+            "author_id": "generator",
+            "reviewer_id": "independent",
+            "diff_digest": hashlib.sha256(raw).hexdigest(),
+        }
+    ]
+    original = remote.gh
+
+    def gh(repo, *args):
+        if args[:2] == ("repo", "view"):
+            return json.dumps({"nameWithOwner": NAME})
+        if args[:2] == ("pr", "merge"):
+            return ""
+        path = args[-1]
+        if path.endswith("/protection"):
+            return json.dumps(
+                {
+                    "required_status_checks": {"strict": True, "contexts": ["ci"]},
+                    "enforce_admins": {"enabled": True},
+                }
+            )
+        if "/rulesets?" in path:
+            return "[]"
+        if "/files?" in path:
+            return json.dumps([{"filename": "app.py"}])
+        if "/check-runs?" in path:
+            return json.dumps(
+                {
+                    "total_count": 1,
+                    "check_runs": [
+                        {
+                            "name": "ci",
+                            "head_sha": head,
+                            "status": "completed",
+                            "conclusion": "success",
+                        }
+                    ],
+                }
+            )
+        if path.endswith("/status"):
+            return json.dumps({"statuses": []})
+        return json.dumps(
+            {"state": "open", "head": {"sha": head}, "base": {"sha": remote.base, "ref": "main"}}
+        )
+
+    runtime._gh = gh
+    try:
+        result = runtime.GitHub([["verify"]]).merge(
+            remote.repo, 7, head, remote.base, checks=checks, reviews=reviews, active=True
+        )
+        assert result["status"] == "succeeded", result
+        assert not marker.exists()
+    finally:
+        runtime._gh = original

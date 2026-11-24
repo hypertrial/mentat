@@ -156,6 +156,8 @@ class Store:
         session_id = uuid.uuid4().hex
         with self._connect() as db:
             db.execute("BEGIN IMMEDIATE")
+            if self._unresolved_private_dispatch(db):
+                raise ValueError("unresolved private merge dispatch blocks a new session")
             db.execute("INSERT INTO sessions VALUES (?, 'running', ?, ?, ?, ?, ?, ?)", (session_id, repo, base, head, now, deadline, policy_json))
             self._event(db, session_id, "session_started", {"repo": repo, "base": base, "head": head, "started_at": now, "deadline": deadline, "policy": policy})
             db.commit()
@@ -871,6 +873,24 @@ class Store:
             db.commit()
             return job_id
 
+    @staticmethod
+    def _unresolved_private_dispatch(db: sqlite3.Connection) -> bool:
+        # This Store is scoped to a single workspace/repository authority.
+        return db.execute("""SELECT 1 FROM events d WHERE d.kind='private_merge_dispatched'
+            AND NOT EXISTS (SELECT 1 FROM events r WHERE r.session_id=d.session_id
+                AND r.kind='private_merge_resolved' AND r.payload=d.payload AND r.seq>d.seq)
+            LIMIT 1""").fetchone() is not None
+
+    def resolve_private_dispatch(self, session_id: str, payload: dict) -> None:
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            data = _json(payload)
+            if not db.execute("SELECT 1 FROM events WHERE session_id=? AND kind='private_merge_dispatched' AND payload=?", (session_id, data)).fetchone():
+                raise ValueError("private resolution lacks the exact dispatch")
+            if not db.execute("SELECT 1 FROM events WHERE session_id=? AND kind='private_merge_resolved' AND payload=?", (session_id, data)).fetchone():
+                self._event(db, session_id, "private_merge_resolved", payload)
+            db.commit()
+
     def begin_remote_effect(self, session_id: str, kind: str, payload: dict, *, job_id: str | None = None, now: float | None = None) -> None:
         """Atomically fence remote writes against the first source revision."""
         if kind not in {"publication_started", "merge_started", "private_merge_prepared", "private_merge_dispatched"}:
@@ -913,6 +933,8 @@ class Store:
                     raise ValueError("private merge lacks a durable remote-effect marker")
                 prior = [json.loads(row[0]) for row in db.execute("SELECT payload FROM events WHERE session_id=? AND kind='private_merge_prepared' AND json_extract(payload,'$.head')=? AND json_extract(payload,'$.base')=?", (session_id, payload["head"], payload["base"]))]
                 if kind == "private_merge_dispatched":
+                    if self._unresolved_private_dispatch(db):
+                        raise ValueError("unresolved private merge dispatch blocks another dispatch")
                     if prior != [payload]:
                         raise ValueError("private merge dispatch lacks its exact prepared intent")
                     if db.execute("SELECT 1 FROM events WHERE session_id=? AND kind='private_merge_dispatched' AND json_extract(payload,'$.head')=? AND json_extract(payload,'$.base')=?", (session_id, payload["head"], payload["base"])).fetchone():
