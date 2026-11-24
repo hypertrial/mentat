@@ -789,6 +789,14 @@ def test_newer_genuinely_reviewed_checkpoint_fences_inflight_correction_acceptan
     from mentat.autonomy_spec_scope import authenticate
     from mentat.autonomy_state import Store
 
+    # The paused agent drives competing jobs synchronously; one worker keeps
+    # the coordinator executor from claiming those same jobs concurrently.
+    config_path = repo / '.mentat/workspace.json'
+    config = json.loads(config_path.read_text())
+    config['concurrency'] = 1
+    config_path.write_text(json.dumps(config))
+    git(repo, 'commit', '-qam', 'isolate race fixture worker')
+    git(repo, 'update-ref', 'refs/remotes/origin/main', git(repo, 'rev-parse', 'HEAD'))
     base = git(repo, 'rev-parse', 'HEAD')
     spec = repo / 'openspec/specs/application/spec.md'
     spec.parent.mkdir(parents=True)
@@ -869,7 +877,7 @@ def test_newer_genuinely_reviewed_checkpoint_fences_inflight_correction_acceptan
     monkeypatch.setattr(Coordinator, '_execute', observe_controller)
     # The shared test harness sets a GitHub adapter; its returned
     # instance lets us check the actual publication targets.
-    snapshot, _, github = run(repo, tmp_path, agent=RaceAgent())
+    snapshot, _, github = run(repo, tmp_path, agent=RaceAgent(), concurrency=1)
     assert state['injected'] and state['newer']
     correction = next(job for job in snapshot['jobs'] if job['payload'].get('kind') == 'generate_spec'
                       and job['payload'].get('correction_scope') and (job.get('outcome') or {}).get('head'))
