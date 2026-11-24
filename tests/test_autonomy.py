@@ -1476,14 +1476,29 @@ def test_interleaved_review_plans_never_share_acceptances_or_rejections(
     }
     assert all(len(group) == 2 for group in groups.values())
 
-    def review(job, decision):
+    decisions = {job["id"]: "accept" for job in jobs}
+    decisions[groups["b"][1]["id"]] = "defer"
+    claimed = {}
+    outcomes = {}
+    for index in range(len(jobs)):
+        job = store.claim_job(coordinator.session_id, f"reviewer-{index}", now=2, lease_seconds=50)
+        assert job is not None
+        decision = decisions[job["id"]]
         outcome = {
+            "status": "succeeded",
             "author_id": job["id"],
             "head": "head",
             "diff_digest": "same-diff",
             "result": {"decision": decision, "summary": decision, "findings": []},
         }
-        coordinator._advance(job, outcome)
+        store.finish_job(job["id"], job["lease_token"], outcome, now=3)
+        claimed[job["id"]] = job
+        outcomes[job["id"]] = outcome
+    assert set(claimed) == {job["id"] for job in jobs}
+
+    def review(job, decision):
+        assert outcomes[job["id"]]["result"]["decision"] == decision
+        coordinator._advance(claimed[job["id"]], outcomes[job["id"]])
 
     review(groups["a"][0], "accept")
     review(groups["b"][0], "accept")
@@ -2250,16 +2265,25 @@ def test_review_batch_scope_changes_never_pool_approvals(
     assert len(one) == len(two) == 2
     assert one[0]["payload"]["review_cohort"] != two[0]["payload"]["review_cohort"]
 
+    claimed = {}
+    outcomes = {}
+    for index in range(4):
+        job = store.claim_job(coordinator.session_id, f"reviewer-{index}", now=2, lease_seconds=50)
+        assert job is not None
+        outcome = {
+            "status": "succeeded",
+            "author_id": job["id"],
+            "head": "head",
+            "diff_digest": "same-diff",
+            "result": {"decision": "accept", "summary": "accepted", "findings": []},
+        }
+        store.finish_job(job["id"], job["lease_token"], outcome, now=3)
+        claimed[job["id"]] = job
+        outcomes[job["id"]] = outcome
+    assert set(claimed) == {job["id"] for job in jobs}
+
     def accept(job):
-        coordinator._advance(
-            job,
-            {
-                "author_id": job["id"],
-                "head": "head",
-                "diff_digest": "same-diff",
-                "result": {"decision": "accept", "summary": "accepted", "findings": []},
-            },
-        )
+        coordinator._advance(claimed[job["id"]], outcomes[job["id"]])
 
     accept(one[0])
     accept(two[0])
