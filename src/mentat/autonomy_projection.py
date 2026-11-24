@@ -17,6 +17,7 @@ from urllib.parse import quote
 from . import process
 from .autonomy import digest, project_snapshot
 from .autonomy_policy import load_policy_path
+from .autonomy_state import IntegrationCapacityError
 
 _FIELDS = {
     "session": ("id", "status", "historical_status", "base", "head", "started_at", "deadline"),
@@ -319,6 +320,7 @@ def _project_inner(raw: dict, *, store_path: Path | None = None) -> dict:
 
 _INPUT_LIMIT = 32 * 1024 * 1024
 _OUTPUT_LIMIT = 8 * 1024 * 1024
+_CAPACITY_EXIT = 3
 
 
 def _write_bounded(value: object, target, limit: int) -> None:
@@ -327,7 +329,7 @@ def _write_bounded(value: object, target, limit: int) -> None:
         data = chunk.encode("utf-8")
         total += len(data)
         if total > limit:
-            raise ValueError("projection capacity exceeded")
+            raise IntegrationCapacityError("projection capacity exceeded")
         target.write(data)
 
 
@@ -336,7 +338,7 @@ def _worker_main() -> None:
     try:
         data = sys.stdin.buffer.read(_INPUT_LIMIT + 1)
         if len(data) > _INPUT_LIMIT:
-            raise ValueError("capacity exceeded")
+            raise IntegrationCapacityError("projection capacity exceeded")
         request = json.loads(data)
         if not isinstance(request, dict) or set(request) != {"raw", "store_path"}:
             raise ValueError("invalid request")
@@ -349,6 +351,8 @@ def _worker_main() -> None:
             output.seek(0)
             while chunk := output.read(65536):
                 sys.stdout.buffer.write(chunk)
+    except IntegrationCapacityError:
+        raise SystemExit(_CAPACITY_EXIT) from None
     except Exception:
         # Never reflect raw records, paths or exception text to the caller.
         raise SystemExit(2) from None
@@ -369,11 +373,15 @@ def project(raw: dict, *, store_path: Path | None = None, timeout: float = 10) -
             if remaining <= 0:
                 raise TimeoutError("projection deadline")
             code, output, _ = process.run([sys.executable, "-I", "-B", "-c", bootstrap, str(Path(__file__).resolve().parent.parent)], cwd="/", env={}, stdin=input_file, output_limit=_OUTPUT_LIMIT, timeout=remaining, stderr=False)
+        if code == _CAPACITY_EXIT:
+            raise IntegrationCapacityError("projection capacity exceeded")
         if code:
             raise ValueError("projection unavailable")
         result = json.loads(output)
         if not isinstance(result, dict):
             raise ValueError("projection unavailable")
         return result
+    except IntegrationCapacityError:
+        raise
     except (OSError, ValueError, TypeError, RuntimeError, subprocess.SubprocessError) as exc:
         raise ValueError("projection unavailable") from exc

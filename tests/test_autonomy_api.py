@@ -159,6 +159,35 @@ def test_snapshot_pages_are_stable_and_changes_resume_past_1000(service):
     assert get(adapter, "/v1/snapshots/foreign/claims")[0] == 409
 
 
+def test_snapshot_projection_unavailability_is_retryable(service, monkeypatch):
+    adapter, _, _, _ = service
+
+    def unavailable(raw, *, timeout):
+        raise ValueError("internal projection failure")
+
+    monkeypatch.setattr(adapter, "project", unavailable)
+    status, result = get(adapter, "/v1/snapshot")
+    assert status == 503
+    assert result["error"]["code"] == "unavailable"
+    assert result["error"]["retryable"] is True
+    assert "internal projection failure" not in json.dumps(result)
+
+
+def test_snapshot_worker_capacity_is_not_retryable(service, monkeypatch):
+    from mentat.autonomy_projection import project
+
+    adapter, store, session, _ = service
+    raw = store.integration_snapshot(session)
+    # This fits raw capture but exceeds the 8 MiB bound on public projection.
+    raw["claims"] = [{"id": f"claim-{i}", "statement": "\u6c34" * 4096} for i in range(350)]
+    monkeypatch.setattr(store, "integration_snapshot", lambda *args, **kwargs: raw)
+    monkeypatch.setattr(adapter, "project", project)
+    status, result = get(adapter, "/v1/snapshot")
+    assert status == 413
+    assert result["error"]["code"] == "capacity"
+    assert result["error"]["retryable"] is False
+
+
 def test_feedback_is_durable_idempotent_and_stop_unavailable(service):
     adapter, store, session, _ = service
     first = control(adapter, "feedback-1", "feedback", {"message": "please clarify"})

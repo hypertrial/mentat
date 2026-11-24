@@ -1110,3 +1110,44 @@ Only the fast static/Claims Spec check is attempted for this publication; the
 already-passing test groups and long completion suites are not repeated. The
 external comprehensive handoff remains a private/local document and is not copied
 into this public repository.
+
+## 2026-11-24 — headless readiness recovery
+
+The completion branch started at `8a5bb66ed6d0b76180f0133220186b6ca99c6612`;
+`fb4152baeeb8090e8cc28c3de89254e808701e3f` records the completion criteria.
+The first macOS compatibility pass at the specification revision reported 719
+passed, eight optional Lean 4.31.0 skips, and one freshness failure before the
+policy changed. An isolated rerun of the whole freshness file passed all 18
+cases. The first focused workflow group reported 148 passed and one indeterminate
+process-group cleanup probe; all 30 transaction cases passed on isolated rerun.
+The original logs do not establish the cause of either intermittent result.
+The controls still require a current positive observation and confirmed group
+absence. A denied probe alone never establishes cleanup.
+
+Both authenticated snapshot regressions fail on the checkpoint with HTTP 400.
+They pass after preserving worker capacity as nonretryable HTTP 413 and
+temporary projection unavailability as retryable HTTP 503. The capacity case
+uses real bounded worker output below the raw capture limit. Independent
+review found no remaining actionable issue in the error classification change.
+The production loopback fixture now discovers the rendezvous without using
+adapter internals and checks immutable paging, ordered changes, feedback receipt
+and privacy.
+
+The locked CPython 3.12 environment, fast Claims Spec check, macOS wheel/sdist
+smoke, and complete inventory and lineage across all 13 introduced commits, each compared to its first parent, passed. These are
+historical preflight results, not the exact-revision completion gates. The
+dedicated Ubuntu ARM64 worker provisioned successfully. A separate local-only
+increment fixture failed at its intended assertion in the isolated Linux
+worker. This check establishes neither GitHub publication nor IIL repair.
+
+A synthetic data-only readiness probe on Codex CLI 0.153.4 was rejected by
+the ChatGPT account model catalog for `gpt-6.1-terra`. The same pinned model
+and high effort succeeded through Codex CLI 0.159.0 with the existing sign-in.
+The probe used a disposable fixture and establishes model access, not an
+independent workflow review.
+
+The subsequent six-worker targeted run passed all 327 cases in 1,126.24 seconds.
+It covered CLI freshness, Git transactions, HTTP, projection, source corrections,
+final source reviews, proof cases, and correction scope. It ran against the
+checkpoint plus test updates before the reviewed error-classification patch was
+integrated. The new HTTP cases were separately verified red and green.

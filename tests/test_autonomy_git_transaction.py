@@ -110,6 +110,9 @@ def assert_groups_gone(processes):
                 os.killpg(process.pid, 0)
             except ProcessLookupError:
                 break
+            except PermissionError as exc:
+                if time.monotonic() >= deadline:
+                    raise AssertionError(f"cannot verify cleanup of process group {process.pid}") from exc
             assert time.monotonic() < deadline, f"process group {process.pid} survived cleanup"
             time.sleep(0.01)
 
@@ -169,7 +172,7 @@ def test_race_after_advertisement_rejects_both_commands(repo, tmp_path, monkeypa
     def before_send():
         assert not capture.exists()
         git(bare, "update-ref", "refs/heads/" + changed, moved)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="receive-pack ref update failed"):
         transaction.transact(work, "org/private", base, head, merge, BRANCH, before_send, timeout=4)
     assert_groups_gone(processes)
     assert ref(bare, changed) == moved

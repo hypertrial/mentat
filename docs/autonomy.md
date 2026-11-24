@@ -21,6 +21,11 @@ uv run --locked mentat worker doctor --repo /absolute/path/to/application
 uv run --locked mentat worker provision
 ```
 
+The pinned GPT-6.1 Terra model requires Codex CLI 0.159.0 or later.
+`worker doctor` reports the installed CLI version. A live model call is needed
+to confirm access through the current sign-in.
+See the [Codex model instructions](https://learn.chatgpt.com/docs/models#choose-a-model-2).
+
 Install Lima on the controller before provisioning. The managed Ubuntu ARM64 VM has no host directory mounts or port forwarding. The pinned image digest is published in [Canonical's checksums](https://cloud-images.ubuntu.com/releases/noble/release-20261017/SHA256SUMS). Generated verification and application execution belongs inside its bounded guest sandbox. The Lean checker retains its separately pinned toolchain and axiom policies.
 
 Git operations use the existing SSH remote. PR metadata and protected merges use existing `gh` authentication. Missing CLI authentication, unreadable branch rules in protected mode, stale checks, or unavailable worker tools prevent the corresponding operation; errors never select another enforcement policy or host execution. Provision the application's development dependencies in the trusted worker environment before requiring its checks.

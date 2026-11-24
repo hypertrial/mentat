@@ -17,6 +17,10 @@ STATUSES = frozenset({"queued", "running", "paused", "completed", "blocked", "fa
 KINDS = frozenset({"requirement", "claim", "finding", "decision", "evidence"})
 
 
+class IntegrationCapacityError(ValueError):
+    """A snapshot exceeds a documented integration size limit."""
+
+
 class SourceBarrierHeld(ValueError):
     """A foreign finalization is held by unresolved session correspondence."""
 
@@ -1288,12 +1292,12 @@ class Store:
                 lengths = "+".join(f"coalesce(length(CAST({column} AS BLOB)),0)" for column in columns.split(","))
                 count, size = db.execute(f"SELECT count(*), coalesce(sum({lengths}),0) FROM {table} WHERE session_id=?", (session_id,)).fetchone()
                 if count > cap:
-                    raise ValueError("integration capacity")
+                    raise IntegrationCapacityError("integration capacity")
                 if table in ("jobs", "records"):
                     record_count += count
                 total += size
             if record_count > 10000 or total > 32 * 1024 * 1024:
-                raise ValueError("integration capacity")
+                raise IntegrationCapacityError("integration capacity")
             event_rows = db.execute("SELECT seq,kind,payload FROM events WHERE session_id=? ORDER BY seq", (session_id,)).fetchall()
             record_rows = db.execute("SELECT kind,data FROM records WHERE session_id=? ORDER BY rowid", (session_id,)).fetchall()
             job_rows = db.execute("SELECT * FROM jobs WHERE session_id=? ORDER BY rowid", (session_id,)).fetchall()

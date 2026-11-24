@@ -39,6 +39,7 @@ def test_projection_fails_closed_without_executing_repository_helpers(tmp_path):
 
 def test_real_http_snapshot_uses_production_projection(tmp_path):
     import http.client
+    from urllib.parse import urlsplit
 
     from mentat.autonomy_integration import create_adapter
 
@@ -61,20 +62,53 @@ def test_real_http_snapshot_uses_production_projection(tmp_path):
                              connection_file=private / "connection.json")
     adapter.start()
     try:
-        def get(path):
-            conn = http.client.HTTPConnection(*adapter.server.server_address, timeout=10)
-            conn.request("GET", path, headers={"Authorization": "Bearer " + adapter.token})
+        info = json.loads((private / "connection.json").read_text())
+        endpoint = urlsplit(info["base_url"])
+        assert endpoint.scheme == "http" and endpoint.hostname == "127.0.0.1"
+        assert info["session_id"] == session
+
+        def request(method, path, *, body=None, status=200):
+            conn = http.client.HTTPConnection(endpoint.hostname, endpoint.port, timeout=10)
+            headers = {"Authorization": "Bearer " + info["capability"]}
+            if body is not None:
+                headers["Content-Type"] = "application/json"
+                body = json.dumps(body)
+            conn.request(method, path, body=body, headers=headers)
             response = conn.getresponse()
-            body = response.read()
-            assert response.status == 200, body
+            data = response.read()
+            assert response.status == status, data
             conn.close()
-            return json.loads(body)
-        snap = get("/v1/snapshot")
-        page = get(f"/v1/snapshots/{snap['snapshot_id']}/claims")
+            return json.loads(data)
+
+        capabilities = request("GET", "/v1/capabilities")
+        assert capabilities["api_version"] == 1
+        assert capabilities["session_id"] == info["session_id"]
+        assert capabilities["server_id"] == info["server_id"]
+        assert capabilities["capabilities"]["snapshots"] is True
+        assert capabilities["capabilities"]["changes"] is True
+        snap = request("GET", "/v1/snapshot")
+        assert snap["session_id"] == session
+        claim_url = f"/v1/snapshots/{snap['snapshot_id']}/claims"
+        page = request("GET", claim_url)
+        store.put_record(session, "claim", {"id": "later", "statement": "Later statement",
+                         "status": "unattempted"})
+        assert request("GET", claim_url) == page
         assert page["items"][0]["statement"] == "Public project statement"
         assert page["items"][0]["status"] == "unattempted"
-        assert "PRIVATE_PROMPT_SENTINEL" not in json.dumps(page)
-        assert str(tmp_path) not in json.dumps(snap) + json.dumps(page)
+        assert len(page["items"]) == 1
+        receipt = request("POST", "/v1/controls", status=202,
+                          body={"request_id": "smoke-feedback", "action": "feedback",
+                                "payload": {"message": "PRIVATE_FEEDBACK_SENTINEL"}})
+        assert receipt["receipt"]
+        changes = request("GET", "/v1/changes?cursor=" + snap["cursor"])
+        seqs = [event["seq"] for event in changes["events"]]
+        assert len(seqs) >= 2 and seqs == sorted(set(seqs))
+        assert seqs[0] > snap["high_water"]
+        assert any(event["kind"] == "human_feedback" for event in changes["events"])
+        public = json.dumps([capabilities, snap, page, receipt, changes])
+        assert "PRIVATE_PROMPT_SENTINEL" not in public
+        assert "PRIVATE_FEEDBACK_SENTINEL" not in public
+        assert str(tmp_path) not in public
     finally:
         adapter.close()
 
