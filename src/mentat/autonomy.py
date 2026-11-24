@@ -35,6 +35,7 @@ from .autonomy_state import (
     SourceEpochStale,
     SourceRemotePending,
     Store,
+    ordinary_review_pair,
     record_digest,
 )
 from .project import safe_relative_path
@@ -420,7 +421,7 @@ def _allowed_path(kind: str, path: str) -> bool:
     return autonomy_source_corrections.allowed_path(kind, path)
 
 
-_OUTPUT_INSTRUCTIONS = """Return the structured result required by the output schema. You have no execution or filesystem tools. Return file changes as {path, operation, content}; use write or delete for ordinary changes (empty content for delete). Only generate_spec may use patch_fas, only at .mentat/fas.json, under the detailed specification instructions. Reviewers must return an empty changes list. Your agreement is not proof. Never modify an established requirement to hide an application defect. Never commit, push, merge, edit controller state, or use credentials. Execution of candidate or generated verification programs belongs in the configured isolated worker, not the host. Record ambiguity and missing capabilities explicitly and continue unrelated work."""
+_OUTPUT_INSTRUCTIONS = autonomy_final_review.OUTPUT_INSTRUCTIONS
 
 
 class Coordinator:
@@ -469,13 +470,58 @@ class Coordinator:
                 "scl",
                 "implementer",
                 f"feedback.{event['seq']}",
-                {"kind": "generate_spec", "feedback": message,
+                {"kind": "generate_spec", "feedback": message, "human_feedback": message,
                  "accepted_spec_base": self.store.snapshot(self.session_id)["session"]["head"]},
             )
             self._event("feedback_consumed", {"seq": event["seq"]})
 
+    def _initial_jobs(self, base: str, head: str, surfaces: list) -> list[dict]:
+        items = [("scl", "implementer", "cas.inventory", {
+            "kind": "generate_spec", "surfaces": surfaces, "accepted_spec_base": head,
+            **({"target_head": head, "review_base": base} if head != base else {}),
+        })]
+        items.extend(("ivl", "verifier", f"source.{index}", {"kind": "source_check", "check": check})
+                     for index, check in enumerate(self.config["source_checks"]))
+        return [{"loop": loop, "role": role, "item_id": item, "payload": payload,
+                 "input_digest": digest({"head": head, "policy": self.config,
+                    "authority_digest": self.authority_digest, "tool_identity": self.tool_identity,
+                    "item": item, "payload": payload})} for loop, role, item, payload in items]
+
+    def _validate_initial_jobs(self, snapshot: dict) -> None:
+        events = snapshot["events"]
+        starts = [e["payload"] for e in events if e["kind"] == "session_started"]
+        inventories = [e["payload"] for e in events if e["kind"] == "inventory"]
+        if len(starts) != 1 or len(inventories) != 1:
+            raise ValueError("incomplete initial session bootstrap; start a new session")
+        start = starts[0]
+        surfaces = inventory(self.repo, start["head"])
+        if inventories[0] != {"surfaces": surfaces, "count": len(surfaces), "status": "unexamined"}:
+            raise ValueError("invalid initial session inventory")
+        if start.get("repo") != snapshot["session"]["repo"] or start.get("base") != snapshot["session"]["base"] or start.get("policy") != self.config:
+            raise ValueError("invalid initial session identity")
+        if FAS_PATH in {surface["path"] for surface in surfaces}:
+            fas = json.loads(gitio.read_file(self.repo, start["head"], FAS_PATH))
+            cutoff = next(e["seq"] for e in events if e["kind"] == "inventory")
+            recorded = [e["payload"] for e in events if e["kind"] == "record_added" and e["seq"] < cutoff]
+            for kind, key in (("requirement", "requirements"), ("claim", "claims")):
+                for record in fas[key]:
+                    if recorded.count({"kind": kind, "record": record}) != 1:
+                        raise ValueError("incomplete initial session records")
+        for expected in self._initial_jobs(start["base"], start["head"], surfaces):
+            matches = [e["payload"] for e in events if e["kind"] == "job_enqueued"
+                       and all(e["payload"].get(k) == v for k, v in expected.items())]
+            if len(matches) != 1 or not any(j["id"] == matches[0].get("job_id") and all(j.get(k) == v for k, v in expected.items()) for j in snapshot["jobs"]):
+                raise ValueError("incomplete initial session bootstrap; start a new session")
+
     def _enqueue(self, loop: str, role: str, item: str, payload: dict, *, predecessor: dict | None = None, end_correction_scope: bool = False) -> str:
         assert self.session_id
+        if predecessor:
+            prior = predecessor.get("payload", {})
+            human = prior.get("human_feedback")
+            if human is None and prior.get("kind") == "generate_spec" and isinstance(prior.get("feedback"), str):
+                human = prior["feedback"]
+            if human is not None:
+                payload = {**payload, "human_feedback": human}
         if predecessor and payload.get("source_cycle_id") and payload.get("kind") == "generate_spec":
             cycle_id = payload["source_cycle_id"]
             original = self.store.source_correction_feedback(self.session_id, cycle_id)
@@ -631,7 +677,11 @@ class Coordinator:
                     self._enqueue_reviewers(final_job, final, "review_final", evidence)
                     self.store.mark_source_aggregate_scheduled(self.session_id, cycle_id, head)
                 elif "revise" in outcomes:
+                    human = jobs[0]["payload"].get("human_feedback")
+                    if any(j["payload"].get("human_feedback") != human for j in jobs):
+                        raise ValueError("source pass human feedback lineage changed")
                     payload = {"kind": "generate_spec", "target_head": head, "accepted_spec_base": head,
+                        **({"human_feedback": human} if human is not None else {}),
                         "review_base": cycle["origin_base"], "root_item": cycle["root_item"],
                         "source_cycle_id": cycle_id, "source_cycle_round": cycle["failed_passes"] + 1,
                         "feedback": feedback, "surfaces": inventory(self.repo, head),
@@ -761,6 +811,7 @@ class Coordinator:
                     raise ValueError(
                         "source or policy changed; prior evidence is stale, start a new session"
                     )
+                self._validate_initial_jobs(previous)
                 self.session_id = resume
                 self.store.resume_session(
                     resume, now=now, deadline=now + self.config["session_seconds"]
@@ -769,44 +820,19 @@ class Coordinator:
                 base = git(
                     self.repo, "rev-parse", f"{self.config['remote']}/{self.config['base_branch']}"
                 )
-                self.session_id = self.store.new_session(
-                    str(self.repo),
-                    base,
-                    head,
-                    self.config,
-                    now,
-                    now + self.config["session_seconds"],
-                )
-                self._event("authority_pinned", {"digest": self.authority_digest})
-                self._event("toolchain_pinned", {"identity": self.tool_identity})
                 surfaces = inventory(self.repo, head)
+                records = []
                 if (self.repo / FAS_PATH).is_file():
                     existing_fas = validate_specification(self.repo)
-                    for record_kind, records in (
-                        ("requirement", existing_fas["requirements"]),
-                        ("claim", existing_fas["claims"]),
-                    ):
-                        for record in records:
-                            self.store.put_record(self.session_id, record_kind, record)
-                self._event(
-                    "inventory",
-                    {"surfaces": surfaces, "count": len(surfaces), "status": "unexamined"},
+                    records = [(kind, record) for kind, key in (("requirement", "requirements"), ("claim", "claims")) for record in existing_fas[key]]
+                jobs = self._initial_jobs(base, head, surfaces)
+                self.session_id = self.store.new_session(
+                    str(self.repo), base, head, self.config, now,
+                    now + self.config["session_seconds"],
+                    bootstrap={"authority_digest": self.authority_digest,
+                               "tool_identity": self.tool_identity, "records": records,
+                               "surfaces": surfaces, "jobs": jobs},
                 )
-                self._enqueue(
-                    "scl",
-                    "implementer",
-                    "cas.inventory",
-                    {"kind": "generate_spec", "surfaces": surfaces,
-                     "accepted_spec_base": head,
-                     **({"target_head": head, "review_base": base} if head != base else {})},
-                )
-                for index, check in enumerate(self.config["source_checks"]):
-                    self._enqueue(
-                        "ivl",
-                        "verifier",
-                        f"source.{index}",
-                        {"kind": "source_check", "check": check},
-                    )
             assert self.session_id
             deadline = self.store.snapshot(self.session_id)["session"]["deadline"]
             self._event("capabilities", {"worker": self.worker.diagnostics()})
@@ -3004,7 +3030,7 @@ class Coordinator:
         scope = prompt_payload.pop("correction_scope", None)
         if scope is not None:
             prompt_payload["correction_scope_id"] = scope["id"]
-        common = f"Mentat {job['loop'].upper()} {kind}. Session head {session['head']}; session base {session['base']}; task input revision {input_revision}. {_OUTPUT_INSTRUCTIONS}\nTask: {json.dumps(prompt_payload)}\n"
+        common = f"Mentat {job['loop'].upper()} {kind}. Session head {session['head']}; session base {session['base']}; task input revision {input_revision}. {_OUTPUT_INSTRUCTIONS}\n{autonomy_final_review.prompt_task(prompt_payload)}"
         if scope is not None:
             common += "The correction_scope in SOURCE_CONTEXT_JSON is the editable envelope; all other context is read-only and outside dependencies must be deferred.\n"
         if kind in {"generate_spec", "generate_verification", "investigate_defect"}:
@@ -3158,6 +3184,10 @@ class Coordinator:
                             command in repair.get("commands", []) for command in failed_commands
                         )
                     ):
+                        cycle_id = request["job"]["payload"].get("source_cycle_id")
+                        if cycle_id:
+                            self.store.block_source_cycle(self.session_id, cycle_id, self.store.source_cycle_head(self.session_id, cycle_id), "Source correction requires application repair; resolve the failed repair check before continuing")
+                            return
                         generator = "investigate_defect"
                         root_item = repair.get("root_item", root_item)
                         round_number = repair.get("round", 0)
@@ -3180,6 +3210,7 @@ class Coordinator:
                     if retry:
                         payload = {
                             "kind": generator,
+                            **{key: request["job"]["payload"][key] for key in ("source_cycle_id", "source_cycle_round") if key in request["job"]["payload"]},
                             "target_head": proposal["head"],
                             "review_base": (
                                 repair.get("review_base", session["base"])
@@ -3222,7 +3253,7 @@ class Coordinator:
                                     for key in ("requirement", "evidence", "reproduction")
                                 }
                             )
-                        self._enqueue(job["loop"], "implementer", root_item, payload)
+                        self._enqueue(job["loop"], "implementer", root_item, payload, predecessor=request["job"])
                     return
                 if request["kind"] == "review_final":
                     self._start_final_sources(request["job"], proposal, evidence)
@@ -3621,30 +3652,22 @@ class Coordinator:
                 payload = autonomy_source_corrections.scl_revision_payload(job, pair, inventory(self.repo, proposal["head"]))
                 revised = next(d for d in self.store.snapshot(self.session_id)["decisions"] if d.get("review_cohort") == cohort and d.get("decision") == "revise")
                 payload["correction_scope"] = job["payload"].get("correction_scope") or autonomy_spec_scope.derive_for_review(self, revised["job_id"], revised["id"], inventory, _git_paths)
-                self._enqueue("scl", "implementer", proposal["root_item"], payload, predecessor={"id": pair[0]["job_id"]})
+                self._enqueue("scl", "implementer", proposal["root_item"], payload, predecessor=next(j for j in self.store.snapshot(self.session_id)["jobs"] if j["id"] == pair[0]["job_id"]))
                 return
         if result["decision"] != "accept":
+            self.store.put_record(self.session_id, "finding", {
+                "id": record_id("review-finding"), "status": "revision-requested" if result["decision"] == "revise" and proposal.get("round", 0) + 1 < self.config["max_attempts"] else "inconclusive",
+                "loop": job["loop"], "summary": result["summary"], "findings": result.get("findings", []),
+            })
+        pair = ordinary_review_pair(self, kind, cohort, proposal)
+        if pair is None:
+            return
+        outcomes = [entry["outcome"]["result"] for entry in pair]
+        if any(entry["decision"] != "accept" for entry in outcomes):
             next_round = proposal.get("round", 0) + 1
-            retry = result["decision"] == "revise" and next_round < self.config["max_attempts"]
-            self.store.put_record(
-                self.session_id,
-                "finding",
-                {
-                    "id": record_id("review-finding"),
-                    "status": "revision-requested" if retry else "inconclusive",
-                    "loop": job["loop"],
-                    "summary": result["summary"],
-                    "findings": result.get("findings", []),
-                },
-            )
+            retry = all(entry["decision"] in {"accept", "revise"} for entry in outcomes) and any(entry["decision"] == "revise" for entry in outcomes) and next_round < self.config["max_attempts"]
             if retry:
-                rejected = [
-                    d
-                    for d in self.store.snapshot(self.session_id)["decisions"]
-                    if d.get("review_cohort") == cohort and d.get("decision") != "accept"
-                ]
-                if rejected and rejected[0]["id"] != decision["id"]:
-                    return
+                revised = next(entry for entry in pair if entry["outcome"]["result"]["decision"] == "revise")
                 original_kind = proposal.get("generation_kind")
                 if original_kind not in {
                     "generate_spec",
@@ -3659,13 +3682,13 @@ class Coordinator:
                     root_item,
                     {
                         "kind": original_kind,
-                        **({"correction_scope": job["payload"].get("correction_scope") or autonomy_spec_scope.derive_for_review(self, job["id"], decision["id"], inventory, _git_paths)} if original_kind == "generate_spec" else {}),
+                        **({"correction_scope": job["payload"].get("correction_scope") or autonomy_spec_scope.derive_for_review(self, revised["id"], revised["decision"]["id"], inventory, _git_paths)} if original_kind == "generate_spec" else {}),
                         **{key: job["payload"][key] for key in ("source_cycle_id", "source_cycle_round") if key in job["payload"]},
                         "target_head": proposal["head"],
                         "review_base": proposal["parent"],
                         "root_item": root_item,
                         "round": next_round,
-                        "feedback": result.get("findings", []),
+                        "feedback": [finding for entry in outcomes for finding in entry.get("findings", [])],
                         "prior_authors": [
                             *proposal.get("prior_authors", []),
                             proposal["author_id"],
@@ -3694,6 +3717,7 @@ class Coordinator:
                             else {}
                         ),
                     },
+                    predecessor=job,
                 )
             return
         all_decisions = [
@@ -3850,10 +3874,12 @@ class Coordinator:
                     end_correction_scope=True,
                 )
                 return
+            human = job["payload"].get("human_feedback")
+            verification_item = "verification.inventory" + ("." + digest(human) if human is not None else "")
             self._enqueue(
                 "ivl",
                 "implementer",
-                "verification.inventory",
+                verification_item,
                 {
                     "kind": "generate_verification",
                     **{key: job["payload"][key] for key in ("source_cycle_id", "source_cycle_round") if key in job["payload"]},
@@ -3871,6 +3897,7 @@ class Coordinator:
                     ],
                     "repair": job["payload"].get("repair"),
                 },
+                predecessor=job,
             )
         elif kind == "review_fix":
             repair = job["payload"].get("repair")
@@ -3889,6 +3916,7 @@ class Coordinator:
                     "surfaces": inventory(self.repo, proposal["head"]),
                     "prior_authors": [proposal["author_id"]],
                 },
+                predecessor=job,
             )
         elif kind == "review_verification":
             commands = proposal.get("commands", [])
@@ -4158,6 +4186,7 @@ class Coordinator:
                 "check_key": check_key,
                 "authority_digest": self.authority_digest,
                 "tool_identity": self.tool_identity,
+                **({"human_feedback": payload["human_feedback"]} if "human_feedback" in payload else {}),
                 **({"source_batch": payload["source_batch"]} if payload.get("source_batch") is not None else {}),
                 **{key: payload[key] for key in ("source_cycle_id", "source_cycle_round", "source_epoch") if key in payload},
                 **({"source_coverage": payload["source_coverage"]} if payload.get("source_coverage") is not None else {}),
@@ -4176,6 +4205,8 @@ class Coordinator:
         check_id = evidence.get("id") if evidence else None
         check_key = evidence.get("check_key") if evidence else None
         review_payload = dict(job["payload"])
+        if "human_feedback" not in review_payload and review_payload.get("kind") == "generate_spec" and isinstance(review_payload.get("feedback"), str):
+            review_payload["human_feedback"] = review_payload["feedback"]
         epoch = self.store.source_finalization_epoch(self.session_id, {**review_payload, "kind": kind})
         if epoch:
             review_payload["source_epoch"] = epoch
@@ -4192,6 +4223,7 @@ class Coordinator:
                     "target_head": proposal["head"],
                     "proposal": proposal,
                     "prior_authors": proposal["prior_authors"],
+                    **({"human_feedback": review_payload["human_feedback"]} if "human_feedback" in review_payload else {}),
                     "source_checks": job["payload"].get("source_checks", []),
                     "repair": job["payload"].get("repair"),
                     "targetfiles": job["payload"].get("targetfiles"),

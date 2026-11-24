@@ -271,9 +271,9 @@ def test_two_defects_in_one_section_report_the_old_message(edit, expected):
         evidence.validate_run_record(record)
 
 
-def test_run_without_inventory_is_refused_by_the_report_path(tmp_path):
-    # Item 2: validation accepts this run, but the report's claim grouping cannot read it, as the
-    # old validator's grouping did. pr-summary must refuse it.
+def test_run_without_inventory_is_refused_by_comparison(tmp_path):
+    # Validation accepts this historical shape, but grouping and comparison cannot use it.
+    # The supported comparison CLI must report the failure rather than a usage error.
     state = evidence.state_directory(tmp_path / "state")
     run_id = "a" * 32
     save(state, run_id, "pass")
@@ -293,18 +293,16 @@ def test_run_without_inventory_is_refused_by_the_report_path(tmp_path):
             "--state",
             str(state),
             "evidence",
-            "pr-summary",
+            "compare",
             run_id,
-            "--head",
-            run_id + "0" * 8,
-            "--report-url",
-            "https://example.test/report",
-            "--ci-status",
-            "pass",
+            run_id,
+            "--json",
         ],
     )
-    assert result.exit_code != 0
-    assert "Verification" not in result.output
+    assert result.exit_code == 2, result.output
+    payload = json.loads(result.output)
+    assert payload["status"] == "incomplete"
+    assert payload["detail"] == "Invalid saved verification record"
 
 
 # Item 5: the frozen contract shape must accept and refuse exactly what the contract does.

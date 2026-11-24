@@ -75,7 +75,7 @@ def minimum_source_checks(repo: Path) -> list[dict]:
     }]
 
 
-def pin_policy(repo: Path, state_root: Path, config: dict, *, merge_policy: str = "github-protected") -> dict:
+def pin_policy(repo: Path, state_root: Path, config: dict, *, merge_policy: str = "github-protected", trust_configured_checks: bool = False) -> dict:
     from .autonomy import state_path, validate_source_checks
     from .autonomy_runtime import gh, git
     from .autonomy_worker import profile_identity
@@ -87,12 +87,22 @@ def pin_policy(repo: Path, state_root: Path, config: dict, *, merge_policy: str 
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     if path.exists():
         policy = load_policy_path(path.with_name("state.db"))
+        if trust_configured_checks:
+            for required, configured in (("mandatory_local_checks", "local_checks"),
+                                         ("mandatory_worker_checks", "worker_checks")):
+                if any(argv not in _commands(policy[required]) for argv in _commands(config[configured])):
+                    raise ValueError("configured checks are not pinned; use a new --state and session")
         check_policy(config, policy)
         current = merge_authority(policy)
         if (current["mode"] if current else "github-protected") != merge_policy:
             raise ValueError("merge authority changed; use a new --state and session")
         return policy
     local, worker = minimum_gates(repo)
+    if trust_configured_checks:
+        for gates, configured in ((local, config["local_checks"]), (worker, config["worker_checks"])):
+            for argv in _commands(configured):
+                if argv not in gates:
+                    gates.append(copy.deepcopy(argv))
     controller_repo = Path(__file__).resolve().parents[2]
     worker_profile = profile_identity(controller_repo)
     worker_profile["source_revision"] = git(controller_repo, "rev-parse", "HEAD")

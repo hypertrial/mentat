@@ -72,7 +72,7 @@ The independent discriminator inspects the relevant source, revision-bound evide
 ### Requirement: monitoring
 <!-- mentat:requirement-id=f6d43cfc-273d-5487-b265-310f1e5b2619; area=functional -->
 
-The live UI presents readable CAS, FAS, loop activity, decisions, findings, evidence, and revision changes; optional feedback reaches subsequent iterations.
+Mentat operates headlessly and exposes a versioned, secure, bounded local integration for specifications, claims and source links, loop/agent activity, decisions, findings, evidence, freshness and revision history; an independent cockpit owns all presentation, and optional feedback reaches subsequent eligible iterations without gating autonomous work.
 
 #### Scenario: monitoring acceptance
 

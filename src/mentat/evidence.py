@@ -2,9 +2,9 @@
 
 import fcntl
 import hashlib
-import json
 import os
 import re
+import stat
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
@@ -15,8 +15,6 @@ from . import records
 
 # canonical's helpers are re-exported here: callers use evidence.json_bytes and friends.
 from .canonical import STATUSES, decode_json, digest, json_bytes, status
-from .claims import code_span, inline_prose
-from .command import visible_text
 from .project_formal import LEAN_NAME_PATTERN
 
 RUN_ID = re.compile(r"[a-f0-9]{32}\Z")
@@ -80,85 +78,25 @@ def state_directory(path: Path, *, create: bool = True, candidate_root: Path | N
     return path
 
 
-def report(record: dict) -> bytes:
-    lines = [
-        "# Mentat verification evidence",
-        "",
-        f"- Run `{record['run_id']}`",
-        f"- Result **{record['status']}**",
-        f"- Candidate `{record['revision']}`",
-        f"- Approved contract `{record['contract_digest']}`",
-        "",
-    ]
-    if record.get("kind") == "project-verification":
-        # evidence_report imports this module, so it cannot be a top-level import.
-        from .evidence_report import project_report
-
-        lines.extend(project_report(record))
-    else:
-        for check in record.get("model_checks", []):
-            claim = f" · `{check['claim']}`" if "claim" in check else ""
-            lines.append(
-                f"- {check['kind']} model evidence{claim} · {check['status']} · {check['detail']}"
-            )
-        if record.get("behavior_skipped"):
-            lines.append("- Behavior checks require passing formal checks.")
-        for case in record.get("cases", []):
-            lines.append(f"- Execution · `{case['case_id']}` · {case['status']}")
-            for check in case.get("checks", []):
-                detail = check.get("detail", check.get("id", "check"))
-                claim = f"`{check['claim']}` · " if "claim" in check else ""
-                lines.append(f"  - {claim}{check.get('status', 'incomplete')} · {detail}")
-    for regression in record.get("regressions", []):
-        case_id = code_span(visible_text(regression["case_id"]))
-        status = inline_prose(visible_text(regression["status"]))
-        label = (
-            " (advisory; candidate code may influence it)"
-            if "regressions" in record.get("advisory_results", [])
-            else ""
-        )
-        lines.append(f"- Native pytest{label} · {case_id} · {status}")
-        for check in regression.get("checks", []):
-            if check.get("status") != "pass":
-                parts = [check.get("name", "check"), check.get("status", "incomplete")]
-                parts.extend(check[key] for key in ("stage", "detail") if check.get(key))
-                lines.append("  - " + " · ".join(inline_prose(visible_text(part)) for part in parts))
-    for method, counts in record.get("counts", {}).items():
-        summary = ", ".join(f"{count} {name.replace('_', ' ')}" for name, count in counts.items())
-        baseline = "advisory_results" in record and method in ("upstream-pytest", "hypothesis")
-        label = " (baseline; candidate code may influence it)" if baseline else ""
-        lines.append(f"- {method}{label} · {summary}")
-    if record.get("kind") == "evaluation":
-        lines.append(f"- Formal checks · {record['formal_seconds']} seconds")
-        label = (
-            " (advisory; candidate code may influence it)"
-            if "native_regression" in record.get("advisory_results", [])
-            else ""
-        )
-        lines.append(
-            f"- Native historical and repaired regression{label} · "
-            f"{' / '.join(record['native_regression'])}"
-        )
-    lines += ["", "## Reproduce", ""]
-    if record.get("host_reproduce"):
-        lines.extend(f"    {line}" for line in record["host_reproduce"].split("\n"))
-        lines += ["", "### Recorded host environment", ""]
-        runtime = json.dumps(record["runtime"], ensure_ascii=True, indent=2, sort_keys=True)
-        lines.extend(f"    {line}" for line in runtime.splitlines())
-        lines += ["", "Replay uses the tools currently installed at the recorded locations."]
-    else:
-        lines.append(f"`{record['reproduce']}`")
-    lines.append("")
-    return "\n".join(lines).encode()
-
-
 def save_run(state: Path, record: dict, artifacts: dict[str, bytes]) -> Path:
     run_id = record["run_id"]
     if not RUN_ID.fullmatch(run_id):
         raise ValueError("Invalid run identifier")
-    artifacts = {**artifacts, "report.md": report(record)}
+    if {"bundle_format", "artifacts", "manifest.json", "report.md"} & record.keys():
+        raise ValueError("Reserved evidence record key")
+    for name in artifacts:
+        if (
+            not isinstance(name, str)
+            or Path(name).name != name
+            or name in {".", "..", "bundle_format", "artifacts", "manifest.json", "report.md"}
+        ):
+            raise ValueError("Invalid or reserved evidence filename")
     manifest = json_bytes(
-        {**record, "artifacts": {name: digest(data) for name, data in artifacts.items()}}
+        {
+            **record,
+            "bundle_format": 2,
+            "artifacts": {name: digest(data) for name, data in artifacts.items()},
+        }
     )
     runs = state / "runs"
     runs.mkdir(mode=0o700, exist_ok=True)
@@ -192,6 +130,22 @@ def read_run_snapshot(state: Path, run_id: str) -> tuple[Path, dict, str]:
         raise ValueError("Evidence manifest failed its local integrity check")
     # Saved manifests have no size cap, but duplicate keys are refused.
     record = decode_json(raw, limit=None)
+    if not isinstance(record, dict) or not isinstance(record.get("artifacts"), dict):
+        raise ValueError("Invalid saved evidence manifest")
+    if "bundle_format" in record:
+        if type(record["bundle_format"]) is not int or record["bundle_format"] != 2:
+            raise ValueError("Unsupported evidence bundle format")
+        if "report.md" in record["artifacts"]:
+            raise ValueError("Invalid machine evidence bundle")
+    elif "report.md" not in record["artifacts"]:
+        raise ValueError("Legacy evidence bundle missing report")
+    if any(
+        not isinstance(name, str)
+        or Path(name).name != name
+        or name in {".", "..", "manifest.json"}
+        for name in record["artifacts"]
+    ):
+        raise ValueError("Invalid evidence filename")
     if record["run_id"] != run_id or set(path.name for path in bundle.iterdir()) != {
         "manifest.json",
         *record["artifacts"],
@@ -809,12 +763,12 @@ def _checks_by_id(record: dict) -> dict[tuple[str, str], dict]:
 
 
 def _run_reference(path: Path, run: dict) -> dict:
-    if run["status"] not in STATUSES or "report.md" not in run["artifacts"]:
-        raise ValueError("Invalid saved run outcome or missing report")
+    if run["status"] not in STATUSES:
+        raise ValueError("Invalid saved run outcome")
     reference = {key: run[key] for key in ("run_id", "revision", "status", "behavior_skipped")}
     if "source_qualification_status" in run:
         reference["source_qualification_status"] = run["source_qualification_status"]
-    reference.update(bundle=str(path), report=str(path / "report.md"))
+    reference.update(bundle=str(path), manifest=str(path / "manifest.json"))
     return reference
 
 
@@ -933,3 +887,41 @@ def compare_runs(
     for side, path, run in (("before", before_path, before), ("after", after_path, after)):
         result[side] = _run_reference(path, run)
     return result
+
+
+def acceptance_status(state, record, digest):
+    from .evidence_report import decision_source
+
+    path = state / "acceptances" / (record["run_id"] + ".json")
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        return "Not recorded"
+    except OSError:
+        return "Invalid or mismatched receipt"
+    try:
+        with os.fdopen(fd, "rb") as stream:
+            if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+                raise ValueError
+            receipt = decode_json(stream.read(1_000_001))
+        try:
+            records.check(records.Acceptance, receipt)
+        except ValidationError as exc:
+            raise ValueError("Invalid or mismatched receipt") from exc
+        if any(
+            receipt[k] != v
+            for k, v in {
+                "run_id": record["run_id"],
+                "revision": record["revision"],
+                "contract_digest": record["contract_digest"],
+                "manifest_digest": digest,
+            }.items()
+        ) or not acceptable(record):
+            raise ValueError
+        accepted = datetime.fromisoformat(receipt["accepted_at"])
+        if accepted.tzinfo is None:
+            raise ValueError
+        source = decision_source(receipt)
+        return "Recorded at " + receipt["accepted_at"] + (f" ({source})" if source else "")
+    except (OSError, ValueError, TypeError, KeyError):
+        return "Invalid or mismatched receipt"

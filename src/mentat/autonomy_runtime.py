@@ -42,6 +42,10 @@ _LOADED_EXECUTION_SOURCES = (
     Path(autonomy_private_merge.__file__).read_bytes(),
     Path(autonomy_git_transaction.__file__).read_bytes(),
     Path(autonomy_spec_scope.__file__).read_bytes(),
+    *(Path(__file__).with_name(name).read_bytes() for name in (
+        "autonomy_state.py", "autonomy_cli.py", "autonomy_projection.py", "autonomy_integration.py",
+        "autonomy.py", "autonomy_final_review.py",
+    )),
 )
 
 
@@ -61,6 +65,10 @@ def execution_identity() -> str:
         Path(autonomy_private_merge.__file__).read_bytes(),
         Path(autonomy_git_transaction.__file__).read_bytes(),
         Path(autonomy_spec_scope.__file__).read_bytes(),
+    *(Path(__file__).with_name(name).read_bytes() for name in (
+        "autonomy_state.py", "autonomy_cli.py", "autonomy_projection.py", "autonomy_integration.py",
+        "autonomy.py", "autonomy_final_review.py",
+    )),
     )
     if sources != _LOADED_EXECUTION_SOURCES:
         raise ValueError("trusted execution code changed after import; restart required")

@@ -139,8 +139,8 @@ mentat --state "$STATE" evidence export "$FAILED_RUN" --out "$PILOT/before"
 mentat --state "$STATE" evidence export "$PASSING_RUN" --out "$PILOT/fixed"
 ```
 
-Review and run the reproduction command in `"$PILOT/before/report.md"` on the
-same host. It should return a new run ID and exit `1`. Export that run to a new
+Review the `host_reproduce` (or `reproduce`) command in
+`"$PILOT/before/manifest.json"` and run it on the same host. It should return a new run ID and exit `1`. Export that run to a new
 directory and compare its canonical `witness.json` bytes and manifest hashes
 with the original. Raw logs retain the original errors and host details; the
 canonical witness excludes random paths, timestamps, and snapshot identifiers.

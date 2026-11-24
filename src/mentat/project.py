@@ -29,7 +29,7 @@ from .project_formal import LEAN_NAME_PATTERN
 
 CHECKS_PREFIX = "{checks}/"
 # Presentation modules stay out of the verifier digest, and only cli may import them.
-PRESENTATION_MODULES = ("evidence_html", "claims_notion", "openspec")
+PRESENTATION_MODULES = ("claims_notion", "openspec")
 # Every other module directly under src/mentat must be listed here; tests enforce this.
 VERIFIER_MODULES = (
     "__init__",
@@ -44,7 +44,8 @@ VERIFIER_MODULES = (
     "autonomy_private_merge",
     "autonomy_runtime",
     "autonomy_state",
-    "autonomy_ui",
+    "autonomy_integration",
+    "autonomy_projection",
     "autonomy_worker",
     "canonical",
     "claims",

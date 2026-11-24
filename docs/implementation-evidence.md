@@ -1056,3 +1056,57 @@ The initial-feature fix passed both variants of the unchanged regression in 38.1
 All three reviewers subsequently approved exact candidate `20be36bd2f48b1784e6ee01afe00307b46f32d76` for full verification. Preflight, seven FAS parent transitions, inventory and static checks passed. Its host-authorized native run exposed a timing dependency in the new acceptance-race test: the fixture's manual lease claim competed with its own background dispatcher, which had already claimed the second reviewer. Independent read-only ledger inspection confirmed that reviewer was running under a normal coordinator worker. After one verified graceful interruption for the known failure, the partial result was 2,213 passed, 53 skipped and one failed in 644.80 seconds. All 25 captured owned processes were absent and all 241 hashes unchanged before fixture correction. No later Linux, package or protected gate ran. The correction isolates this one fixture's lease ownership; production policy, canonical verification concurrency and the guard's genuine competing-review assertions remain unchanged. Evidence is `/private/tmp/mentat-scope-20be36b-verifier-result.json`, its full native log and `/private/tmp/mentat-scope-20be36b-native-abort-closure.json`. Fresh complete gates remain required.
 
 The corrected disposable fixture sets its workspace and harness to one owned worker so its manual genuine-job driver cannot compete with the background dispatcher. Its competing proposal, both independent reviews, checkpoint ordering, preserved requirement, historical authentication and stale-publication rejection assertions are unchanged. The serial regression passed in 23.27 seconds; an xdist run passed three cases in 25.96 seconds, including the two unchanged initial-feature variants. Repeated node arguments were deduplicated by xdist, so three separate concurrent pytest processes were then used: each race test passed, in 36.84, 36.84 and 27.32 seconds. One process reported cleanup warnings for old shared pytest garbage directories, without a test failure. All five test sessions were collected, and production source hashes remained unchanged. Logs are `/private/tmp/mentat-scope-native-debug-race-serial.log`, `-contention.log` and `-parallel-1.log` through `-parallel-3.log`. These focused results do not substitute for a fresh complete native or Linux gate.
+
+
+## 2026-11-24 — preflight native gate and headless product boundary
+
+The independent verifier completed `scripts/verify` on frozen
+`b91a7b640e057605daafa068edeeb501cfffcc5d`, tree
+`6e4800d2a1548a9c65ff29272f85142c177d93ef`: **2,313 passed and 53 documented
+optional skips in 1,231.00 seconds**, exit 0. The environment used locked
+Python 3.12 dependencies with the Polaris extra, offline uv cache, and authorized
+local socket access. Every one of the 311 tracked hashes matched after execution;
+the verifier collected the helper, script, pytest and all 12 worker processes.
+
+The accepted product decision arrived while this gate ran: an independent AI
+Cockpit owns all presentation and Mentat must expose a headless local contract.
+The frozen candidate was not edited or interrupted. Its package, full Linux and
+protected gates were therefore held for the final revised engine identity.
+This native pass is historical evidence, not completion of those gates, actual
+self-run readiness, or whole-application formal proof.
+
+Eight exact freeze/preflight/static/native artifacts are preserved privately in
+`~/.local/state/mentat-self-assurance/controller-history/20261124T173029Z-workflow-native-b91a7b6`.
+The archive manifest SHA-256 is
+`525f54bf30f574340e35b3b1f41c47410dde8342fb75057573bae0afe83ea4c5`.
+An initial archive copy stopped at its explicitly rejected working-clone directory;
+the same destination was completed by verifying the already copied freeze bytes
+and copying only the eight regular evidence files, without overwriting evidence.
+
+A new isolated branch starts from b91. Specification-first commit
+`7f2aea450d55e647e2fe3fe2dfda7bd2b9d298c1` records the accepted product decision,
+local integration v1 schema/examples, compatibility and acceptance criteria before
+substantial implementation. The monitoring requirement retains its persistent UUID
+with explicit versioned lineage and accepted rationale; all other requirements
+and claims remain unchanged. Architecture, security and data design reviews were
+read-only and do not constitute implementation acceptance. Titanic and the
+Cockpit repository have not been changed.
+
+
+## 2026-11-24 — user requested publication of the stopped checkpoint
+
+The user explicitly requested committing and pushing all current changes to remote
+main after stopping implementation and repeated passing tests. This publication
+request is not a claim of completed readiness. The latest compatibility snapshot
+reported 547 passed, 8 skipped, 4 failed and 21 setup errors in 282.59 seconds.
+Subsequent source fixes for canonical source links and inspector CLI options, and
+test fixture/validation migrations, were authored but not rerun before the stop.
+The complete final native/Linux/package/protected gates and actual headless
+self-run remain incomplete; Titanic onboarding has not started.
+
+The push checkpoint preserves all tracked and new implementation files. A normal
+non-force push is requested; branch protection must not be changed or bypassed.
+Only the fast static/Claims Spec check is attempted for this publication; the
+already-passing test groups and long completion suites are not repeated. The
+external comprehensive handoff remains a private/local document and is not copied
+into this public repository.

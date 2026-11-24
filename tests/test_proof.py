@@ -861,7 +861,10 @@ def test_saved_passing_proof_rejects_corrupted_source_or_bindings(recorded_proof
         if damage == "missing-source":
             del check["artifacts"]["proof-source"]
         elif damage == "wrong-source":
-            check["artifacts"]["proof-source"] = "report.md"
+            alternate = b"different verified artifact"
+            (bundle / "wrong-proof.lean").write_bytes(alternate)
+            record["artifacts"]["wrong-proof.lean"] = evidence.digest(alternate)
+            check["artifacts"]["proof-source"] = "wrong-proof.lean"
         elif damage == "source-hash":
             check["evidence"]["source_sha256"] = "f" * 64
         elif damage == "approved-hash":
@@ -893,16 +896,16 @@ def test_saved_proof_environment_accepts_only_historical_checker_versions(record
         evidence.proof_evidence(record)
 
 
-def test_proof_html_shows_source_filename_without_source_or_runtime(recorded_proof, tmp_path):
-    c, submission, _, record = recorded_proof
-    output = tmp_path / "proof-report.html"
-    result = c.invoke("evidence", "render", record["run_id"], "--out", str(output))
-    assert result.exit_code == 0, (result.output, result.exception)
-    html = output.read_text()
+def test_saved_proof_exports_verified_source_reference(recorded_proof):
+    c, _, bundle, record = recorded_proof
     source_name = record["model_checks"][0]["artifacts"]["proof-source"]
-    assert source_name in html
-    assert "SECRET_PROOF" not in html and '<script>alert("x")</script>' not in html
-    assert str(submission) not in html and str(c.repo) not in html
+    _, saved, _ = evidence.read_run_snapshot(c.state, record["run_id"])
+    assert saved["model_checks"][0]["artifacts"]["proof-source"] == source_name
+    assert (bundle / source_name).is_file()
+    result = c.invoke("evidence", "export", record["run_id"], "--json")
+    assert result.exit_code == 0, result.output
+    assert Path(json.loads(result.output)["manifest"]) == bundle / "manifest.json"
+    assert not (bundle / "report.md").exists()
 
 
 def test_legacy_saved_run_without_proof_campaign_remains_readable(campaign):

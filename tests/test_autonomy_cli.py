@@ -35,7 +35,7 @@ def commit(repo, source):
 def test_help_and_version_keep_existing_commands():
     result = runner.invoke(app, ["--help"])
     assert result.exit_code == 0, result.output
-    for command in ("verify", "spec", "claims", "evidence", "init", "run", "resume", "status", "ui", "worker", "source-verify"):
+    for command in ("verify", "spec", "claims", "evidence", "init", "run", "resume", "status", "integration", "worker", "source-verify"):
         assert command in result.output
     version = runner.invoke(app, ["--version"])
     assert version.exit_code == 0 and version.output.startswith("mentat ")
@@ -53,19 +53,27 @@ def test_init_writes_reviewable_configuration_without_credentials(repo):
     assert "commit" in output["next"].lower()
 
 
-@pytest.mark.parametrize("args", [("status", "--json"), ("resume", "--no-ui"), ("ui",)])
+@pytest.mark.parametrize("args", [("status", "--json"), ("resume",)])
 def test_missing_session_is_incomplete_json(repo, args):
     result = invoke(repo, *args, "--repo", str(repo))
     assert result.exit_code == 2, result.output
     assert json.loads(result.stdout)["status"] == "incomplete"
 
 
+def test_integration_serve_missing_session_is_incomplete_json(repo, tmp_path):
+    result = invoke(repo, "integration", "serve", "--repo", str(repo), "--session", "missing",
+                    "--connection-file", str(tmp_path / "connection.json"))
+    assert result.exit_code == 2, result.output
+    assert json.loads(result.stdout)["status"] == "incomplete"
+    assert not (tmp_path / "connection.json").exists()
+
 
 def test_run_with_missing_committed_config_returns_incomplete(repo):
     commit(repo, "def f(x):\n    return x\n")
-    result = invoke(repo, "run", "--repo", str(repo), "--no-ui")
+    result = invoke(repo, "run", "--repo", str(repo))
     assert result.exit_code == 2, result.output
     assert json.loads(result.stdout)["status"] == "incomplete"
+
 
 def test_source_verify_real_committed_clamp_and_unsupported_source(repo, tmp_path):
     revision = commit(repo, "def clamp(x):\n    if x < 0:\n        return 0\n    else:\n        return x\n")
@@ -86,9 +94,8 @@ def test_source_verify_real_committed_clamp_and_unsupported_source(repo, tmp_pat
     assert json.loads(result.stdout)["status"] == "incomplete"
 
 
-def test_run_resume_and_ui_lifecycle_with_mocked_controller(repo, monkeypatch):
+def test_run_resume_are_headless_and_old_ui_flags_are_rejected(repo, monkeypatch):
     calls = []
-    servers = []
 
     class FakeCoordinator:
         def __init__(self, path, store, agent, worker, github):
@@ -100,45 +107,18 @@ def test_run_resume_and_ui_lifecycle_with_mocked_controller(repo, monkeypatch):
             self.session_id = resume or self.store.new_session(str(repo), "base", "head", {}, 1, 1000)
             return self.store.snapshot(self.session_id)
 
-        def control(self, action, payload):
-            return {"status": "recorded"}
-
-    class FakeServer:
-        url = "http://127.0.0.1:1234/#capability"
-
-        def __init__(self):
-            self.closed = False
-            self.stopped = False
-
-        def serve_forever(self):
-            return None
-
-        def shutdown(self):
-            self.stopped = True
-
-        def server_close(self):
-            self.closed = True
-
-    def server(snapshot, control, **kwargs):
-        result = FakeServer()
-        servers.append(result)
-        return result
-
     monkeypatch.setattr(autonomy_cli, "Coordinator", FakeCoordinator)
-    monkeypatch.setattr(autonomy_cli, "create_server", server)
     result = invoke(repo, "run", "--repo", str(repo))
     assert result.exit_code == 0, result.output
     output = json.loads(result.stdout)
     assert calls == [None] and output["status"] == "running"
-    assert (repo.parent / "state").exists()
-    assert "Autonomy report" in open(output["report"]).read()
-    assert servers[0].stopped and servers[0].closed
-    result = invoke(repo, "status", "--repo", str(repo), "--json")
-    assert result.exit_code == 0 and json.loads(result.stdout)["session"]["id"] == output["session_id"]
-    result = invoke(repo, "resume", "--repo", str(repo), "--no-ui")
+    assert "report" not in output
+    assert not list(repo.rglob("*.html"))
+    result = invoke(repo, "resume", "--repo", str(repo))
     assert result.exit_code == 0 and calls[-1] == output["session_id"]
-    result = invoke(repo, "ui", "--repo", str(repo))
-    assert result.exit_code == 0 and servers[-1].closed
+    for args in (("ui", "--repo", str(repo)), ("run", "--repo", str(repo), "--no-ui"),
+                 ("run", "--repo", str(repo), "--ui")):
+        assert invoke(repo, *args).exit_code != 0
 
 
 def test_worker_doctor_reports_mocked_diagnostics(repo, monkeypatch):

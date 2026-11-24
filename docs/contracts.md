@@ -42,7 +42,7 @@ The manifest has `"version": 1` and a `mutants` object keyed by mutation ID. Eac
 
 The unmodified check and all its required cases must pass first. A mutation is `killed` only when the approved violation exit occurs, its named expected assertion fails, and the complete case report contains no skipped or errored cases. Other failed assertions are retained. A complete passing mutated check is `survived` and fails qualification. Missing prerequisites, an inapplicable patch, timeout or inconclusive evidence produces `error` and an incomplete qualification. These outcomes qualify the checks; they do not by themselves establish a product defect. Any failed or incomplete qualification prevents acceptance, but it does not change the run's `status` or exit code, which come only from formal and behavior checks. For contracts with source mutations, the saved `source_qualification_status` records the qualification verdict, or `skipped` when the formal gate prevented any qualification.
 
-Saved results bind the run, candidate, approved contract and verifier, mutation manifest, original and changed source hashes, runtime and actual case outcomes. Qualification artifacts share a bounded output budget. Missing required evidence is incomplete; omitted optional logs are labeled. Reports and comparison show qualification separately from product checks and existing negative controls. Historical evidence without qualification metadata remains readable and displays unavailable metadata in HTML.
+Saved results bind the run, candidate, approved contract and verifier, mutation manifest, original and changed source hashes, runtime and actual case outcomes. Qualification artifacts share a bounded output budget. Missing required evidence is incomplete; omitted optional logs are labeled. Machine evidence and comparison keep qualification separate from product checks and existing negative controls. Historical evidence without qualification metadata remains readable with unavailable metadata explicit.
 
 The `lean-comparator` formal declaration adds an explicit `theorem`, `allowed_imports` (only `Init`, `Std`, or `Lean` module families), and `permitted_axioms` (a subset of `propext`, `Classical.choice`, and `Quot.sound`). Both policy lists must be present, and Z3 fields are forbidden. This declaration reserves the upcoming comparator engine policy; it does not establish that comparator execution or a proof campaign is complete. Existing `lean` and `z3` declarations do not accept comparator policy fields.
 
@@ -178,30 +178,31 @@ Lean source compilation still executes reviewed code with host permissions. The 
 ## Review, verify, and accept
 
 1. Run `mentat spec check --repo "$REPO" --base "$BASE"`. Review the manifest and supporting files at that commit, then approve the displayed digest with `mentat spec approve DIGEST --repo "$REPO" --base "$BASE"`.
-2. Run `mentat verify --repo "$REPO" --base "$BASE" --rev "$CANDIDATE" --json`. Formal checks run first. Behavior checks run after they pass. Use a new approval when the base, verifier, repository path, or runner mode changes. Presentation-only edits to the HTML report, Notion publishing, and OpenSpec import do not change the verifier. The output of `evidence render`, `evidence compare --out`, `claims check --notion`, `claims publish` and `spec import-openspec` is produced by presentation code outside the verifier digest. The acceptance value printed by `evidence pr-summary` is also computed by that code, although the surrounding Markdown is formatted by a verifier module. Their exit codes map results from that code, so do not use them as a gate.
-3. Export with `mentat evidence export RUN_ID --out NEW_DIRECTORY`. The bundle contains a Markdown report and a JSON manifest with the commit IDs, check results and provenance, artifact hashes, and reproduction command. The report leads with the run verdict and claim outcomes, then shows the checks by claim, with formal and behavior evidence labeled separately. Its artifact links resolve within the exported bundle. For host runs, `host_reproduce` uses the recorded working directory, interpreter, and invocation `PATH` on the same host. The report also records the filtered behavior `PATH` and discovered prerequisites. Replay uses the tools currently installed in those locations. Review logs, local paths, and artifacts before sharing the evidence.
-4. Run `mentat accept RUN_ID --repo "$REPO" --base "$BASE"` to accept a complete passing run under the matching approval. A run whose `source_qualification_status` is not `pass` cannot be accepted. Both approval and acceptance require a terminal by default. For an agent relaying your explicit decision, either command accepts `--trusted-chat-approval`. This bypasses the terminal prompt; Mentat cannot verify the chat or the decision, and any process running as your account can impersonate it. Use it only when you trust that relay. Records identify this source as `unverified_agent_relay`, and reports, `spec check`, `verify` output, and the HTML overview and comparison show it as an unverified agent relay. The terminal and JSON output of `evidence compare` and the Polaris showcase do not show the approval source. All scope and evidence checks still apply.
+2. Run `mentat verify --repo "$REPO" --base "$BASE" --rev "$CANDIDATE" --json`. Formal checks run first. Behavior checks run after they pass. Use a new approval when the base, verifier, repository path, or runner mode changes. Notion publication and OpenSpec import remain canonical-specification adapters outside the verifier digest; they are not acceptance gates. The headless integration and evidence migration change verifier identity, so renew affected approvals.
+3. Export with `mentat evidence export RUN_ID --out NEW_DIRECTORY`. New bundles use `bundle_format: 2` and contain a machine-readable `manifest.json` with exact commit/contract/tool identities, results, assumptions, artifact hashes and reproduction metadata. No Markdown or HTML report is generated. Historical bundles retain their original reports and manifest/receipt checks. Use the recorded `host_reproduce` or `reproduce` field only after reviewing it; it runs with the selected host or runner's permissions. Raw bundles contain private logs, paths, commands and artifacts: inspect them before sharing. The local HTTP integration exposes only its documented allowlist, not raw bundles.
+4. Run `mentat accept RUN_ID --repo "$REPO" --base "$BASE"` to accept a complete passing run under the matching approval. A run whose `source_qualification_status` is not `pass` cannot be accepted. Both approval and acceptance require a terminal by default. For an agent relaying your explicit decision, either command accepts `--trusted-chat-approval`. This bypasses the terminal prompt; Mentat cannot verify the chat or the decision, and any process running as your account can impersonate it. Use it only when you trust that relay. Records identify this source as `unverified_agent_relay`; `spec check` and `verify` diagnostics retain that provenance. The terminal and JSON output of `evidence compare` and the Polaris showcase do not show the approval source. All scope and evidence checks still apply.
 
 Verification exits `0` for pass, `1` for a confirmed violation in a completed run, and `2` for invalid input or an incomplete run. An incomplete check takes precedence in the exit status when another check reports a violation. Only formal and behavior checks set the exit status. A surviving mutant or incomplete source qualification leaves the exit status at `0` when the product checks pass, and `accept` refuses that run. The manifest retains each result. A model violation can prevent behavior execution. Timeouts, missing tools, and resource kills are incomplete. Behavior output is capped at 1 MiB per stream and 16 MiB per run across logs and artifacts. The manifest records any omitted logs or optional files.
 
-### Render an offline report
+### Headless evidence and migration
 
-```sh
-mentat --state "$STATE" evidence render "$RUN_ID" --out report.html
-```
-
-The report reads an intact saved project-verification run without loading its repository, executing checks, or requiring current approval. It refuses an existing output, symlink destination, missing parent, or a destination inside the state directory. The report identifies the verified manifest and distinguishes the original verdict from a matching local acceptance receipt. Acceptance reflects the saved revision, not a cryptographic identity or current approval; verifier changes still require renewed approval for new verification.
-
-The report omits runtime environment, repository paths, raw logs, witnesses, and artifact contents. Unrecognized diagnostics are omitted and artifact names are shown as text. Claim text, names, and filenames can still contain sensitive information; review before sharing. Open the self-contained report offline in a browser.
+All presentation belongs to the independent AI Cockpit. `evidence render`,
+`evidence compare --out` and `evidence pr-summary` have been removed; no hidden
+compatibility renderer remains. Use structured export/comparison and the
+[local engine integration](integration-v1.md). Old bundle bytes and acceptance
+receipts remain unchanged. An absent bundle-format marker selects legacy format
+and requires its recorded report; an unknown marker is invalid. A missing old
+report cannot silently become a machine-only bundle. Compare output references
+actual manifests; scripts depending on a `report` path must migrate.
 
 ### Compare saved runs
 
 ```sh
 mentat --state "$STATE" evidence compare "$BEFORE_RUN" "$AFTER_RUN"
-mentat --state "$STATE" evidence compare "$BEFORE_RUN" "$AFTER_RUN" --out comparison.html
+mentat --state "$STATE" evidence compare "$BEFORE_RUN" "$AFTER_RUN" --json
 ```
 
-Comparison reads two intact project verification runs from the same state directory. Both runs must have the same repository path, base, runner, and approved contract digest. It shows check outcomes by claim, points to the saved reports and artifacts, and flags differences in recorded tools or runner metadata. Behavior checks skipped by the formal gate appear as skipped. Older runs without a recorded check list can show the skip for the whole run.
+Comparison reads two intact project verification runs from the same state directory. Both runs must have the same repository path, base, runner, and approved contract digest. It shows check outcomes by claim, points to the saved manifests and artifacts, and flags differences in recorded tools or runner metadata. Behavior checks skipped by the formal gate appear as skipped. Older runs without a recorded check list can show the skip for the whole run.
 
 Exit `0` means both runs completed and could be compared. Each revision’s outcome is shown separately. Exit `2` means an incomplete run, incompatible scope, or missing or invalid evidence. Compatible incomplete runs still display available results. Add `--json` for structured output. A checkout at a different path needs its own approval and runs. See the [Nano ID walkthrough](nanoid.md#replay-the-failure) for comparing witnesses across checkouts.
 
@@ -220,31 +221,6 @@ configured checks, and files directly referenced by those checks. The comparison
 reports changes in shared supporting files, runner settings, the verifier, and the recorded
 tools and runtime. Consider those differences when interpreting a result transition.
 The command reads saved evidence and uses the same comparison exit conventions.
-
-The optional offline HTML comparison places changed claims and check evidence first,
-retains both original verdicts and matching acceptance receipts, and identifies
-changed tools or runner metadata. Model proof identities, tested correspondence,
-witnesses, source-mutation outcomes and unavailable legacy declarations remain
-separate. It has the same output protections and sharing restrictions as a single
-run report. Use `--across-contracts` explicitly when definitions differ.
-With `--out`, successful rendering exits zero even if an original run is incomplete;
-JSON retains `comparison_status` and both original run verdicts. Invalid evidence
-still fails without writing a report. Comparison without `--out` keeps its existing
-exit conventions.
-
-### Prepare a PR summary
-
-```sh
-mentat --state "$STATE" evidence pr-summary "$RUN_ID" --head "$PR_HEAD" \
-  --report-url "$AUTHORIZED_REPORT_URL" --ci-status "$EXACT_HEAD_CI_RESULT"
-```
-
-The host supplies the existing authorized artifact/report URL and the lightweight
-CI result (`pass`, `fail`, `incomplete`, or `unavailable`). The command rejects a
-head different from the saved revision and prints Markdown without posting to a
-PR or publishing a report. CI is labeled host-reported; it cannot substitute for
-full saved verification or matching operator acceptance. Keep the repository's
-existing artifact access controls. Inspect report contents before sharing links.
 
 See [approved proof campaigns](proofs.md) for pinned Linux model proving and the
 host's falsification, author, amendment and budget workflow.

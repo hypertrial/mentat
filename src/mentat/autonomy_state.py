@@ -4,6 +4,7 @@ import hashlib
 import json
 import math
 import sqlite3
+import time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -90,6 +91,9 @@ class Store:
                         db.execute(statement)
                 db.execute("PRAGMA user_version = 1")
             receipts_exist = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='transitions'").fetchone() is not None
+            db.execute("CREATE TABLE IF NOT EXISTS integration_identity (id TEXT NOT NULL)")
+            db.execute("INSERT INTO integration_identity SELECT ? WHERE NOT EXISTS (SELECT 1 FROM integration_identity)", (uuid.uuid4().hex,))
+            db.execute("CREATE TABLE IF NOT EXISTS integration_receipts (session_id TEXT NOT NULL REFERENCES sessions(id), request_id TEXT NOT NULL, action TEXT NOT NULL, digest TEXT NOT NULL, receipt TEXT NOT NULL, PRIMARY KEY(session_id, request_id))")
             db.execute("CREATE TABLE IF NOT EXISTS transitions (job_id TEXT PRIMARY KEY REFERENCES jobs(id), status TEXT NOT NULL CHECK(status IN ('pending', 'done')))")
             db.execute("CREATE TABLE IF NOT EXISTS stale_records (session_id TEXT NOT NULL REFERENCES sessions(id), kind TEXT NOT NULL, id TEXT NOT NULL, PRIMARY KEY(session_id, kind, id))")
             db.execute("CREATE TABLE IF NOT EXISTS stale_transitions (job_id TEXT PRIMARY KEY REFERENCES transitions(job_id))")
@@ -144,7 +148,7 @@ class Store:
             raise ValueError("unknown session")
         return row
 
-    def new_session(self, repo: str, base: str, head: str, policy: dict, now: float, deadline: float) -> str:
+    def new_session(self, repo: str, base: str, head: str, policy: dict, now: float, deadline: float, *, bootstrap: dict | None = None) -> str:
         repo = _text(repo, "repo")
         base, head = _text(base, "base"), _text(head, "head")
         now, deadline = _time(now), _time(deadline)
@@ -160,6 +164,36 @@ class Store:
                 raise ValueError("unresolved private merge dispatch blocks a new session")
             db.execute("INSERT INTO sessions VALUES (?, 'running', ?, ?, ?, ?, ?, ?)", (session_id, repo, base, head, now, deadline, policy_json))
             self._event(db, session_id, "session_started", {"repo": repo, "base": base, "head": head, "started_at": now, "deadline": deadline, "policy": policy})
+            if bootstrap is not None:
+                self._event(db, session_id, "authority_pinned", {"digest": bootstrap["authority_digest"]})
+                self._event(db, session_id, "toolchain_pinned", {"identity": bootstrap["tool_identity"]})
+                for kind, record in bootstrap["records"]:
+                    if kind not in {"requirement", "claim"}:
+                        raise ValueError("invalid bootstrap record")
+                    data = dict(record)
+                    record_id = _text(data.get("id"), "record id")
+                    if kind == "requirement" and data.get("area") not in {"product", "functional", "nonfunctional", "architecture", "data-api", "acceptance"}:
+                        raise ValueError("invalid requirement area")
+                    encoded = _json(data)
+                    old = db.execute("SELECT data FROM records WHERE session_id=? AND kind=? AND id=?", (session_id, kind, record_id)).fetchone()
+                    if old and old[0] != encoded:
+                        raise ValueError("records are immutable")
+                    if not old:
+                        db.execute("INSERT INTO records VALUES (?, ?, ?, ?)", (session_id, kind, record_id, encoded))
+                        self._event(db, session_id, "record_added", {"kind": kind, "record": data})
+                surfaces = bootstrap["surfaces"]
+                self._event(db, session_id, "inventory", {"surfaces": surfaces, "count": len(surfaces), "status": "unexamined"})
+                for job in bootstrap["jobs"]:
+                    loop, role, item_id, input_digest, payload = (job[k] for k in ("loop", "role", "item_id", "input_digest", "payload"))
+                    if loop not in LOOPS or role not in ROLES:
+                        raise ValueError("invalid loop or role")
+                    _text(item_id, "item_id")
+                    _text(input_digest, "input_digest")
+                    encoded = _json(payload)
+                    job_id = uuid.uuid4().hex
+                    db.execute("INSERT INTO jobs(id, session_id, loop, role, item_id, input_digest, payload, status) VALUES (?, ?, ?, ?, ?, ?, ?, 'queued')", (job_id, session_id, loop, role, item_id, input_digest, encoded))
+                    db.execute("INSERT INTO source_finalization_job_epochs VALUES (?, 0)", (job_id,))
+                    self._event(db, session_id, "job_enqueued", {"job_id": job_id, "loop": loop, "role": role, "item_id": item_id, "input_digest": input_digest, "payload": payload})
             db.commit()
         return session_id
 
@@ -648,7 +682,8 @@ class Store:
                 counts[scope] = counts.get(scope, 0) + 1
                 matching = [entry for entry in feedback if entry.get("job_id") == j["id"]]
                 record = db.execute("SELECT data FROM records WHERE session_id=? AND kind='decision' AND id=?", (session_id, matching[0].get("decision_id") if matching else None)).fetchone()
-                if (len(matching) != 1 or matching[0].get("result") != outcome.get("result")
+                if (data.get("human_feedback") != payload.get("human_feedback")
+                        or len(matching) != 1 or matching[0].get("result") != outcome.get("result")
                         or not record or json.loads(record[0]).get("job_id") != j["id"]
                         or json.loads(record[0]).get("decision") != outcome.get("result", {}).get("decision")
                         or data.get("source_batch", {}).get("plan_id") != current["plan_id"]
@@ -800,6 +835,7 @@ class Store:
             if (payload.get("kind") != "generate_spec" or payload.get("source_cycle_id") != cycle_id
                     or payload.get("source_cycle_round") != cycle["failed_passes"]
                     or payload.get("feedback") != original.get("feedback")
+                    or payload.get("human_feedback") != original.get("human_feedback")
                     or payload.get("review_base") != cycle["origin_base"]):
                 raise ValueError("correction successor lost its lineage or feedback")
             if (not (prior.get("kind") == "review_spec" and any(d.get("decision") == "revise" for d in [json.loads(r[0]) for r in db.execute("SELECT data FROM records WHERE session_id=? AND kind='decision' AND json_extract(data,'$.review_cohort')=?", (session_id, prior.get("review_cohort")))]))
@@ -1214,6 +1250,129 @@ class Store:
             self._event(db, session_id, "session_invalidated", {"identity": identity})
             db.commit()
 
+    def _integration_connect(self) -> sqlite3.Connection:
+        db = sqlite3.connect(self.path, timeout=2, isolation_level=None)
+        db.row_factory = sqlite3.Row
+        db.execute("PRAGMA foreign_keys = ON")
+        db.execute("PRAGMA busy_timeout = 2000")
+        deadline = time.monotonic() + 2
+        db.set_progress_handler(lambda: int(time.monotonic() > deadline), 1000)
+        return db
+
+    def integration_latest_session(self) -> str:
+        with self._integration_connect() as db:
+            row = db.execute("SELECT id FROM sessions ORDER BY rowid DESC LIMIT 1").fetchone()
+            if row is None:
+                raise ValueError("no session")
+            return str(row[0])
+
+    def integration_store_id(self) -> str:
+        with self._integration_connect() as db:
+            return str(db.execute("SELECT id FROM integration_identity").fetchone()[0])
+
+    def integration_snapshot(self, session_id: str, *, deadline: float | None = None) -> dict:
+        """Capture bounded raw rows atomically; decode only after releasing the reader."""
+        db = self._integration_connect()
+        try:
+            db.execute("BEGIN")
+            session = dict(self._session(db, session_id))
+            # CAST counts encoded bytes, not SQLite characters. Count before fetchall.
+            total = sum(len(str(v).encode()) for v in session.values())
+            record_count = 0
+            for table, columns, cap in (
+                ("events", "seq,kind,payload", 20000),
+                ("jobs", "id,session_id,loop,role,item_id,input_digest,payload,status,attempt,worker_id,lease_token,lease_until,outcome", 10000),
+                ("records", "session_id,kind,id,data", 10000),
+                ("stale_records", "session_id,kind,id", 10000),
+            ):
+                lengths = "+".join(f"coalesce(length(CAST({column} AS BLOB)),0)" for column in columns.split(","))
+                count, size = db.execute(f"SELECT count(*), coalesce(sum({lengths}),0) FROM {table} WHERE session_id=?", (session_id,)).fetchone()
+                if count > cap:
+                    raise ValueError("integration capacity")
+                if table in ("jobs", "records"):
+                    record_count += count
+                total += size
+            if record_count > 10000 or total > 32 * 1024 * 1024:
+                raise ValueError("integration capacity")
+            event_rows = db.execute("SELECT seq,kind,payload FROM events WHERE session_id=? ORDER BY seq", (session_id,)).fetchall()
+            record_rows = db.execute("SELECT kind,data FROM records WHERE session_id=? ORDER BY rowid", (session_id,)).fetchall()
+            job_rows = db.execute("SELECT * FROM jobs WHERE session_id=? ORDER BY rowid", (session_id,)).fetchall()
+            stale_rows = db.execute("SELECT kind,id FROM stale_records WHERE session_id=?", (session_id,)).fetchall()
+            db.commit()
+        finally:
+            db.close()
+
+        def check_deadline() -> None:
+            if deadline is not None and time.monotonic() >= deadline:
+                raise TimeoutError("integration snapshot deadline")
+
+        check_deadline()
+        session["policy"] = json.loads(session["policy"])
+        events = []
+        for row in event_rows:
+            check_deadline()
+            event = dict(row)
+            event["payload"] = json.loads(event["payload"])
+            events.append(event)
+        result: dict[str, Any] = {"schema_version": SCHEMA_VERSION, "revision": events[-1]["seq"] if events else 0, "session": session, "events": events}
+        for kind in KINDS:
+            result["evidence" if kind == "evidence" else kind + "s"] = []
+        for row in record_rows:
+            check_deadline()
+            key = "evidence" if row["kind"] == "evidence" else row["kind"] + "s"
+            result[key].append(json.loads(row["data"]))
+        jobs = []
+        for row in job_rows:
+            check_deadline()
+            job = dict(row)
+            job.pop("lease_token", None)
+            job["payload"] = json.loads(job["payload"])
+            if job["outcome"] is not None:
+                job["outcome"] = json.loads(job["outcome"])
+            jobs.append(job)
+        stale = {(row["kind"], row["id"]) for row in stale_rows}
+        for kind, key in (("claim", "claims"), ("evidence", "evidence")):
+            for record in result[key]:
+                check_deadline()
+                if session["status"] == "invalidated" or (kind, record["id"]) in stale:
+                    record["freshness"] = "stale"
+        result["jobs"] = jobs
+        check_deadline()
+        return result
+
+    def integration_changes(self, session_id: str, after: int, limit: int) -> tuple[int, list[dict], bool]:
+        with self._integration_connect() as db:
+            db.execute("BEGIN")
+            self._session(db, session_id)
+            high = db.execute("SELECT coalesce(max(seq),0) FROM events WHERE session_id=?", (session_id,)).fetchone()[0]
+            if after > high:
+                raise ValueError("cursor ahead")
+            rows = db.execute("SELECT seq,kind FROM events WHERE session_id=? AND seq>? AND seq<=? ORDER BY seq LIMIT ?", (session_id, after, high, limit + 1)).fetchall()
+            db.commit()
+            return high, [dict(row) for row in rows[:limit]], len(rows) > limit
+
+    def integration_control(self, session_id: str, request_id: str, action: str, payload: dict, generation: str | None, *, active: bool) -> tuple[dict, bool]:
+        """Persist an idempotent receipt and its corresponding event together."""
+        digest = hashlib.sha256(_json({"action": action, "payload": payload}).encode()).hexdigest()
+        with self._integration_connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            old = db.execute("SELECT digest,receipt FROM integration_receipts WHERE session_id=? AND request_id=?", (session_id, request_id)).fetchone()
+            if old:
+                if old["digest"] != digest:
+                    raise ValueError("control conflict")
+                return json.loads(old["receipt"]), False
+            session = self._session(db, session_id)
+            if session["status"] == "invalidated" or (action == "stop" and (not active or session["status"] != "running")):
+                raise ValueError("control unavailable")
+            if db.execute("SELECT count(*) FROM integration_receipts WHERE session_id=?", (session_id,)).fetchone()[0] >= 1000:
+                raise ValueError("control capacity")
+            event = "human_feedback" if action == "feedback" else "integration_stop_requested"
+            seq = self._event(db, session_id, event, payload if action == "feedback" else {"request_id": request_id, "controller_generation": generation})
+            receipt = {"request_id": request_id, "action": action, "status": "queued" if action == "feedback" else "requested", "session_id": session_id, "event_seq": seq, "controller_generation": generation}
+            db.execute("INSERT INTO integration_receipts VALUES (?,?,?,?,?)", (session_id, request_id, action, digest, _json(receipt)))
+            db.commit()
+            return receipt, True
+
     def snapshot(self, session_id: str | None = None) -> dict:
         with self._connect() as db:
             db.execute("BEGIN")
@@ -1247,3 +1406,48 @@ class Store:
             result["events"] = events
             db.commit()
             return result
+
+
+def ordinary_review_pair(self: Any, kind: str, cohort: str, proposal: dict) -> list[dict] | None:
+    assert self.session_id
+    snapshot = self.store.snapshot(self.session_id)
+    jobs = [j for j in snapshot["jobs"] if j["payload"].get("kind") == kind and j["payload"].get("review_cohort") == cohort]
+    if len(jobs) != 2 or any(j["status"] != "succeeded" for j in jobs):
+        return None
+    pair = []
+    batch = jobs[0]["payload"].get("source_batch") or {}
+    if not isinstance(batch, dict) or not isinstance(batch.get("id", ""), str):
+        raise ValueError("invalid review batch identity")
+    expected_items = {f"{proposal.get('root_item')}.{kind}.{batch.get('id', '')}.{proposal.get('round', 0)}.{slot}" for slot in (1, 2)}
+    if {j["item_id"] for j in jobs} != expected_items or any(j["role"] != "code-reviewer" for j in jobs):
+        raise ValueError("review cohort slots are inconsistent")
+    if jobs[0]["payload"] != jobs[1]["payload"]:
+        raise ValueError("review cohort inputs differ")
+    for job in sorted(jobs, key=lambda j: j["id"]):
+        events = [e["payload"] for e in snapshot["events"] if e["kind"] == "job_enqueued" and e["payload"].get("job_id") == job["id"]]
+        if len(events) != 1 or any(events[0].get(k) != job[k] for k in ("loop", "role", "item_id", "input_digest", "payload")):
+            raise ValueError("review cohort scheduling changed")
+        payload, outcome = job["payload"], job.get("outcome") or {}
+        decisions = [d for d in snapshot["decisions"] if d.get("job_id") == job["id"]]
+        if not decisions:
+            return None
+        if len(decisions) != 1:
+            raise ValueError("ambiguous review decision")
+        decision = decisions[0]
+        if (self.store.transition_status(job["id"]) == "stale" or payload.get("proposal") != proposal
+                or self._review_cohort(kind, proposal, payload, payload.get("check_evidence_id"), payload.get("check_key")) != cohort
+                or outcome.get("status") != "succeeded" or outcome.get("head") != proposal.get("head")
+                or outcome.get("diff_digest") != proposal.get("diff_digest")
+                or decision.get("review_cohort") != cohort or decision.get("review_kind") != kind
+                or decision.get("author_id") != proposal.get("author_id") or decision.get("base") != snapshot["session"]["base"]
+                or decision.get("check_evidence_id") != payload.get("check_evidence_id") or decision.get("check_key") != payload.get("check_key")
+                or decision.get("reviewer_id") != outcome.get("author_id")
+                or decision.get("decision") != outcome.get("result", {}).get("decision")
+                or decision.get("summary") != outcome.get("result", {}).get("summary")
+                or decision.get("head") != outcome.get("head") or decision.get("diff_digest") != outcome.get("diff_digest")
+                or decision.get("reviewer_id") in [proposal.get("author_id"), *proposal.get("prior_authors", [])]):
+            raise ValueError("review cohort changed")
+        pair.append({**job, "decision": decision})
+    if len({j["decision"]["reviewer_id"] for j in pair}) != 2:
+        raise ValueError("reviewers are not independent")
+    return pair

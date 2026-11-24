@@ -90,7 +90,7 @@ mentat --state "$STATE" evidence export "$PASSING_RUN" --out "$PILOT/fixed"
 
 ## Replay the failure
 
-To replay on the same host, review and run the command in `"$PILOT/before/report.md"` and redirect its JSON output to `"$PILOT/replay.json"`. It should exit `1` with a new run ID.
+To replay on the same host, review and run the `host_reproduce` (or `reproduce`) command in `"$PILOT/before/manifest.json"` and redirect its JSON output to `"$PILOT/replay.json"`. It should exit `1` with a new run ID.
 
 ```sh
 REPLAY_RUN=$(run_id "$PILOT/replay.json")
