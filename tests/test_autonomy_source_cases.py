@@ -290,8 +290,9 @@ class RecordingAgent:
                     for row in payload['surfaces']]}))
         return {'status': 'succeeded', 'session_id': job['id'], 'result': {
             'decision': 'accept', 'summary': json.dumps({
+                'schema_version': 2,
                 'findings': 'Inspected the supplied source and its mapped requirements.',
-                'unresolved_dependencies': [],
+                'unresolved_dependencies': [], 'spec_corrections': [],
             }) if kind == 'review_final_source' else 'reviewed', 'findings': [],
             'verification_requests': [], 'requirements': [], 'claims': [],
             'defects': [], 'changes': []}}

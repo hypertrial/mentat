@@ -457,6 +457,45 @@ class _Cancellable:
                 stream.close()
 
 
+def _retain_rejected_result(output_dir: Path, answer: str) -> None:
+    """Privately retain bounded reviewer output rejected for proposing changes."""
+    data = answer.encode("utf-8")
+    if len(data) > _OUTPUT_LIMIT:
+        raise ValueError("agent response exceeds size limit")
+    name = f"codex-rejected-result-{hashlib.sha256(data).hexdigest()}.json"
+    directory = os.open(output_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        info = os.fstat(directory)
+        if info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o700:
+            raise ValueError("unsafe agent output directory")
+        try:
+            fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=directory)
+        except FileExistsError:
+            fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+            try:
+                info = os.fstat(fd)
+                if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
+                        or stat.S_IMODE(info.st_mode) != 0o600 or info.st_size != len(data)):
+                    raise ValueError("unsafe rejected result artifact")
+                stored = bytearray()
+                while len(stored) <= len(data):
+                    chunk = os.read(fd, min(65536, len(data) + 1 - len(stored)))
+                    if not chunk:
+                        break
+                    stored.extend(chunk)
+                if stored != data:
+                    raise ValueError("rejected result artifact identity conflict")
+            finally:
+                os.close(fd)
+        else:
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(data)
+                stream.flush()
+                os.fsync(stream.fileno())
+    finally:
+        os.close(directory)
+
+
 class CodexAgent(_Cancellable):
     def run(self, repo: Path, job: dict, output_dir: Path, *, timeout_seconds: int) -> dict:
         payload = job.get("payload")
@@ -486,6 +525,8 @@ class CodexAgent(_Cancellable):
                 answer = answer_path.read_text(encoding="utf-8")
                 result = _validate_result(json.loads(answer))
                 if result["changes"] and (payload["purpose"] != "generator" or result["decision"] == "defer"):
+                    if payload["purpose"] == "discriminator":
+                        _retain_rejected_result(output_dir, answer)
                     raise ValueError("reviewer or deferred response cannot modify files")
                 events = [json.loads(line) for line in output.splitlines() if line.strip()]
                 if not all(isinstance(event, dict) for event in events):

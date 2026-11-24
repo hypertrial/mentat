@@ -194,3 +194,65 @@ def batch_linked_records(source_batch: dict, inventory_paths: set[str]) -> list[
                 linked.update(record.get("requirement_ids", []))
     return [record for _, record in groups if record.get("id") in linked
             or linked.intersection(record.get("requirement_ids", []))]
+
+
+def check_summary(evidence: dict) -> dict:
+    checks = evidence.get("checks", [])
+    checks = sorted(checks, key=lambda item: item.get("status") == "passed")
+    sources = evidence.get("source", [])
+    sources = sorted(sources, key=lambda item: item.get("status") == "proved")
+    return {
+        "evidence_id": evidence["id"],
+        "head": evidence["head"],
+        "base": evidence["base"],
+        "status": evidence["status"],
+        "reason": str(evidence.get("reason", ""))[:500],
+        "check_key": evidence["check_key"],
+        "checks": [
+            {
+                "command": c.get("command", []),
+                "command_digest": identity(c.get("command", [])),
+                "command_truncated": False,
+                "status": c.get("status"),
+                "returncode": c.get("returncode"),
+                "tools": c.get("tools"),
+                "stdout_excerpt": str(c.get("worker_result", {}).get("stdout", ""))[-500:],
+                "stderr_excerpt": str(c.get("worker_result", {}).get("stderr", ""))[-500:],
+                "reason": str(c.get("worker_result", {}).get("reason", ""))[:500],
+            }
+            for c in checks
+        ],
+        "checks_omitted": 0,
+        "source": sources,
+        "source_cases": evidence.get("source_cases", []),
+        "source_omitted": 0,
+        "repair_check": {
+            "status": (evidence.get("repair_check") or {}).get("status"),
+            "method": (evidence.get("repair_check") or {}).get("method"),
+            "reason": str((evidence.get("repair_check") or {}).get("reason", ""))[:500],
+        }
+        if evidence.get("repair_check") is not None
+        else None,
+    }
+
+
+def review_citation_path(citation: object, paths: set[str]) -> str | None:
+    """Normalize a local review citation; external citations remain metadata."""
+    if isinstance(citation, dict):
+        citation = citation.get("path", citation.get("url"))
+    if not isinstance(citation, str) or not citation:
+        raise ValueError("invalid review citation; revise the specification proposal")
+    if citation.startswith(("https://", "http://")):
+        if not re.match(r"^https?://[^/\s?#]+(?:[/?#]|$)", citation) or any(
+            char.isspace() for char in citation
+        ):
+            raise ValueError("invalid external review citation; revise the specification proposal")
+        return None
+    path = citation if citation in paths else re.sub(
+        r"(?:#L\d+(?:-L?\d+)?|:\d+(?::\d+)?)$", "", citation
+    )
+    try:
+        safe_relative_path(path)
+    except ValueError as exc:
+        raise ValueError("unsafe review citation; revise the specification proposal") from exc
+    return path

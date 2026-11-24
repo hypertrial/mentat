@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from mentat import autonomy_runtime as runtime
 
 
@@ -723,3 +725,75 @@ def test_guest_cache_marker_excluded_from_real_build_artifacts(tmp_path, monkeyp
         with tarfile.open(next(control.glob('*.tar.gz'))) as artifact:
             assert any('cache-marker' in name for name in artifact.getnames())
     _exercise_guest_cache_layout(tmp_path, monkeypatch, '3.12', inspect)
+
+
+@pytest.mark.parametrize('preexisting_symlink', [False, True])
+def test_rejected_reviewer_changes_are_privately_audited_without_execution(tmp_path, monkeypatch, preexisting_symlink):
+    import hashlib
+    import os
+
+    repo = tmp_path / 'repo'
+    repo.mkdir()
+    source = repo / 'source.py'
+    source.write_text('value = 1\n')
+    output = tmp_path / 'agent-output'
+    answer = {'schema_version': 1, 'decision': 'revise', 'summary': 'Review found a problem.',
+              'requirements': [], 'claims': [], 'findings': [], 'verification_requests': [], 'defects': [],
+              'changes': [{'path': 'source.py', 'operation': 'write', 'content': 'value = 99\n'}]}
+    raw = json.dumps(answer, ensure_ascii=False).encode()
+    artifact = output / f'codex-rejected-result-{hashlib.sha256(raw).hexdigest()}.json'
+    outside = tmp_path / 'outside'
+    outside.write_text('untouched')
+    if preexisting_symlink:
+        output.mkdir(mode=0o700)
+        artifact.symlink_to(outside)
+    features = ('shell_tool', 'unified_exec', 'apps', 'browser_use', 'computer_use',
+                'multi_agent', 'code_mode', 'code_mode_host')
+    monkeypatch.setattr(runtime, '_run', lambda argv, **kwargs:
+                        '--ignore-user-config --disable' if '--help' in argv else
+                        '\n'.join(f'{feature} stable true' for feature in features))
+
+    def fake_execute(self, argv, **kwargs):
+        schema = json.loads(Path(argv[argv.index('--output-schema') + 1]).read_text())
+        assert 'changes' in schema['required'] and argv[-1] == 'Review source'
+        Path(argv[argv.index('--output-last-message') + 1]).write_bytes(raw)
+        return '{"type":"thread.started","thread_id":"reviewer"}\n'
+
+    monkeypatch.setattr(runtime.CodexAgent, '_execute', fake_execute)
+    job = {'payload': {'purpose': 'discriminator', 'prompt': 'Review source'}}
+    result = runtime.CodexAgent().run(repo, job, output, timeout_seconds=5)
+    assert result['status'] == 'failed'
+    assert not result.get('result') and not result.get('session_id')
+    assert source.read_text() == 'value = 1\n'
+    if preexisting_symlink:
+        assert artifact.is_symlink() and outside.read_text() == 'untouched'
+        return
+    assert 'reviewer' in result['error']
+    assert artifact.read_bytes() == raw
+    assert artifact.stat().st_mode & 0o777 == 0o600
+    assert os.stat(output).st_mode & 0o777 == 0o700
+    # Replaying identical rejected bytes must not replace or weaken the audit artifact.
+    assert runtime.CodexAgent().run(repo, job, output, timeout_seconds=5)['status'] == 'failed'
+    assert artifact.read_bytes() == raw and artifact.stat().st_mode & 0o777 == 0o600
+
+
+def test_oversized_rejected_reviewer_output_is_not_labeled_complete(tmp_path, monkeypatch):
+    repo = tmp_path / 'repo'
+    repo.mkdir()
+    output = tmp_path / 'agent-output'
+    features = ('shell_tool', 'unified_exec', 'apps', 'browser_use', 'computer_use',
+                'multi_agent', 'code_mode', 'code_mode_host')
+    monkeypatch.setattr(runtime, '_run', lambda argv, **kwargs:
+                        '--ignore-user-config --disable' if '--help' in argv else
+                        '\n'.join(f'{feature} stable true' for feature in features))
+
+    def fake_execute(self, argv, **kwargs):
+        Path(argv[argv.index('--output-last-message') + 1]).write_bytes(b'x' * 1_000_001)
+        return '{"type":"thread.started","thread_id":"reviewer"}\n'
+
+    monkeypatch.setattr(runtime.CodexAgent, '_execute', fake_execute)
+    result = runtime.CodexAgent().run(repo, {'payload': {
+        'purpose': 'discriminator', 'prompt': 'Review source'}}, output, timeout_seconds=5)
+    assert result['status'] == 'failed'
+    assert not result.get('result') and not result.get('session_id')
+    assert not list(output.glob('codex-rejected-result-*.json'))

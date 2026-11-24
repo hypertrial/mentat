@@ -102,6 +102,40 @@ removed sources explicit in the complete diff. It does not alter the old
 session, promote its deferrals or establish correctness by hash. Fresh review,
 complete native/Linux and protected gates, and a new real run remain required.
 
+## Source correction cycle after v12
+
+Actual v12 session `35e6ae7e5df842e89371451e98a5872e` reached candidate
+`f83523f63dd117f2f23b63908259823b1a89557b` with 13 accepted SCL cohorts,
+2,020 passing Linux tests and 53 documented skips, packaging and all 45
+protected fixtures, positive clamp and real faulty SAT/protected replay, and
+two accepting IVL reviewers. All 20 source reviewers received required vision
+support: 16 accepted and four requested revisions to generated specification
+claims. The generic path incorrectly routed those revisions to IVL, whose four
+retry reviewers deferred. No aggregate or publication followed. The old session
+and its actual decisions and input manifests remain historical.
+
+The proposed correction introduces version 2 source findings, scoped typed
+specification targets, a durable per-item correction cycle, and an atomic
+old-head fence and correction checkpoint. The approved vision clarifies the
+existing budget requirement as two hours per invocation with durable job,
+attempt and round limits on resume; no general deadline theorem is claimed.
+The existing complete check-evidence summary and citation-path normalization
+moved to pure final-review helpers without changing returned fields or path
+semantics. Bounded raw reviewer results rejected for proposing changes are
+privately retained for audit; they remain failed results and cannot become
+approvals or materialized edits.
+
+On the frozen development source, the targeted correction, ancestry and selected
+workflow/receipt checks passed 38 tests in 98.23 seconds. Two further direct
+missing-lineage and sibling tests passed; these prevent a descendant from
+silently starting a new cycle while allowing an unrelated work item. A broader
+four-module compatibility run passed 145 tests and had one nested offline build
+failure; that test passed separately with `UV_CACHE_DIR=/private/tmp/mentat-uv-cache`
+and `UV_OFFLINE=1`. Scoped Ruff, candidate-interpreter Pyright, whitespace,
+FAS lineage and the 298-surface inventory checks passed. These development
+checks do not replace independent review, complete native/Linux/package and
+45-fixture protected gates, or a fresh real self-run before readiness.
+
 ## Local workflow foundation
 
 PR [47](https://github.com/hypertrial/mentat/pull/47) merged as

@@ -78,8 +78,9 @@ class Agent:
             "result": {
                 "decision": "accept",
                 "summary": json.dumps({
+                    "schema_version": 2,
                     "findings": "Inspected the supplied source and its mapped requirements.",
-                    "unresolved_dependencies": [],
+                    "unresolved_dependencies": [], "spec_corrections": [],
                 }) if kind == "review_final_source" else "accepted",
                 "findings": [],
                 "verification_requests": [],

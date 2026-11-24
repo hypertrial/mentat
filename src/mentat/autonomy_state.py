@@ -81,6 +81,20 @@ class Store:
             db.execute("CREATE TABLE IF NOT EXISTS transitions (job_id TEXT PRIMARY KEY REFERENCES jobs(id), status TEXT NOT NULL CHECK(status IN ('pending', 'done')))")
             db.execute("CREATE TABLE IF NOT EXISTS stale_records (session_id TEXT NOT NULL REFERENCES sessions(id), kind TEXT NOT NULL, id TEXT NOT NULL, PRIMARY KEY(session_id, kind, id))")
             db.execute("CREATE TABLE IF NOT EXISTS stale_transitions (job_id TEXT PRIMARY KEY REFERENCES transitions(job_id))")
+            db.execute("""CREATE TABLE IF NOT EXISTS source_correction_cycles (
+                id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id),
+                root_item TEXT NOT NULL, origin_head TEXT NOT NULL, origin_base TEXT NOT NULL,
+                failed_passes INTEGER NOT NULL DEFAULT 0, active_head TEXT NOT NULL,
+                status TEXT NOT NULL, correction_job_id TEXT, feedback_digest TEXT,
+                UNIQUE(session_id, root_item, origin_head))""")
+            db.execute("""CREATE TABLE IF NOT EXISTS source_correction_passes (
+                cycle_id TEXT NOT NULL REFERENCES source_correction_cycles(id), head TEXT NOT NULL,
+                plan_id TEXT NOT NULL, check_key TEXT NOT NULL, batch_ids TEXT NOT NULL,
+                status TEXT NOT NULL, PRIMARY KEY(cycle_id, head))""")
+            db.execute("""CREATE TABLE IF NOT EXISTS source_correction_fences (
+                session_id TEXT NOT NULL REFERENCES sessions(id), head TEXT NOT NULL,
+                cycle_id TEXT NOT NULL REFERENCES source_correction_cycles(id),
+                PRIMARY KEY(session_id, head))""")
             if not receipts_exist:
                 # Older stores could have crashed between finishing and advancing.
                 # Replay is conservative; advancement must be idempotent.
@@ -221,6 +235,275 @@ class Store:
                 self._event(db, session_id, "claim_refreshed", {"id": record_id, "digest": expected_digest})
             db.commit()
 
+    def register_source_pass(self, session_id: str, cycle_id: str, root_item: str,
+                             head: str, base: str, plan_id: str, check_key: str,
+                             batch_ids: list[str], *, continuing: bool) -> dict:
+        """Pin the complete expected batch set before any source job can run."""
+        encoded = _json({"batch_ids": batch_ids})
+        if not batch_ids or len(set(batch_ids)) != len(batch_ids):
+            raise ValueError("invalid source pass batches")
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            self._session(db, session_id)
+            cycle = db.execute("SELECT * FROM source_correction_cycles WHERE id=?", (cycle_id,)).fetchone()
+            if cycle is None:
+                if continuing:
+                    raise ValueError("missing source correction lineage")
+                db.execute("INSERT INTO source_correction_cycles VALUES (?, ?, ?, ?, ?, 0, ?, 'reviewing', NULL, NULL)",
+                           (cycle_id, session_id, root_item, head, base, head))
+            elif (cycle["session_id"] != session_id or cycle["root_item"] != root_item
+                  or cycle["origin_base"] != base or cycle["failed_passes"] >= 3
+                  or (cycle["active_head"] != head and cycle["status"] not in {"correcting", "aggregating"})):
+                raise ValueError("invalid source correction lineage")
+            old = db.execute("SELECT * FROM source_correction_passes WHERE cycle_id=? AND head=?", (cycle_id, head)).fetchone()
+            if old:
+                if old["plan_id"] != plan_id or old["check_key"] != check_key or old["batch_ids"] != encoded:
+                    raise ValueError("source pass identity changed")
+            else:
+                if cycle and cycle["active_head"] == head:
+                    raise ValueError("source pass cannot be restarted")
+                db.execute("INSERT INTO source_correction_passes VALUES (?, ?, ?, ?, ?, 'reviewing')",
+                           (cycle_id, head, plan_id, check_key, encoded))
+                db.execute("UPDATE source_correction_cycles SET active_head=?, status='reviewing' WHERE id=?", (head, cycle_id))
+            row = dict(db.execute("SELECT * FROM source_correction_cycles WHERE id=?", (cycle_id,)).fetchone())
+            db.commit()
+            return row
+
+    def source_head_fenced(self, session_id: str, head: str) -> bool:
+        with self._connect() as db:
+            return db.execute("SELECT 1 FROM source_correction_fences WHERE session_id=? AND head=?", (session_id, head)).fetchone() is not None
+
+    def record_source_decision(self, session_id: str, cycle_id: str, decision: dict) -> None:
+        """Atomically record a source decision and fence the first revision."""
+        encoded = _json(decision)
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            cycle = db.execute("SELECT * FROM source_correction_cycles WHERE id=? AND session_id=?", (cycle_id, session_id)).fetchone()
+            if (cycle is None or cycle["active_head"] != decision.get("head")
+                    or cycle["status"] not in {"reviewing", "draining"}):
+                raise ValueError("source decision has no current cycle")
+            job = db.execute("SELECT jobs.*, transitions.status AS transition_status FROM jobs LEFT JOIN transitions ON transitions.job_id=jobs.id WHERE jobs.id=? AND jobs.session_id=?", (decision["job_id"], session_id)).fetchone()
+            source_pass = db.execute("SELECT * FROM source_correction_passes WHERE cycle_id=? AND head=?", (cycle_id, decision["head"])).fetchone()
+            if (job is None or job["status"] != "succeeded" or job["transition_status"] != "pending"
+                    or source_pass is None or source_pass["status"] != "reviewing"):
+                raise ValueError("source decision lacks a current transition")
+            payload, outcome = json.loads(job["payload"]), json.loads(job["outcome"])
+            scope = payload.get("source_batch", {})
+            proposal = payload.get("proposal", {})
+            result = outcome.get("result", {})
+            if (payload.get("kind") != "review_final_source" or payload.get("source_cycle_id") != cycle_id
+                    or payload.get("target_head") != decision.get("head") or proposal.get("head") != decision.get("head")
+                    or scope.get("id") not in json.loads(source_pass["batch_ids"])["batch_ids"]
+                    or scope.get("id") != decision.get("source_batch_id") or scope.get("plan_id") != source_pass["plan_id"]
+                    or payload.get("check_key") != source_pass["check_key"] or decision.get("check_key") != source_pass["check_key"]
+                    or payload.get("check_evidence_id") != decision.get("check_evidence_id")
+                    or outcome.get("head") != decision.get("head") or outcome.get("diff_digest") != decision.get("diff_digest")
+                    or proposal.get("diff_digest") != decision.get("diff_digest")
+                    or outcome.get("input_manifest") != decision.get("input_manifest")
+                    or outcome.get("input_manifest_sha256") != decision.get("input_manifest_sha256")
+                    or not decision.get("input_manifest_sha256") or outcome.get("author_id") != decision.get("reviewer_id")
+                    or result.get("decision") != decision.get("decision") or result.get("summary") != decision.get("summary")
+                    or result.get("findings") != decision.get("findings")):
+                raise ValueError("source decision does not match its registered pass")
+            if decision.get("decision") == "revise":
+                remote = db.execute("SELECT 1 FROM events WHERE session_id=? AND kind IN ('publication_started','merge_started') AND json_extract(payload,'$.head')=? LIMIT 1", (session_id, decision["head"])).fetchone()
+                if remote:
+                    raise ValueError("remote publication requires reconciliation before source correction")
+                db.execute("INSERT OR IGNORE INTO source_correction_fences VALUES (?, ?, ?)", (session_id, decision["head"], cycle_id))
+                owner = db.execute("SELECT cycle_id FROM source_correction_fences WHERE session_id=? AND head=?", (session_id, decision["head"])).fetchone()
+                if owner[0] != cycle_id:
+                    raise ValueError("source head fenced by another cycle")
+                db.execute("UPDATE source_correction_cycles SET status='draining' WHERE id=?", (cycle_id,))
+            old = db.execute("SELECT data FROM records WHERE session_id=? AND kind='decision' AND id=?", (session_id, decision["id"])).fetchone()
+            if old and old[0] != encoded:
+                raise ValueError("records are immutable")
+            if not old:
+                db.execute("INSERT INTO records VALUES (?, 'decision', ?, ?)", (session_id, decision["id"], encoded))
+                self._event(db, session_id, "record_added", {"kind": "decision", "record": decision})
+            db.commit()
+
+    def source_cycles(self, session_id: str) -> list[dict]:
+        with self._connect() as db:
+            return [dict(row) for row in db.execute("SELECT * FROM source_correction_cycles WHERE session_id=? ORDER BY rowid", (session_id,))]
+
+    @staticmethod
+    def _source_block_finding(db: sqlite3.Connection, session_id: str, cycle_id: str, head: str, reason: str) -> None:
+        finding_id = hashlib.sha256(f"source-block:{session_id}:{cycle_id}:{head}".encode()).hexdigest()
+        finding = {"id": finding_id, "status": "inconclusive", "loop": "ivl", "summary": reason[:2000]}
+        old = db.execute("SELECT 1 FROM records WHERE session_id=? AND kind='finding' AND id=?", (session_id, finding_id)).fetchone()
+        if not old:
+            db.execute("INSERT INTO records VALUES (?, 'finding', ?, ?)", (session_id, finding_id, _json(finding)))
+            Store._event(db, session_id, "record_added", {"kind": "finding", "record": finding})
+
+    def block_source_cycle(self, session_id: str, cycle_id: str, head: str, reason: str) -> None:
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            db.execute("INSERT OR IGNORE INTO source_correction_fences VALUES (?, ?, ?)", (session_id, head, cycle_id))
+            source_pass = db.execute("SELECT status FROM source_correction_passes WHERE cycle_id=? AND head=?", (cycle_id, head)).fetchone()
+            increment = 1 if source_pass and source_pass[0] == "reviewing" else 0
+            db.execute("UPDATE source_correction_cycles SET status='blocked', failed_passes=failed_passes+? WHERE id=? AND session_id=? AND active_head=? AND status IN ('reviewing','draining','correcting','resolved')", (increment, cycle_id, session_id, head))
+            db.execute("UPDATE source_correction_passes SET status='blocked' WHERE cycle_id=? AND head=? AND status='reviewing'", (cycle_id, head))
+            self._source_block_finding(db, session_id, cycle_id, head, reason)
+            self._event(db, session_id, "source_correction_blocked", {"cycle_id": cycle_id, "head": head, "reason": reason})
+            db.commit()
+
+    def source_pass(self, cycle_id: str, head: str) -> dict | None:
+        with self._connect() as db:
+            row = db.execute("SELECT * FROM source_correction_passes WHERE cycle_id=? AND head=?", (cycle_id, head)).fetchone()
+            return dict(row) if row else None
+
+    def source_pass_jobs(self, session_id: str, cycle_id: str, head: str) -> list[dict]:
+        with self._connect() as db:
+            rows = db.execute("SELECT jobs.*, transitions.status AS transition_status FROM jobs LEFT JOIN transitions ON transitions.job_id=jobs.id WHERE jobs.session_id=? AND json_extract(jobs.payload,'$.kind')='review_final_source' AND json_extract(jobs.payload,'$.source_cycle_id')=? AND json_extract(jobs.payload,'$.target_head')=? ORDER BY jobs.rowid", (session_id, cycle_id, head)).fetchall()
+            jobs = []
+            for row in rows:
+                job = dict(row)
+                job.pop("lease_token", None)
+                job["payload"] = json.loads(job["payload"])
+                if job["outcome"] is not None:
+                    job["outcome"] = json.loads(job["outcome"])
+                jobs.append(job)
+            return jobs
+
+    def resolve_source_pass(self, session_id: str, cycle_id: str, head: str) -> None:
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            cycle = db.execute("SELECT * FROM source_correction_cycles WHERE id=? AND session_id=?", (cycle_id, session_id)).fetchone()
+            if cycle is None or cycle["active_head"] != head or cycle["status"] not in {'reviewing', 'resolved'}:
+                raise ValueError("source cycle cannot be resolved")
+            if db.execute("SELECT 1 FROM source_correction_fences WHERE session_id=? AND head=?", (session_id, head)).fetchone():
+                raise ValueError("fenced source pass cannot be resolved")
+            source_pass = db.execute("SELECT * FROM source_correction_passes WHERE cycle_id=? AND head=?", (cycle_id, head)).fetchone()
+            if source_pass is None:
+                raise ValueError("source pass is missing")
+            expected = json.loads(source_pass["batch_ids"])["batch_ids"]
+            rows = db.execute("SELECT jobs.id, jobs.status, jobs.payload, transitions.status AS transition_status, records.data AS decision FROM jobs LEFT JOIN transitions ON transitions.job_id=jobs.id LEFT JOIN records ON records.session_id=jobs.session_id AND records.kind='decision' AND json_extract(records.data,'$.job_id')=jobs.id WHERE jobs.session_id=? AND json_extract(jobs.payload,'$.kind')='review_final_source' AND json_extract(jobs.payload,'$.source_cycle_id')=? AND json_extract(jobs.payload,'$.target_head')=?", (session_id, cycle_id, head)).fetchall()
+            if (len(rows) != 2 * len(expected) or any(row["status"] != "succeeded" or row["transition_status"] != "done"
+                    or not row["decision"] or json.loads(row["decision"]).get("decision") != "accept" for row in rows)):
+                raise ValueError("source pass lacks complete advanced acceptances")
+            db.execute("UPDATE source_correction_cycles SET status='resolved' WHERE id=?", (cycle_id,))
+            db.execute("UPDATE source_correction_passes SET status='resolved' WHERE cycle_id=? AND head=?", (cycle_id, head))
+            db.commit()
+
+    def mark_source_aggregate_scheduled(self, session_id: str, cycle_id: str, head: str) -> None:
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            cycle = db.execute("SELECT * FROM source_correction_cycles WHERE id=? AND session_id=?", (cycle_id, session_id)).fetchone()
+            if cycle is None or cycle["active_head"] != head or cycle["status"] not in {"resolved", "aggregating"}:
+                raise ValueError("source cycle cannot schedule aggregate")
+            jobs = db.execute("SELECT id FROM jobs WHERE session_id=? AND json_extract(payload,'$.kind')='review_final' AND json_extract(payload,'$.source_cycle_id')=? AND json_extract(payload,'$.target_head')=?", (session_id, cycle_id, head)).fetchall()
+            if len(jobs) != 2:
+                raise ValueError("source aggregate pair is incomplete")
+            db.execute("UPDATE source_correction_cycles SET status='aggregating' WHERE id=?", (cycle_id,))
+            db.commit()
+
+    def finalize_source_correction(self, session_id: str, cycle_id: str, head: str,
+                                   feedback: list[dict], item: str, input_digest: str,
+                                   payload: dict, *, actionable: bool, max_attempts: int) -> str | None:
+        """Drain the complete pass and atomically count and enqueue one correction."""
+        encoded_payload = _json(payload)
+        encoded_feedback = _json({"reviews": feedback})
+        feedback_digest = hashlib.sha256(encoded_feedback.encode()).hexdigest()
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            cycle = db.execute("SELECT * FROM source_correction_cycles WHERE id=? AND session_id=?", (cycle_id, session_id)).fetchone()
+            current = db.execute("SELECT * FROM source_correction_passes WHERE cycle_id=? AND head=?", (cycle_id, head)).fetchone()
+            if cycle is None or current is None or cycle["active_head"] != head:
+                raise ValueError("missing source pass")
+            if current["status"] != "reviewing":
+                db.commit()
+                return cycle["correction_job_id"]
+            expected = json.loads(current["batch_ids"])["batch_ids"]
+            jobs = db.execute("SELECT jobs.*, transitions.status AS transition_status FROM jobs LEFT JOIN transitions ON transitions.job_id=jobs.id WHERE jobs.session_id=? AND json_extract(jobs.payload,'$.kind')='review_final_source' AND json_extract(jobs.payload,'$.source_cycle_id')=? AND json_extract(jobs.payload,'$.target_head')=?", (session_id, cycle_id, head)).fetchall()
+            if len(jobs) != len(expected) * 2:
+                db.commit()
+                return None
+            if any(j["status"] in {'queued', 'running'} or (j["status"] == 'succeeded' and j["transition_status"] != 'done') for j in jobs):
+                db.commit()
+                return None
+            if any(j["status"] != 'succeeded' for j in jobs):
+                db.execute("UPDATE source_correction_passes SET status='blocked' WHERE cycle_id=? AND head=?", (cycle_id, head))
+                db.execute("UPDATE source_correction_cycles SET status='blocked', failed_passes=failed_passes+1 WHERE id=?", (cycle_id,))
+                self._source_block_finding(db, session_id, cycle_id, head, "source pass incomplete or exhausted")
+                db.commit()
+                return None
+            if {row.get("job_id") for row in feedback} != {j["id"] for j in jobs}:
+                raise ValueError("source feedback is not the complete pass")
+            outcomes = [entry.get("result", {}).get("decision") for entry in feedback]
+            if actionable and ("revise" not in outcomes or any(value not in {"accept", "revise"} for value in outcomes)):
+                raise ValueError("source feedback is not actionable")
+            if not db.execute("SELECT 1 FROM source_correction_fences WHERE session_id=? AND head=? AND cycle_id=?", (session_id, head, cycle_id)).fetchone():
+                raise ValueError("source pass is not fenced")
+            counts = {}
+            for j in jobs:
+                data, outcome = json.loads(j["payload"]), json.loads(j["outcome"])
+                scope = data.get("source_batch", {}).get("id")
+                counts[scope] = counts.get(scope, 0) + 1
+                matching = [entry for entry in feedback if entry.get("job_id") == j["id"]]
+                record = db.execute("SELECT data FROM records WHERE session_id=? AND kind='decision' AND id=?", (session_id, matching[0].get("decision_id") if matching else None)).fetchone()
+                if (len(matching) != 1 or matching[0].get("result") != outcome.get("result")
+                        or not record or json.loads(record[0]).get("job_id") != j["id"]
+                        or json.loads(record[0]).get("decision") != outcome.get("result", {}).get("decision")
+                        or data.get("source_batch", {}).get("plan_id") != current["plan_id"]
+                        or data.get("check_key") != current["check_key"]):
+                    raise ValueError("source feedback differs from fenced outcome")
+            if set(counts) != set(expected) or any(counts[key] != 2 for key in expected):
+                raise ValueError("source feedback has incomplete scopes")
+            failures = cycle["failed_passes"] + 1
+            job_id = None
+            if actionable and failures < max_attempts:
+                old = db.execute("SELECT id, payload FROM jobs WHERE session_id=? AND loop='scl' AND role='implementer' AND item_id=? AND input_digest=?", (session_id, item, input_digest)).fetchone()
+                if old:
+                    if old["payload"] != encoded_payload:
+                        raise ValueError("correction job payload conflict")
+                    job_id = old["id"]
+                else:
+                    job_id = uuid.uuid4().hex
+                    db.execute("INSERT INTO jobs(id, session_id, loop, role, item_id, input_digest, payload, status) VALUES (?, ?, 'scl', 'implementer', ?, ?, ?, 'queued')", (job_id, session_id, item, input_digest, encoded_payload))
+                    self._event(db, session_id, "job_enqueued", {"job_id": job_id, "loop": "scl", "role": "implementer", "item_id": item, "input_digest": input_digest, "payload": payload})
+            status = 'correcting' if job_id else 'blocked'
+            if job_id is None:
+                self._source_block_finding(db, session_id, cycle_id, head, "source correction unresolved or round limit reached")
+            db.execute("UPDATE source_correction_passes SET status=? WHERE cycle_id=? AND head=?", (status, cycle_id, head))
+            db.execute("UPDATE source_correction_cycles SET failed_passes=?, status=?, correction_job_id=?, feedback_digest=? WHERE id=?", (failures, status, job_id, feedback_digest, cycle_id))
+            self._event(db, session_id, "source_correction_checkpoint", {"cycle_id": cycle_id, "head": head, "failed_passes": failures, "feedback_digest": feedback_digest, "reviews": feedback, "correction_job_id": job_id, "status": status})
+            db.commit()
+            return job_id
+
+    def begin_remote_effect(self, session_id: str, kind: str, payload: dict) -> None:
+        """Atomically fence remote writes against the first source revision."""
+        if kind not in {"publication_started", "merge_started"}:
+            raise ValueError("invalid remote effect")
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            if db.execute("SELECT 1 FROM source_correction_fences WHERE session_id=? AND head=?", (session_id, payload["head"])).fetchone():
+                raise ValueError("source head fenced before remote effect")
+            self._event(db, session_id, kind, payload)
+            db.commit()
+
+    @staticmethod
+    def _source_fenced(db: sqlite3.Connection, session_id: str, payload: dict, job_id: str | None = None) -> bool:
+        head = payload.get("target_head")
+        if not isinstance(head, str):
+            return False
+        fence = db.execute("SELECT cycle_id FROM source_correction_fences WHERE session_id=? AND head=?", (session_id, head)).fetchone()
+        if fence is None:
+            return False
+        cycle_id = fence[0]
+        if payload.get("kind") == "review_final_source" and payload.get("source_cycle_id") == cycle_id:
+            if job_id is None:
+                return True
+            row = db.execute("SELECT batch_ids FROM source_correction_passes WHERE cycle_id=? AND head=?", (cycle_id, head)).fetchone()
+            return row is None or payload.get("source_batch", {}).get("id") not in json.loads(row[0])["batch_ids"]
+        if job_id and payload.get("kind") == "generate_spec" and payload.get("source_cycle_id") == cycle_id:
+            row = db.execute("SELECT correction_job_id FROM source_correction_cycles WHERE id=?", (cycle_id,)).fetchone()
+            return row is None or row[0] != job_id
+        return True
+
+    def source_job_fenced(self, session_id: str, job: dict) -> bool:
+        with self._connect() as db:
+            return self._source_fenced(db, session_id, job["payload"], job.get("id"))
+
     def enqueue_job(self, session_id: str, loop: str, role: str, item_id: str, input_digest: str, payload: dict) -> str:
         if loop not in LOOPS or role not in ROLES:
             raise ValueError("invalid loop or role")
@@ -236,6 +519,8 @@ class Store:
                     raise ValueError("job payload conflicts with pinned input")
                 job_id = old["id"]
             else:
+                if self._source_fenced(db, session_id, payload):
+                    raise ValueError("source head fenced for correction")
                 job_id = uuid.uuid4().hex
                 db.execute("INSERT INTO jobs(id, session_id, loop, role, item_id, input_digest, payload, status) VALUES (?, ?, ?, ?, ?, ?, ?, 'queued')", (job_id, session_id, loop, role, item_id, input_digest, encoded))
                 self._event(db, session_id, "job_enqueued", {"job_id": job_id, "loop": loop, "role": role, "item_id": item_id, "input_digest": input_digest, "payload": payload})
@@ -274,6 +559,19 @@ class Store:
             if session["status"] == "running" and now < session["deadline"] and running < 3:
                 candidates = db.execute("SELECT * FROM jobs WHERE session_id=? AND status='queued' ORDER BY rowid", (session_id,)).fetchall()
                 for candidate in candidates:
+                    candidate_payload = json.loads(candidate["payload"])
+                    if candidate_payload.get("kind") == "review_final_source" and candidate_payload.get("source_cycle_id"):
+                        source_pass = db.execute("SELECT batch_ids FROM source_correction_passes WHERE cycle_id=? AND head=?", (candidate_payload["source_cycle_id"], candidate_payload.get("target_head"))).fetchone()
+                        if source_pass is None:
+                            continue
+                        expected = json.loads(source_pass[0])["batch_ids"]
+                        rows = db.execute("SELECT payload, role FROM jobs WHERE session_id=? AND json_extract(payload,'$.kind')='review_final_source' AND json_extract(payload,'$.source_cycle_id')=? AND json_extract(payload,'$.target_head')=?", (session_id, candidate_payload["source_cycle_id"], candidate_payload.get("target_head"))).fetchall()
+                        pairs = [(json.loads(row["payload"]).get("source_batch", {}).get("id"), row["role"]) for row in rows]
+                        if len(pairs) != 2 * len(expected) or set(pairs) != {(batch, role) for batch in expected for role in ("code-reviewer", "data-reviewer")}:
+                            continue
+                    if self._source_fenced(db, session_id, candidate_payload, candidate["id"]):
+                        db.execute("UPDATE jobs SET status='stale' WHERE id=?", (candidate["id"],))
+                        continue
                     totals = db.execute("SELECT coalesce(sum(attempt - CASE WHEN status IN ('running', 'succeeded') THEN 1 ELSE 0 END), 0), sum(CASE WHEN status='running' THEN 1 ELSE 0 END) FROM jobs WHERE session_id=? AND item_id=? AND input_digest=?", (session_id, candidate["item_id"], candidate["input_digest"])).fetchone()
                     failures, active = totals[0], totals[1] or 0
                     if failures >= 3:
@@ -307,6 +605,8 @@ class Store:
             session = self._session(db, row["session_id"]) if row is not None else None
             if row is None or row["status"] != "running" or row["lease_token"] != lease_token or row["lease_until"] <= now or session is None or session["status"] != "running" or now >= session["deadline"]:
                 raise ValueError("stale or invalid job lease")
+            if self._source_fenced(db, row["session_id"], json.loads(row["payload"]), job_id):
+                raise ValueError("source head fenced during job")
             status = "succeeded" if outcome["status"] == "succeeded" else ("failed" if row["attempt"] >= 3 else "queued")
             db.execute("UPDATE jobs SET status=?, outcome=?, worker_id=NULL, lease_token=NULL, lease_until=NULL WHERE id=?", (status, encoded, job_id))
             self._event(db, row["session_id"], "job_finished", {"job_id": job_id, "attempt": row["attempt"], "status": status, "outcome": outcome, "now": now})
