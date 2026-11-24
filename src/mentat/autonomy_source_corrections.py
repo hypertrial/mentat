@@ -1,8 +1,10 @@
 """Pure validation for current final-source correction requests."""
 
 import json
+from pathlib import Path
 
 from .autonomy_final_review import batch_linked_records
+from .project import safe_relative_path
 
 
 def validate_result(result: dict, scope: dict, inventory_paths: set[str]) -> dict:
@@ -61,3 +63,43 @@ def validate_result(result: dict, scope: dict, inventory_paths: set[str]) -> dic
     if decision == "revise" and (detail["unresolved_dependencies"] or not detail["spec_corrections"]):
         raise ValueError("source revision needs resolved, explicit specification corrections")
     return detail
+
+
+def input_bindings(job: dict, session_id: str, authority_digest: str, tool_identity: dict) -> dict:
+    """Construct the controller-owned immutable source input binding."""
+    payload = job["payload"]
+    proposal = payload["proposal"]
+    return {"schema_version": 1, "job_id": job["id"], "attempt": job["attempt"],
+            "session_id": session_id, "head": proposal["head"], "base": proposal["parent"],
+            "diff_digest": proposal["diff_digest"], "source_batch": payload["source_batch"],
+            "policy_digest": authority_digest, "tool_identity": tool_identity,
+            "check_key": payload["check_key"], "check_evidence_id": payload["check_evidence_id"]}
+
+
+def allowed_path(kind: str, path: str) -> bool:
+    safe_relative_path(path)
+    if kind == "generate_spec":
+        return path == ".mentat/fas.json" or path.startswith("openspec/specs/")
+    if kind == "generate_verification":
+        return path.startswith((".mentat/verification/", "verification/"))
+    return not (
+        path.startswith(("openspec/", ".mentat/", "verification/", "scripts/", ".github/"))
+        or path
+        in {
+            "AGENTS.md",
+            "CONTRIBUTING.md",
+            "pyproject.toml",
+            "uv.lock",
+            "Makefile",
+            "package.json",
+            "package-lock.json",
+            "pnpm-lock.yaml",
+            "yarn.lock",
+            "tox.ini",
+            "pytest.ini",
+            "setup.cfg",
+            "setup.py",
+            "verify.py",
+        }
+        or Path(path).name.startswith(("requirements", "conftest"))
+    )

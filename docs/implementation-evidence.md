@@ -136,6 +136,24 @@ FAS lineage and the 298-surface inventory checks passed. These development
 checks do not replace independent review, complete native/Linux/package and
 45-fixture protected gates, or a fresh real self-run before readiness.
 
+Independent review of the first cycle candidate found that foreign heads could
+bypass its exact-head fence and that an authorized correction could not hand off
+a smaller frontier. The revised candidate uses a durable session-wide
+finalization barrier and atomic correction-successor handoffs. Independent
+investigation remains available while foreign canonical transitions and remote
+effects wait; unresolved remote effects require reconciliation. Policy and
+citation-entry helpers moved without changing their existing interfaces.
+
+The original candidate failed 13 targeted barrier and handoff regressions. On
+the revised frozen source, a focused run passed 57 cases; three fixture failures
+were subsequently corrected. The aggregate budget case then passed, and both
+real 14-file, multi-chunk correction workflows passed in 62.85 seconds,
+including stale predecessor rejection, fresh reviewer cohorts and publication.
+These are development tests with disposable state, not a real self-run or an
+independent acceptance of this candidate. New exact-commit reviews, complete
+native/Linux and package gates, all 45 protected fixtures, and a fresh real
+self-run remain pending.
+
 ## Local workflow foundation
 
 PR [47](https://github.com/hypertrial/mentat/pull/47) merged as

@@ -12,16 +12,23 @@ from test_autonomy import repo as repo_fixture
 
 @pytest.mark.parametrize('peer_defers', [False, True])
 @pytest.mark.parametrize('review_order', ['first', 'last'])
+@pytest.mark.parametrize('correction_defers', [False, True])
 def test_source_revision_routes_to_current_head_specification_correction(
-    tmp_path, monkeypatch, peer_defers, review_order
+    tmp_path, monkeypatch, peer_defers, review_order, correction_defers
 ):
     from mentat import autonomy_runtime
 
     repo = repo_fixture.__wrapped__(tmp_path)
+    if correction_defers:
+        for index in range(14):
+            (repo / f'large-{index}.py').write_text('# ' + 'x' * 65000 + '\n')
     _valid_publication_spec(repo)
     fas_path = repo / '.mentat/fas.json'
     fas = json.loads(fas_path.read_text())
     requirement = fas['requirements'][0]['id']
+    if correction_defers:
+        fas['surfaces'].extend({'path': f'large-{index}.py', 'status': 'gap', 'requirement_ids': []}
+                               for index in range(14))
     for row in fas['surfaces']:
         if row['path'] == 'src.py':
             row.update(status='mapped', requirement_ids=[requirement], note='Overbroad source assertion.')
@@ -36,7 +43,8 @@ def test_source_revision_routes_to_current_head_specification_correction(
     lock = threading.Lock()
     local = threading.local()
     source_code_returned = threading.Event()
-    state = {'source_revised': False, 'corrected': False, 'drain': None, 'code_job': None}
+    state = {'source_revised': False, 'corrected': False, 'drain': None, 'code_job': None,
+             'correction_deferred': False, 'source_head': None, 'stale_descendant_seen': False}
     calls = []
     original_run = autonomy_runtime._run
     features = ('shell_tool', 'unified_exec', 'apps', 'browser_use', 'computer_use',
@@ -111,27 +119,50 @@ def test_source_revision_routes_to_current_head_specification_correction(
                 revised = state['source_revised']
                 corrected = state['corrected']
             if kind == 'review_final_source':
+                with lock:
+                    if state['source_head'] is None:
+                        state['source_head'] = git(repo, 'rev-parse', 'HEAD')
                 local.job = job
                 return autonomy_runtime.CodexAgent().run(repo, job, output, timeout_seconds=timeout_seconds)
             if kind == 'generate_spec':
                 if revised:
+                    if correction_defers and not state['correction_deferred']:
+                        state['correction_deferred'] = True
+                        return {'status': 'succeeded', 'session_id': job['id'], 'result': {
+                            'decision': 'defer', 'summary': 'Continue with remaining context',
+                            'findings': [], 'verification_requests': []}}
                     from mentat.autonomy_state import Store
 
                     store = Store(tmp_path / 'state/state.db')
                     live_snapshot = store.snapshot()
+                    for prior in live_snapshot['jobs']:
+                        if (prior['id'] != job['id'] and prior['payload'].get('kind') == 'generate_spec'
+                                and prior['payload'].get('source_cycle_id') == payload.get('source_cycle_id')
+                                and prior['payload'].get('target_head') != state['source_head']):
+                            assert store.source_job_fenced(live_snapshot['session']['id'], prior)
+                            state['stale_descendant_seen'] = True
                     old_jobs = [row for row in live_snapshot['jobs']
                                 if row['payload'].get('kind') == 'review_final_source'
                                 and row['payload'].get('target_head') == payload['target_head']]
                     with lock:
-                        state['drain'] = [(row['id'], row['status'], store.transition_status(row['id']))
-                                          for row in old_jobs]
+                        if state['drain'] is None:
+                            state['drain'] = [(row['id'], row['status'], store.transition_status(row['id']))
+                                              for row in old_jobs]
                     path = repo / '.mentat/fas.json'
                     current = json.loads(path.read_text())
-                    next(row for row in current['surfaces'] if row['path'] == 'src.py')['note'] = (
-                        'The selected function returns 1.')
+                    context = json.loads(payload['prompt'].split('SOURCE_CONTEXT_JSON:\n', 1)[1])
+                    included = set(context['files'])
+                    if 'src.py' in included and not state['corrected']:
+                        next(row for row in current['surfaces'] if row['path'] == 'src.py')['note'] = (
+                            'The selected function returns 1.')
+                        with lock:
+                            state['corrected'] = True
+                    else:
+                        selected = next(row for row in current['surfaces']
+                                        if row['path'].startswith('large-') and row['path'] in included
+                                        and not row.get('note'))
+                        selected['note'] = 'Current source was included in this batch.'
                     path.write_text(json.dumps(current))
-                    with lock:
-                        state['corrected'] = True
                 return {'status': 'succeeded', 'session_id': job['id'], 'result': {
                     'decision': 'accept', 'summary': 'Specification reviewed', 'findings': [],
                     'verification_requests': []}}
@@ -160,8 +191,17 @@ def test_source_revision_routes_to_current_head_specification_correction(
         return
     corrections = [(payload, head) for kind, payload, head in calls
                    if kind == 'generate_spec' and payload.get('source_cycle_round', 0) > 0]
-    assert len(corrections) == 1, snapshot
+    assert len(corrections) >= (2 if correction_defers else 1), snapshot
+    if not correction_defers:
+        assert len(corrections) == 1
     payload, correction_head = corrections[0]
+    if correction_defers:
+        resumed = corrections[1][0]
+        assert resumed['target_head'] == first_head
+        assert resumed['targetfiles'] and resumed['feedback'] == payload['feedback']
+        assert resumed['source_cycle_id'] == payload['source_cycle_id']
+        assert resumed['source_cycle_round'] == payload['source_cycle_round']
+        assert state['stale_descendant_seen'], 'an accepted partial descendant must hand off before completion'
     assert correction_head == payload['target_head'] == payload['accepted_spec_base'] == first_head
     assert git(repo, 'show', f'{correction_head}:verification/check.txt') == 'check'
     assert 'Overbroad source assertion.' in git(repo, 'show', f'{correction_head}:.mentat/fas.json')
@@ -289,7 +329,8 @@ def _source_outcome_and_decision(job_id, head, check, reviewer, decision_id, res
     return outcome, decision
 
 
-def test_source_revision_fences_remote_effect_atomically(tmp_path):
+@pytest.mark.parametrize('remote_head', ['head', 'foreign-head'])
+def test_source_revision_fences_remote_effect_atomically(tmp_path, remote_head):
     from concurrent.futures import ThreadPoolExecutor
 
     from mentat.autonomy_state import Store
@@ -319,7 +360,7 @@ def test_source_revision_fences_remote_effect_atomically(tmp_path):
     def publish():
         start.wait()
         try:
-            store.begin_remote_effect(session, 'publication_started', {'head': 'head'})
+            store.begin_remote_effect(session, 'publication_started', {'head': remote_head})
             return 'publication'
         except ValueError:
             return None
@@ -332,7 +373,7 @@ def test_source_revision_fences_remote_effect_atomically(tmp_path):
         assert store.source_head_fenced(session, 'head')
         assert not any(event['kind'] == 'publication_started' for event in events)
         with pytest.raises(ValueError, match='fenc'):
-            store.begin_remote_effect(session, 'publication_started', {'head': 'head'})
+            store.begin_remote_effect(session, 'publication_started', {'head': remote_head})
     else:
         assert not store.source_head_fenced(session, 'head')
         assert sum(event['kind'] == 'publication_started' for event in events) == 1
@@ -415,8 +456,10 @@ def test_source_failure_budget_persists_across_heads_and_resume(tmp_path):
         store.register_source_pass(session, 'cycle', 'logical-final-item', head, 'base',
                                    f'plan-{index}', f'check-{index}', ['batch'], continuing=index > 0)
         for actor, role in enumerate(('code-reviewer', 'data-reviewer')):
+            payload = _source_job_payload(head, f'plan-{index}', f'check-{index}')
+            payload['source_epoch'] = store.source_finalization_epoch(session, payload)
             store.enqueue_job(session, 'ivl', role, f'source-{index}-{actor}', f'input-{index}-{actor}',
-                              _source_job_payload(head, f'plan-{index}', f'check-{index}'))
+                              payload)
         jobs = [store.claim_job(session, f'worker-{actor}', now=10 + index * 10) for actor in range(2)]
         assert all(jobs)
         feedback = []
@@ -458,9 +501,16 @@ def test_source_failure_budget_persists_across_heads_and_resume(tmp_path):
     with pytest.raises(ValueError):
         store.register_source_pass(session, 'cycle', 'logical-final-item', 'h3', 'base',
                                    'plan-3', 'check-3', ['batch'], continuing=True)
-    store.register_source_pass(session, 'other-cycle', 'other-item', 'other-head', 'base',
-                               'other-plan', 'other-check', ['other-batch'], continuing=False)
-    assert next(row for row in store.source_cycles(session) if row['id'] == 'other-cycle')['failed_passes'] == 0
+    with pytest.raises(ValueError):
+        store.register_source_pass(session, 'other-cycle', 'other-item', 'other-head', 'base',
+                                   'other-plan', 'other-check', ['other-batch'], continuing=False)
+    assert len(store.source_cycles(session)) == 1
+    store.session_status(session, 'paused')
+    store.resume_session(session, now=50, deadline=7250)
+    reopened = Store(path)
+    with pytest.raises(ValueError):
+        reopened.begin_remote_effect(session, 'publication_started', {'head': 'other-head'})
+    assert not any(event['kind'] == 'publication_started' for event in reopened.snapshot(session)['events'])
 
 
 def test_expired_source_lease_cannot_create_decision_or_fence(tmp_path):
@@ -671,8 +721,10 @@ def test_aggregate_revision_continues_existing_source_cycle_budget(tmp_path):
         store.register_source_pass(session, 'cycle', 'logical-final-item', head, 'base',
                                    plan, check, ['batch'], continuing=index > 0)
         for actor, role in enumerate(('code-reviewer', 'data-reviewer')):
+            payload = _source_job_payload(head, plan, check)
+            payload['source_epoch'] = store.source_finalization_epoch(session, payload)
             store.enqueue_job(session, 'ivl', role, f'source-{index}-{actor}', f'input-{index}-{actor}',
-                              _source_job_payload(head, plan, check))
+                              payload)
         jobs = [store.claim_job(session, f'worker-{actor}', now=10 + index * 10) for actor in range(2)]
         assert all(jobs)
         feedback = []
@@ -701,8 +753,9 @@ def test_aggregate_revision_continues_existing_source_cycle_budget(tmp_path):
     source_pair('h1', 1, False)
     store.resolve_source_pass(session, 'cycle', 'h1')
     for index, role in enumerate(('code-reviewer', 'data-reviewer')):
-        store.enqueue_job(session, 'ivl', role, f'aggregate-{index}', f'aggregate-input-{index}', {
-            'kind': 'review_final', 'target_head': 'h1', 'source_cycle_id': 'cycle'})
+        payload = {'kind': 'review_final', 'target_head': 'h1', 'source_cycle_id': 'cycle'}
+        payload['source_epoch'] = store.source_finalization_epoch(session, payload)
+        store.enqueue_job(session, 'ivl', role, f'aggregate-{index}', f'aggregate-input-{index}', payload)
     store.mark_source_aggregate_scheduled(session, 'cycle', 'h1')
     continued = store.register_source_pass(session, 'cycle', 'logical-final-item', 'h2', 'base',
                                            'plan-2', 'check-2', ['batch'], continuing=True)
@@ -743,7 +796,7 @@ def test_source_cycle_rejects_sibling_git_head_without_resetting_budget(tmp_path
     assert not store.snapshot(session)['jobs']
 
 
-def test_missing_source_cycle_lineage_rejects_descendant_but_not_unrelated_item(tmp_path, monkeypatch):
+def test_missing_source_cycle_lineage_rejects_descendant_but_allows_early_work(tmp_path, monkeypatch):
     from mentat.autonomy import Coordinator
     from mentat.autonomy_state import Store
 
@@ -775,8 +828,220 @@ def test_missing_source_cycle_lineage_rejects_descendant_but_not_unrelated_item(
     assert store.source_cycles(session)[0]['active_head'] == reviewed
     assert not scheduled
 
-    coordinator._start_final_sources({**job, 'item_id': 'unrelated-item'}, proposal, evidence)
-    cycles = store.source_cycles(session)
-    assert {cycle['root_item'] for cycle in cycles} == {'original-item', 'unrelated-item'}
-    assert next(cycle for cycle in cycles if cycle['root_item'] == 'unrelated-item')['failed_passes'] == 0
-    assert len(scheduled) == 1
+    early = store.enqueue_job(session, 'iil', 'debugger', 'unrelated-investigation', 'input',
+                              {'kind': 'investigate_defect', 'target_head': descendant})
+    assert store.claim_job(session, 'independent-worker', now=2)['id'] == early
+    assert len(store.source_cycles(session)) == 1
+
+
+@pytest.mark.parametrize('branch', ['descendant', 'sibling', 'changed-note'])
+@pytest.mark.parametrize('operation', ['source', 'aggregate', 'publication', 'merge'])
+def test_unresolved_correction_blocks_foreign_finalization_across_git_heads(tmp_path, monkeypatch, branch, operation):
+    from mentat.autonomy import Coordinator
+    from mentat.autonomy_state import Store
+
+    repo = repo_fixture.__wrapped__(tmp_path)
+    fas = repo / '.mentat/fas.json'
+    fas.write_text(json.dumps({'surfaces': [{'path': 'src.py', 'note': 'challenged claim'}]}))
+    git(repo, 'add', '.')
+    git(repo, 'commit', '-qm', 'challenged correspondence')
+    base = git(repo, 'rev-parse', 'HEAD')
+    (repo / 'src.py').write_text('def value(): return 2\n')
+    git(repo, 'commit', '-qam', 'reviewed candidate')
+    reviewed = git(repo, 'rev-parse', 'HEAD')
+    if branch == 'sibling':
+        git(repo, 'checkout', '-q', '--detach', base)
+    content = json.loads(fas.read_text())
+    if branch == 'changed-note':
+        content['surfaces'][0]['note'] = 'different unsupported claim'
+    else:
+        content['other_metadata'] = 'unrelated edit'
+    fas.write_text(json.dumps(content))
+    git(repo, 'commit', '-qam', 'foreign work')
+    foreign = git(repo, 'rev-parse', 'HEAD')
+    store = Store(tmp_path / 'barrier/state.db')
+    session = store.new_session(str(repo), base, reviewed, {}, 1, 1000)
+    store.register_source_pass(session, 'cycle', 'challenged-item', reviewed, base,
+                               'plan', 'check', ['batch'], continuing=False)
+    store.block_source_cycle(session, 'cycle', reviewed, 'source correction needs adjudication')
+    coordinator = Coordinator(repo, store, Agent(), None, None)
+    coordinator.session_id = session
+    monkeypatch.setattr(coordinator, '_final_source_plan', lambda *_: {'id': 'foreign-plan'})
+    monkeypatch.setattr(coordinator, '_final_source_batches', lambda *_: [
+        {'id': 'foreign-batch', 'obligations': []}])
+    monkeypatch.setattr(coordinator, '_enqueue_reviewers', lambda *_: None)
+    with pytest.raises(ValueError):
+        if operation == 'source':
+            coordinator._start_final_sources(
+                {'loop': 'ivl', 'item_id': 'foreign-item', 'payload': {}},
+                {'head': foreign, 'parent': base}, {'check_key': 'foreign-check'})
+        elif operation == 'aggregate':
+            store.enqueue_job(session, 'ivl', 'code-reviewer', 'foreign-final', 'input',
+                              {'kind': 'review_final', 'target_head': foreign})
+        else:
+            store.begin_remote_effect(session, f'{operation}_started', {'head': foreign})
+    snapshot = store.snapshot(session)
+    assert len(store.source_cycles(session)) == 1
+    assert not any(event['kind'] in {'publication_started', 'merge_started'} for event in snapshot['events'])
+    assert not any(job['payload'].get('kind') == 'review_final' for job in snapshot['jobs'])
+
+
+@pytest.mark.parametrize('retry_kind', ['defer', 'capacity'])
+def test_authorized_correction_hands_off_frontier(tmp_path, retry_kind):
+    from mentat.autonomy import Coordinator, ReviewContextCapacity, default_config
+    from mentat.autonomy_state import Store
+
+    repo = repo_fixture.__wrapped__(tmp_path)
+    head = git(repo, 'rev-parse', 'HEAD')
+    (repo / 'src.py').write_text('def value(): return 3\n')
+    git(repo, 'commit', '-qam', 'unreviewed partial correction')
+    candidate = git(repo, 'rev-parse', 'HEAD')
+    store = Store(tmp_path / 'handoff/state.db')
+    config = default_config(repo)
+    session = store.new_session(str(repo), head, head, config, 1, 1000)
+    store.register_source_pass(session, 'cycle', 'logical-final-item', head, head,
+                               'plan', 'check', ['batch'], continuing=False)
+    for index, role in enumerate(('code-reviewer', 'data-reviewer')):
+        store.enqueue_job(session, 'ivl', role, f'source-{index}', f'input-{index}',
+                          _source_job_payload(head, 'plan', 'check'))
+    jobs = [store.claim_job(session, f'worker-{index}', now=2) for index in range(2)]
+    feedback = []
+    for index, source_job in enumerate(jobs):
+        result = _review_result() if index == 0 else _review_result(decision='accept', corrections=[])
+        decision_id = f'decision-{index}'
+        outcome, decision = _source_outcome_and_decision(
+            source_job['id'], head, 'check', f'reviewer-{index}', decision_id, result)
+        store.finish_job(source_job['id'], source_job['lease_token'], outcome, now=3)
+        store.record_source_decision(session, 'cycle', decision)
+        store.finish_transition(source_job['id'])
+        feedback.append({'job_id': source_job['id'], 'decision_id': decision_id, 'result': result})
+    payload = {'kind': 'generate_spec', 'target_head': head, 'accepted_spec_base': head,
+               'review_base': head, 'source_cycle_id': 'cycle', 'source_cycle_round': 1,
+               'feedback': feedback, 'targetfiles': ['src.py', 'other.py'], 'batch_limit': 3}
+    correction_id = store.finalize_source_correction(
+        session, 'cycle', head, feedback, 'correction', 'input', payload,
+        actionable=True, max_attempts=3)
+    correction = store.claim_job(session, 'corrector', now=4)
+    assert correction and correction['id'] == correction_id
+    outcome = {'status': 'succeeded', 'head': head, 'context_pending': ['src.py'],
+               'context_included': ['other.py'], 'context_unavailable': [],
+               'result': {'decision': 'defer', 'summary': 'Continue with smaller frontier', 'findings': []}}
+    if retry_kind == 'capacity':
+        outcome['head'] = candidate
+        outcome['result']['decision'] = 'accept'
+    store.finish_job(correction_id, correction['lease_token'], outcome, now=5)
+    coordinator = Coordinator(repo, store, Agent(), None, None)
+    coordinator.session_id = session
+    coordinator.config = config
+    proposal = {'head': candidate, 'parent': head, 'accepted_spec_base': head, 'round': 0,
+                'root_item': 'logical-final-item', 'author_id': 'corrector'}
+    def advance():
+        if retry_kind == 'defer':
+            coordinator._advance(correction, outcome)
+        else:
+            coordinator._handle_spec_capacity(correction, proposal, ReviewContextCapacity(
+                'review does not fit', {'src.py'}))
+    advance()
+    successors = [job for job in store.snapshot(session)['jobs']
+                  if job['payload'].get('kind') == 'generate_spec' and job['id'] != correction_id]
+    assert len(successors) == 1
+    successor = successors[0]
+    assert successor['payload']['targetfiles'] == (
+        ['src.py'] if retry_kind == 'defer' else ['src.py', 'other.py'])
+    assert successor['payload']['feedback'] == feedback
+    assert successor['payload']['target_head'] == head
+    assert successor['payload']['accepted_spec_base'] == head
+    if retry_kind == 'capacity':
+        assert 'review does not fit' in successor['payload']['capacity_feedback']['reason']
+    assert successor['payload']['source_cycle_id'] == 'cycle'
+    assert successor['payload']['source_cycle_round'] == 1
+    cycle = store.source_cycles(session)[0]
+    assert cycle['correction_job_id'] == successor['id'] and cycle['failed_passes'] == 1
+    advance()
+    assert len([job for job in store.snapshot(session)['jobs']
+                if job['payload'].get('kind') == 'generate_spec']) == 2
+    assert store.source_cycles(session)[0]['failed_passes'] == 1
+    claimed = store.claim_job(session, 'next-corrector', now=6)
+    assert claimed and claimed['id'] == successor['id']
+
+
+@pytest.mark.parametrize('finished_before_fence', [False, True])
+@pytest.mark.parametrize('kind', ['review_final', 'review_spec'])
+def test_foreign_inflight_review_is_preserved_and_held_during_correction(tmp_path, finished_before_fence, kind):
+    from mentat.autonomy import Coordinator
+    from mentat.autonomy_state import Store
+
+    repo = repo_fixture.__wrapped__(tmp_path)
+    store = Store(tmp_path / 'held/state.db')
+    session = store.new_session(str(repo), 'base', 'challenged', {}, 1, 1000)
+    payload = {'kind': kind, 'target_head': 'foreign-head'}
+    loop = 'scl' if kind == 'review_spec' else 'ivl'
+    job_id = store.enqueue_job(session, loop, 'code-reviewer', 'foreign-review', 'input', payload)
+    job = store.claim_job(session, 'foreign-worker', now=2)
+    assert job and job['id'] == job_id
+    queued_id = store.enqueue_job(session, loop, 'data-reviewer', 'queued-foreign', 'input', payload)
+    peer = store.claim_job(session, 'peer-worker', now=2) if kind == 'review_spec' else None
+    if peer:
+        assert peer['id'] == queued_id
+    outcome = {'status': 'succeeded', 'result': {'decision': 'accept', 'summary': 'actual result'}}
+    if finished_before_fence:
+        store.finish_job(job_id, job['lease_token'], outcome, now=3)
+        if peer:
+            store.finish_job(peer['id'], peer['lease_token'], outcome, now=3)
+    store.register_source_pass(session, 'cycle', 'challenged-item', 'challenged', 'base',
+                               'plan', 'check', ['batch'], continuing=False)
+    store.block_source_cycle(session, 'cycle', 'challenged', 'source correction unresolved')
+    if not finished_before_fence:
+        store.finish_job(job_id, job['lease_token'], outcome, now=4)
+        if peer:
+            store.finish_job(peer['id'], peer['lease_token'], outcome, now=4)
+    saved = next(row for row in store.snapshot(session)['jobs'] if row['id'] == job_id)
+    assert saved['outcome'] == outcome and saved['status'] == 'succeeded'
+    assert store.transition_status(job_id) == 'pending'
+    coordinator = Coordinator(repo, store, Agent(), None, None)
+    coordinator.session_id = session
+    coordinator._drain_transitions()
+    assert store.transition_status(job_id) == 'pending'
+    if peer:
+        assert store.transition_status(peer['id']) == 'pending'
+    assert not any(event['kind'] == 'fas_reviewed' for event in store.snapshot(session)['events'])
+    early = store.enqueue_job(session, 'iil', 'debugger', 'independent-investigation', 'early',
+                              {'kind': 'investigate_defect', 'target_head': 'foreign-head'})
+    claimed = store.claim_job(session, 'independent-worker', now=5)
+    assert claimed and claimed['id'] == early
+    if not peer:
+        queued = next(row for row in store.snapshot(session)['jobs'] if row['id'] == queued_id)
+        assert queued['status'] == 'queued'
+    assert store.transition_status(job_id) == 'pending'
+
+
+def test_unknown_remote_outcome_checkpoints_pending_source_revision(tmp_path, monkeypatch):
+    from mentat.autonomy import Coordinator
+    from mentat.autonomy_state import Store
+
+    repo = repo_fixture.__wrapped__(tmp_path)
+    head = git(repo, 'rev-parse', 'HEAD')
+    store = Store(tmp_path / 'remote-pending/state.db')
+    session = store.new_session(str(repo), head, head, {}, 1, 1000)
+    store.register_source_pass(session, 'cycle', 'item', head, head,
+                               'plan', 'check', ['batch'], continuing=False)
+    payload = _source_job_payload(head, 'plan', 'check')
+    job_id = store.enqueue_job(session, 'ivl', 'code-reviewer', 'source', 'input', payload)
+    store.enqueue_job(session, 'ivl', 'data-reviewer', 'peer', 'peer-input', payload)
+    job = store.claim_job(session, 'worker', now=2)
+    assert job and job['id'] == job_id
+    result = _review_result()
+    outcome, decision = _source_outcome_and_decision(job_id, head, 'check', 'reviewer', 'decision', result)
+    store.finish_job(job_id, job['lease_token'], outcome, now=3)
+    store.begin_remote_effect(session, 'publication_started', {'head': 'foreign-head'})
+    coordinator = Coordinator(repo, store, Agent(), None, None)
+    coordinator.session_id = session
+    # This isolates transition error handling; the real workflow separately exercises manifest validation.
+    monkeypatch.setattr(coordinator, '_advance', lambda *_: store.record_source_decision(session, 'cycle', decision))
+    coordinator._drain_transitions()
+    assert coordinator.stop.is_set()
+    assert store.transition_status(job_id) == 'pending'
+    assert not store.source_head_fenced(session, head)
+    snapshot = store.snapshot(session)
+    assert not any(row['id'] == 'decision' for row in snapshot['decisions'])
+    assert any(event['kind'] == 'remote_reconciliation_pending' for event in snapshot['events'])

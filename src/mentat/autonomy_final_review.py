@@ -256,3 +256,17 @@ def review_citation_path(citation: object, paths: set[str]) -> str | None:
     except ValueError as exc:
         raise ValueError("unsafe review citation; revise the specification proposal") from exc
     return path
+
+
+def source_timeout(configured: object, remaining: float) -> int:
+    """Bound a source-check timeout by the remaining invocation time."""
+    if type(configured) is not int or not 1 <= configured <= 30000:
+        raise ValueError("invalid source timeout")
+    return max(1, min(configured, int(remaining * 1000)))
+
+
+def citation_path(citation: str, paths: set[str]) -> str:
+    """Prefer an exact tracked filename before stripping line anchors."""
+    return citation if citation in paths else re.sub(
+        r"(?:#L\d+(?:-L?\d+)?|:\d+(?::\d+)?)$", "", citation
+    )
