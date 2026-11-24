@@ -3,6 +3,31 @@
 The approved scope and delivery gate are in [implementation-plan.md](implementation-plan.md).
 This record distinguishes implemented behavior, completed checks, and pending readiness work.
 
+## Seed correspondence correction after v9
+
+Actual v9 candidate `9e5379ba634011b1400551db76d9cc2136e253db` reached
+source review with 15 accepts, two deferrals and one revision request; it did
+not reach aggregate review or publication. Independent triage identified
+inherited seed metadata on three surfaces: the vision and positive clamp files
+remained gaps despite support for narrow observations, and the context-budget
+test carried an unsupported association with the session time, concurrency,
+retry and resume requirement. Their source files are unchanged between task
+input `8b3f2b97aee07a691b02f3d05bda879d87ea5763` and the v9 candidate.
+
+This proposal maps only the vision's stated product intent and the positive
+clamp primitive's conditional contribution; it retains the context-budget
+tests' scoped provenance association and removes the unsupported budget
+association. It changes no requirements, claims, proof status or assumptions.
+These proposed mappings require fresh independent source review; they are not
+proof, retroactive approvals or publication evidence. Automatic final-source
+feedback routing is unchanged: defer remains a checkpoint, while generic revise
+normally routes to IVL; changing that policy is separate product work.
+
+Targeted validation against the task-input FAS and tracked inventory passed:
+all 296 surfaces remain present, requirements and claims are unchanged, and only
+the three named surface records differ. Full native/Linux, protected-checker,
+independent review and a fresh real self-run remain outstanding for this change.
+
 ## Local workflow foundation
 
 PR [47](https://github.com/hypertrial/mentat/pull/47) merged as
