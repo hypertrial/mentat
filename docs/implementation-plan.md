@@ -120,6 +120,34 @@ under `notes` in the accepted surface records. Both independently deferred.
   observations. Preserve the deferred session and obtain fresh independent
   source review before any publication.
 
+### Explicit scope for a committed surface observation
+
+The protected self-run seeded one headless observation and passed the current
+proof, faulty control replay, and all configured worker commands. The default
+specification scan then added observations across the full inventory. Final
+source review deferred on the resulting broader historical evidence obligations.
+Keep that candidate and its decisions in the original ledger.
+
+- Allow an operator to select one existing tracked surface for a review-only
+  run. Require a clean committed feature revision that differs from the pinned
+  remote base only in FAS. Validate complete inventories and permit exactly one
+  changed surface record at the selected path. Preserve all requirement and
+  claim records, all other surfaces, and every tracked source byte.
+- Bind the selected path to the initial job and durable bootstrap. Validate
+  the same selection and committed change again on resume. Limit specification
+  generation to the selected source and require every agent's proposed file
+  changes to be empty. Unchanged unrelated inventory gaps remain visible in
+  FAS and source coverage.
+- Retain the original cumulative review base, independent specification and
+  implementation verification reviews, fresh configured checks and negative
+  control replay, the existing final-source plan, aggregate reviews, and all
+  publication guards. An unsupported selected observation still blocks.
+  Default discovery and work already stored by the default workflow retain
+  their existing semantics.
+- Verify invalid paths and unrelated edits, durable scope on resume, model edit
+  rejection, exact final coverage, and the unchanged default workflow. Use a
+  fresh protected run to qualify one headless observation in the current vision.
+
 ## Baseline evidence
 
 Before source changes: `scripts/verify` completed with 1,479 passed and 53 skipped in 105.85 seconds. Skips concern unavailable Lean, dedicated Linux checker, and upstream mirrors; this is not the full no-gap readiness gate. Python 3.12.16 and locked development dependencies were installed into the ignored local environment. GitHub CLI and Lima were not available on the initial sandbox PATH.
