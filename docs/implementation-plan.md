@@ -23,21 +23,23 @@ This is the ready implementation specification approved on 2026-11-23. Product a
 4. Specification convergence with persistent identities and lineage.
 5. Granular implementation verification and a narrow audited Python-to-Z3 backend.
 6. Independently reviewed implementation improvements and guarded GitHub operations.
-7. Secure localhost monitoring and optional asynchronous feedback.
+7. Headless versioned local integration, independent cockpit presentation, and optional asynchronous feedback.
 8. Compatibility, local completion checks, lean CI, fixture workflows, and Mentat self-run.
 9. Only after readiness: Titanic CAS/FAS/sidecar, existing coverage gate, first scoped direct source proof, and full-loop demonstration.
 
 ## Regression surface and acceptance
 
-Preserve legacy records, fingerprint boundaries, contracts, exit codes, and independent approval semantics. Verify job leases/fencing, crash recovery, retries across resumes, graph invalidation, malformed state, independent authorship, source identity, non-vacuity, unsupported syntax, counterexample replay, missing tools, skipped required tests, UI authentication/origin/path handling, and stale merge protection. Exercise full loops on disposable Git fixtures before a real self-run.
+Preserve legacy records, fingerprint boundaries, contracts, exit codes, and independent approval semantics. Verify job leases/fencing, crash recovery, retries across resumes, graph invalidation, malformed state, independent authorship, source identity, non-vacuity, unsupported syntax, counterexample replay, missing tools, skipped required tests, integration authentication/origin/path handling, and stale merge protection. Exercise full loops on disposable Git fixtures before a real self-run.
 
-Completion commands are `scripts/verify-fast` and `scripts/verify`, plus real worker checks in the dedicated Linux environment and browser verification of the UI. Record unavailable prerequisites explicitly; they do not count as passing readiness.
+Completion commands are `scripts/verify-fast` and `scripts/verify`, plus real worker checks in the dedicated Linux environment and real local end-to-end integration verification. Record unavailable prerequisites explicitly; they do not count as passing readiness.
 
 ## Baseline evidence
 
 Before source changes: `scripts/verify` completed with 1,479 passed and 53 skipped in 105.85 seconds. Skips concern unavailable Lean, dedicated Linux checker, and upstream mirrors; this is not the full no-gap readiness gate. Python 3.12.16 and locked development dependencies were installed into the ignored local environment. GitHub CLI and Lima were not available on the initial sandbox PATH.
 
 ## Decisions
+
+- 2026-11-24: the independent AI Cockpit owns all presentation. Mentat becomes a headless assurance engine with the versioned local JSON contract in [integration v1](integration-v1.md). Preserve qualified projections, optional feedback, cancellation and all assurance/publication authority; remove HTML/CSS/JS/rendered reports and UI launch surfaces after replacement. Keep historical evidence intact under explicit bundle-format rules. See [the accepted decision](decisions/headless-engine.md) for inventory, migration and acceptance. Finish the in-flight native gate unchanged, then verify the final reviewed integration revision and perform a fresh actual self-run before Titanic. No Cockpit repository work is included.
 
 - 2026-11-24: perform a consolidated whole-workflow preflight before the next full self-run. Repair incomplete initialization, ordinary review and optional human-feedback continuity, and safe citation projection in coordinated ownership batches. Preserve all proof, policy, source-correction, context and retry bounds; independently review and verify the stable revision, then rehearse real private GitHub/VM transport and ambiguous-outcome recovery on disposable resources. See docs/decisions/workflow-preflight-recovery.md. Titanic remains private and unchanged until actual Mentat readiness; no paid upgrades or heavier GitHub CI.
 

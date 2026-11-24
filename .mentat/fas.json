@@ -102,16 +102,31 @@
     {
       "id": "f6d43cfc-273d-5487-b265-310f1e5b2619",
       "area": "functional",
-      "statement": "The live UI presents readable CAS, FAS, loop activity, decisions, findings, evidence, and revision changes; optional feedback reaches subsequent iterations.",
+      "statement": "Mentat operates headlessly and exposes a versioned, secure, bounded local integration for specifications, claims and source links, loop/agent activity, decisions, findings, evidence, freshness and revision history; an independent cockpit owns all presentation, and optional feedback reaches subsequent eligible iterations without gating autonomous work.",
       "origin": "intended",
       "spec_path": "openspec/specs/autonomous-assurance/spec.md",
       "citations": [
         {
           "path": "docs/vision.md",
           "source": "approved product baseline, 2026-11-23"
+        },
+        {
+          "path": "docs/decisions/headless-engine.md",
+          "source": "explicit accepted product architecture decision, 2026-11-24"
         }
       ],
-      "status": "unattempted"
+      "status": "unattempted",
+      "revision": {
+        "version": 2,
+        "previous_digest": "17f82e0bd781b8b643cecd07933004938c3f93a115679a5a21b8cce5b013cc93",
+        "reason": "Explicit product decision moves all presentation to the independent AI Cockpit while preserving headless monitoring and optional feedback.",
+        "evidence": [
+          {
+            "path": "docs/decisions/headless-engine.md",
+            "source": "explicit accepted product architecture decision, 2026-11-24"
+          }
+        ]
+      }
     },
     {
       "id": "ce55ac49-b6d5-5469-833f-b5262a895ea1",
@@ -2200,6 +2215,16 @@
       "status": "unexamined",
       "requirement_ids": [],
       "reason": "New explicit configured-gate enrollment regressions; source correspondence requires independent review."
+    },
+    {
+      "path": "docs/decisions/headless-engine.md",
+      "status": "unexamined",
+      "requirement_ids": []
+    },
+    {
+      "path": "docs/integration-v1.md",
+      "status": "unexamined",
+      "requirement_ids": []
     }
   ]
 }

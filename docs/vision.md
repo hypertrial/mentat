@@ -2,7 +2,9 @@
 
 Source: [Hypertrial — Mentat](https://app.notion.com/p/Hypertrial-Mentat-419fbf156f898000ae6cf59282e35137), versioned baseline read 2026-11-23. Later source changes are proposals, not silent specification updates.
 
-Mentat continuously specifies, verifies, and improves an application during an active coding session. Humans monitor its readable live UI and may provide optional feedback; no human approval is a required loop transition. Unresolved intent and unavailable capabilities are reported while independent useful work continues. Session limits, permissions, and configured automated controls remain enforced.
+Accepted amendment, 2026-11-24: the independent AI Cockpit owns all presentation; Mentat is a headless assurance engine. This explicitly revises the earlier in-engine live UI placement. See [the product decision](decisions/headless-engine.md) and [local integration v1](integration-v1.md).
+
+Mentat continuously specifies, verifies, and improves an application during an active coding session. Humans can monitor it through the independent cockpit and may provide optional feedback; no human approval is a required loop transition. Unresolved intent and unavailable capabilities are reported while independent useful work continues. Session limits, permissions, and configured automated controls remain enforced.
 
 ## Connected specifications
 
@@ -28,6 +30,6 @@ Results identify code, specification, assumptions, model/translator, tool config
 
 ## Monitoring and autonomy
 
-The live UI supports specification browsing/search, formal claims and source links, loop/agent activity, decisions and findings, evidence, and change history. Outcomes distinguish established within scope, evidenced violation, inconclusive, unsupported, unattempted, and stale. Optional feedback informs later iterations without mandatory acknowledgment.
+The headless, versioned local integration exposes supported specifications, formal claims and immutable source links, loop/agent activity, decisions and findings, evidence, freshness and change history. The independent cockpit owns browsing, search and all other presentation. Mentat operates without any UI or connected client. Outcomes distinguish established within scope, evidenced violation, inconclusive, unsupported, unattempted, and stale. Optional feedback informs later iterations without mandatory acknowledgment.
 
 The initial product is single-user and session-scoped: two-hour invocations, three concurrent agents, three unsuccessful rounds per unchanged item, and durable resume. Stable or blocked work checkpoints and returns. A local Linux VM performs substantial checks; GitHub CI remains a syntax and whitespace check. Existing SSH and GitHub CLI authentication support guarded PRs and merges during active sessions. Local controller and GitHub-account integrity are trusted; no independent remote attestation is claimed.
