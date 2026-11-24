@@ -33,6 +33,44 @@ Preserve legacy records, fingerprint boundaries, contracts, exit codes, and inde
 
 Completion commands are `scripts/verify-fast` and `scripts/verify`, plus real worker checks in the dedicated Linux environment and real local end-to-end integration verification. Record unavailable prerequisites explicitly; they do not count as passing readiness.
 
+## Completion checkpoint after PR 78
+
+Recovery baseline: `8a5bb66ed6d0b76180f0133220186b6ca99c6612`. The merged
+headless checkpoint did not finish qualification. Use the existing local v1
+contract, workflow preflight and private merge decisions as acceptance criteria.
+The handoff ends at a verified `main` revision and tested installable artifacts.
+Cockpit compatibility is verified in Mentat using a real loopback client. A
+standalone Cockpit build and a tagged public release are separate milestones.
+
+1. Rerun the affected citation, inspector CLI, historical record, qualification,
+   publication, and bundle tests. Reproduce and resolve current failures. Preserve
+   historical bytes and receipts and the explicit distinction between legacy and
+   machine-only bundles. Verify the installed CLI and package surface.
+2. Exercise the v1 client contract through the real adapter, including discovery,
+   paging, reconnect, controller generations, evidence freshness, safe citations,
+   bounded requests, feedback and stop. Recheck bootstrap recovery, independent
+   review cohorts, correction bounds, and current publication authority using
+   the focused workflow suites.
+3. Preflight complete inventory, exact-base and immediate-parent lineage, tool
+   identities and prerequisites. On one independently reviewed frozen candidate,
+   run `scripts/verify` and `scripts/check-autonomy-package` on macOS and the
+   dedicated Linux worker, plus Linux `scripts/verify-worker` with zero checker
+   skips. Record optional suite skips. Deliver through normal PR protection and
+   confirm the accepted tree on `main` and the lightweight hosted check.
+4. Rehearse with a fresh state and disposable private GitHub repository using
+   actual model roles and Lima gates. Demonstrate a failing gate, independently
+   accepted repair, observed guarded merge, and a separate lost-acknowledgement
+   reconciliation with no repeated dispatch. Distinguish the injected client
+   fault from actual service behavior.
+5. Run a fresh scoped Mentat self-qualification under protected mode. Review
+   and verify an actual headless specification contribution, run the current
+   clamp proof and faulty-control replay, qualify all required source batches
+   and aggregate reviews, and observe guarded publication and merge. Record
+   exact candidate, controller and merged identities and link the gate evidence.
+   Historical or unresolved runs do not qualify. The disposable fixture supplies
+   the separate improvement-loop demonstration. Titanic work starts only after
+   these gates pass; its private repository, coverage and data stay intact.
+
 ## Baseline evidence
 
 Before source changes: `scripts/verify` completed with 1,479 passed and 53 skipped in 105.85 seconds. Skips concern unavailable Lean, dedicated Linux checker, and upstream mirrors; this is not the full no-gap readiness gate. Python 3.12.16 and locked development dependencies were installed into the ignored local environment. GitHub CLI and Lima were not available on the initial sandbox PATH.
