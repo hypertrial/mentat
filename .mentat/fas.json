@@ -817,6 +817,12 @@
       "reason": "Awaiting independently reviewed source correspondence."
     },
     {
+      "path": "src/mentat/autonomy_git_transaction.py",
+      "status": "unexamined",
+      "requirement_ids": [],
+      "reason": "New bounded private receive-pack transport work awaits independently reviewed source correspondence and verification; no formal transport or whole-application proof is claimed."
+    },
+    {
       "path": "src/mentat/autonomy_policy.py",
       "status": "gap",
       "requirement_ids": [],
@@ -1804,6 +1810,12 @@
       "status": "gap",
       "requirement_ids": [],
       "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/test_autonomy_git_transaction.py",
+      "status": "unexamined",
+      "requirement_ids": [],
+      "reason": "New bounded private receive-pack transport work awaits independently reviewed source correspondence and verification; no formal transport or whole-application proof is claimed."
     },
     {
       "path": "tests/test_autonomy_integration.py",

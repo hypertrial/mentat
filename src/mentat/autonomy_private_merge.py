@@ -14,7 +14,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from . import gitio
+from . import autonomy_git_transaction, gitio
 
 Git = Callable[..., str]
 API = Callable[[str], Any]
@@ -568,30 +568,20 @@ def merge(
     _expect_refs(repo, git, branch, head, base, policy)
     if not active():
         return {"status": "incomplete", "reason": "session is not active"}
-    # Both refs actually change. Git's atomic transaction must validate both old
-    # values; no-op refspecs would not provide an atomic PR-head fence.
-    push_args = (
-        "push",
-        "--atomic",
-        "--no-follow-tags",
-        "--recurse-submodules=no",
-        "--force-with-lease=refs/heads/main:" + base,
-        "--force-with-lease=refs/heads/" + branch + ":" + head,
-        remote_url(policy),
-        oid + ":refs/heads/main",
-        oid + ":refs/heads/" + branch,
+    def before_send() -> None:
+        inspect_repository(repo, policy, git, api)
+        fresh = api(f"repos/{policy['repository']}/pulls/{number}")
+        if _open(fresh, policy, number, head, base) != branch:
+            raise ValueError("private publication branch changed")
+        _intent(record, policy, head, base, branch, tree, fresh)
+        _expect_refs(repo, git, branch, head, base, policy)
+        if not active():
+            raise ValueError("session is not active")
+        dispatch(intended)
+
+    autonomy_git_transaction.transact(
+        repo, policy["repository"], base, head, oid, branch, before_send, active=active
     )
-    git(repo, *push_args[:1], "--dry-run", *push_args[1:])
-    inspect_repository(repo, policy, git, api)
-    fresh = api(f"repos/{policy['repository']}/pulls/{number}")
-    if _open(fresh, policy, number, head, base) != branch:
-        raise ValueError("private publication branch changed")
-    _intent(record, policy, head, base, branch, tree, fresh)
-    _expect_refs(repo, git, branch, head, base, policy)
-    if not active():
-        return {"status": "incomplete", "reason": "session is not active"}
-    dispatch(intended)
-    git(repo, *push_args)
 
     # A successful push alone does not establish that GitHub recognized this PR.
     # An uncertain/lagging response is reconciled through the existing journal.

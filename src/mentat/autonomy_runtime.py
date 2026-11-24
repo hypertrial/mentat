@@ -24,11 +24,23 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from . import autonomy_private_merge, autonomy_worker, gitio, process, project
+from . import (
+    autonomy_git_transaction,
+    autonomy_private_merge,
+    autonomy_worker,
+    gitio,
+    process,
+    project,
+)
 from .autonomy_state import record_digest
 
 # Refuse to attest code that changed after this process imported its implementation.
-_LOADED_EXECUTION_SOURCES = (Path(__file__).read_bytes(), Path(autonomy_worker.__file__).read_bytes(), Path(autonomy_private_merge.__file__).read_bytes())
+_LOADED_EXECUTION_SOURCES = (
+    Path(__file__).read_bytes(),
+    Path(autonomy_worker.__file__).read_bytes(),
+    Path(autonomy_private_merge.__file__).read_bytes(),
+    Path(autonomy_git_transaction.__file__).read_bytes(),
+)
 
 
 def _execution_digest(parts: list[bytes]) -> str:
@@ -41,7 +53,12 @@ def _execution_digest(parts: list[bytes]) -> str:
 
 def execution_identity() -> str:
     """Fingerprint the executing worker implementation and its trusted assets."""
-    sources = (Path(__file__).read_bytes(), Path(autonomy_worker.__file__).read_bytes(), Path(autonomy_private_merge.__file__).read_bytes())
+    sources = (
+        Path(__file__).read_bytes(),
+        Path(autonomy_worker.__file__).read_bytes(),
+        Path(autonomy_private_merge.__file__).read_bytes(),
+        Path(autonomy_git_transaction.__file__).read_bytes(),
+    )
     if sources != _LOADED_EXECUTION_SOURCES:
         raise ValueError("trusted execution code changed after import; restart required")
     assets = autonomy_worker.worker_assets()

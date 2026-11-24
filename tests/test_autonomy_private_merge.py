@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from mentat import autonomy_git_transaction as transaction
 from mentat import autonomy_private_merge as private
 from mentat import autonomy_runtime as runtime
 from mentat.autonomy import default_config, state_path, validate_config
@@ -105,6 +106,30 @@ class Remote:
         monkeypatch.setattr(runtime, "git", self.git)
         monkeypatch.setattr(runtime, "_gh", self.gh)
         monkeypatch.setattr(private.time, "sleep", lambda _: None)
+        actual_transact = transaction.transact
+
+        def launch(repository, env):
+            self.preflights.append(repository)
+            return subprocess.Popen(
+                ["git", "receive-pack", str(self.bare)], stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, start_new_session=True,
+            )
+
+        def transact(repo, repository, base, head, oid, branch, before_send, **kwargs):
+            def after_advertisement():
+                before_send()
+                self.pushes.append((base, head, oid, branch))
+                if self.late_metadata:
+                    self.late_metadata()
+                if self.race:
+                    target, moved = self.race
+                    run(self.bare, "update-ref", "refs/heads/" + target, moved)
+            actual_transact(repo, repository, base, head, oid, branch, after_advertisement, **kwargs)
+            if self.lost_push_reply:
+                raise RuntimeError("lost actual receive-pack acknowledgement")
+
+        monkeypatch.setattr(transaction, "_start_receive_pack", launch)
+        monkeypatch.setattr(transaction, "transact", transact)
 
     def ref(self, name):
         return run(self.bare, "rev-parse", "refs/heads/" + name)
@@ -317,10 +342,7 @@ def test_exact_tree_two_parent_merge_and_reconcile(remote):
         "refs/heads/main",
         "refs/heads/" + remote.branch,
     ]
-    assert len(remote.pushes) == 1 and "--atomic" in remote.pushes[0]
-    assert "--force-with-lease=refs/heads/main:" + remote.base in remote.pushes[0]
-    assert "--force-with-lease=refs/heads/" + remote.branch + ":" + remote.head in remote.pushes[0]
-    assert not any(a in {"--force", "--delete", "--admin"} for a in remote.pushes[0])
+    assert remote.pushes == [(remote.base, remote.head, oid, remote.branch)]
     before = remote.ref("main")
     reconciled = remote.gateway().reconcile(remote.repo, remote.branch, remote.head, remote.base)
     assert reconciled["status"] == "found" and reconciled["state"] == "merged"

@@ -35,6 +35,7 @@ VERIFIER_MODULES = (
     "__init__",
     "autonomy",
     "autonomy_final_review",
+    "autonomy_git_transaction",
     "autonomy_review_inputs",
     "autonomy_source_corrections",
     "autonomy_cli",
