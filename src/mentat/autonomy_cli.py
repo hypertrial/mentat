@@ -75,11 +75,11 @@ def register(app: typer.Typer) -> None:
     app.add_typer(worker_app, name="worker")
 
     @app.command("init")
-    def init_workspace(ctx: typer.Context, repo: Repo) -> None:
+    def init_workspace(ctx: typer.Context, repo: Repo, merge_policy: Annotated[str, typer.Option(help="Trusted merge enforcement: github-protected or explicit controller-private.")] = "github-protected") -> None:
         """Initialize a versioned autonomy policy without altering application runtime."""
         try:
             config = initialize(repo)
-            policy = pin_policy(repo, ctx.obj["state"], config)
+            policy = pin_policy(repo, ctx.obj["state"], config, merge_policy=merge_policy)
             _emit({"schema_version": 1, "status": "initialized", "configuration": config,
                    "local_policy": policy,
                    "next": "Review and commit .mentat/workspace.json, then run mentat run --repo PATH."})

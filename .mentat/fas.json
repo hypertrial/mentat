@@ -130,8 +130,16 @@
         "previous_digest": "5dce14074b117f57219e79a8accf1931eed26127f4a43740460e602b775c7564",
         "reason": "Clarify the per-invocation time limit while retaining durable work limits on resume.",
         "evidence": [
-          {"path": "docs/vision.md", "revision": "924e4f417328bcea67b3aa899ba1d8ea85126f0a", "source": "Approved vision specifies two-hour invocations, three concurrent agents, three unsuccessful rounds per unchanged item and durable resume."},
-          {"path": "docs/implementation-plan.md", "revision": "924e4f417328bcea67b3aa899ba1d8ea85126f0a", "source": "Versioned implementation decisions preserve invocation limits and durable attempts across resume."}
+          {
+            "path": "docs/vision.md",
+            "revision": "924e4f417328bcea67b3aa899ba1d8ea85126f0a",
+            "source": "Approved vision specifies two-hour invocations, three concurrent agents, three unsuccessful rounds per unchanged item and durable resume."
+          },
+          {
+            "path": "docs/implementation-plan.md",
+            "revision": "924e4f417328bcea67b3aa899ba1d8ea85126f0a",
+            "source": "Versioned implementation decisions preserve invocation limits and durable attempts across resume."
+          }
         ]
       },
       "status": "unattempted"
@@ -237,16 +245,32 @@
     {
       "id": "72ae2fdf-994e-5ad4-b214-e0e65fa1a39f",
       "area": "acceptance",
-      "statement": "Existing SSH and gh authentication advance qualifying PRs only during active sessions, with exact-revision local checks, independent reviews, enforced branch rules, and two reviews for sensitive changes.",
+      "statement": "Existing SSH and gh authentication advance qualifying PRs only during active sessions, with exact-revision local checks, independent reviews, and two reviews for sensitive changes. Default merges require enforced GitHub branch rules; an explicitly pinned controller-private policy instead requires private repository identity, atomic exact-base/head fast-forward updates and exact tested-tree reconciliation under the trusted local controller.",
       "origin": "intended",
       "spec_path": "openspec/specs/autonomous-assurance/spec.md",
       "citations": [
         {
           "path": "docs/vision.md",
           "source": "approved product baseline, 2026-11-23"
+        },
+        {
+          "path": "docs/decisions/private-repository-merging.md",
+          "source": "User-approved preparation of an explicit private, zero-cost controller-enforced policy on 2026-11-24; adoption requires independent acceptance."
         }
       ],
-      "status": "unattempted"
+      "status": "unattempted",
+      "revision": {
+        "version": 2,
+        "previous_digest": "28e5adf08585655742a8827f369d033b7b650b0a22b8100ffed6970bd309d931",
+        "reason": "Add the user-approved explicit private zero-cost enforcement policy while retaining protected mode as default and preserving all local verification and review requirements.",
+        "evidence": [
+          {
+            "path": "docs/decisions/private-repository-merging.md",
+            "revision": "e20064885d637c2a8b4187dbe3b35752f1e78ee3",
+            "source": "Records the explicit private/no-payment user decision, separate policy pinning, both-ref atomic update, exact tested tree and mode-specific recovery requirements."
+          }
+        ]
+      }
     },
     {
       "id": "2bcfa241-162e-5b32-8b37-79deae3acd37",
@@ -423,6 +447,12 @@
       "status": "gap",
       "requirement_ids": [],
       "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "docs/decisions/private-repository-merging.md",
+      "status": "unexamined",
+      "requirement_ids": [],
+      "reason": "New controller-private merge work awaits independently reviewed correspondence and verification; no whole-application proof is claimed."
     },
     {
       "path": "docs/evidence/identity-fixture.json",
@@ -787,10 +817,22 @@
       "reason": "Awaiting independently reviewed source correspondence."
     },
     {
+      "path": "src/mentat/autonomy_git_transaction.py",
+      "status": "unexamined",
+      "requirement_ids": [],
+      "reason": "New bounded private receive-pack transport work awaits independently reviewed source correspondence and verification; no formal transport or whole-application proof is claimed."
+    },
+    {
       "path": "src/mentat/autonomy_policy.py",
       "status": "gap",
       "requirement_ids": [],
       "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "src/mentat/autonomy_private_merge.py",
+      "status": "unexamined",
+      "requirement_ids": [],
+      "reason": "New controller-private merge work awaits independently reviewed correspondence and verification; no whole-application proof is claimed."
     },
     {
       "path": "src/mentat/autonomy_review_inputs.py",
@@ -1770,6 +1812,12 @@
       "reason": "Awaiting independently reviewed source correspondence."
     },
     {
+      "path": "tests/test_autonomy_git_transaction.py",
+      "status": "unexamined",
+      "requirement_ids": [],
+      "reason": "New bounded private receive-pack transport work awaits independently reviewed source correspondence and verification; no formal transport or whole-application proof is claimed."
+    },
+    {
       "path": "tests/test_autonomy_integration.py",
       "status": "gap",
       "requirement_ids": [],
@@ -1780,6 +1828,12 @@
       "status": "gap",
       "requirement_ids": [],
       "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/test_autonomy_private_merge.py",
+      "status": "unexamined",
+      "requirement_ids": [],
+      "reason": "New controller-private merge work awaits independently reviewed correspondence and verification; no whole-application proof is claimed."
     },
     {
       "path": "tests/test_autonomy_proof_sources.py",

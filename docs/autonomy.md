@@ -23,7 +23,7 @@ uv run --locked mentat worker provision
 
 Install Lima on the controller before provisioning. The managed Ubuntu ARM64 VM has no host directory mounts or port forwarding. The pinned image digest is published in [Canonical's checksums](https://cloud-images.ubuntu.com/releases/noble/release-20261017/SHA256SUMS). Generated verification and application execution belongs inside its bounded guest sandbox. The Lean checker retains its separately pinned toolchain and axiom policies.
 
-Git operations use the existing SSH remote. PR and merge operations use existing `gh` authentication. Missing CLI authentication, unreadable branch rules, stale checks, or unavailable worker tools prevent the corresponding operation; they never cause a fallback to an unguarded merge or host execution. Provision the application's development dependencies in the trusted worker environment before requiring its checks.
+Git operations use the existing SSH remote. PR metadata and protected merges use existing `gh` authentication. Missing CLI authentication, unreadable branch rules in protected mode, stale checks, or unavailable worker tools prevent the corresponding operation; errors never select another enforcement policy or host execution. Provision the application's development dependencies in the trusted worker environment before requiring its checks.
 
 Writable build caches stay outside the application checkout. Provisioning seeds
 the pinned isolated-build dependency closure before freezing the trusted cache.
@@ -156,6 +156,28 @@ Exit 0 means the declared obligation was proved within the reported assumptions,
 
 Run `scripts/verify` locally, with additional application, worker, proof, browser, and packaging commands as required by the configured gate. GitHub's small syntax/whitespace job is not evidence that those local checks ran.
 
-The controller records local command results and independent reviews against the exact PR head and base, publishes a compact PR summary through `gh`, and merges only while its session remains active. It checks enforced branch protection and required checks again before a match-head merge. If strict freshness cannot be established, the PR remains unmerged. Raw logs and large artifacts stay local; review them before sharing.
+The controller records local command results and independent reviews against the exact PR head and base, publishes a compact PR summary through `gh`, and merges only while its session remains active. The default protected mode checks enforced branch protection and required checks again before a match-head squash merge. If strict freshness cannot be established, the PR remains unmerged. Raw logs and large artifacts stay local; review them before sharing.
 
 The controller, its local records, and the authenticated GitHub account are trusted. There is no separate signer, signed receipt, or independent remote attestation of a local run. Legacy evidence receipts continue to serve their existing integrity role.
+
+## Explicit private repository enforcement
+
+A private GitHub repository on a free organization can use a separately pinned controller policy without paid upgrades or public visibility. This policy trusts the local controller, its authenticated checks and independent reviews, and the GitHub account; GitHub does not enforce branch-protection rules for this mode. The protected mode remains the default, and a 403 never enables this mode automatically.
+
+Set the versioned workspace `auto_merge` to true before initializing a fresh state, then explicitly select the policy:
+
+```sh
+mentat --state /absolute/new/private-state init --repo /absolute/repo --merge-policy controller-private
+```
+
+Initialization pins the private repository and owner IDs/node IDs, name and visibility and the merge policy alongside the existing minimum checks in local policy version 3. The workspace schema stays unchanged. An existing state cannot switch policies; use a new state and session. Review and commit the workspace before running the controller.
+
+After all current checks and reviews qualify, the controller validates its private repository and PR identities and prepares a merge commit whose tree exactly matches the tested candidate and whose ordered parents are the verified base and head. One SSH receive-pack transaction explicitly submits both expected-old ref updates, fast-forwarding main and the controller-owned PR branch to that derived commit. The server must advertise atomic and report-status support; both exact old values are checked in the atomic server transaction even if a concurrent update reaches the intended target. Missing capabilities or a stale head or base prevents the transaction. The controller rechecks session and repository/PR metadata before dispatch; those metadata observations are outside the atomic ref transaction. No history rewrite, branch deletion, admin bypass or paid API is used.
+
+The PR head becomes the authorized derived commit. Success requires GitHub to confirm that exact PR and mode-specific merge shape. An uncertain push response or delayed GitHub state remains incomplete and uses the existing durable reconciliation path; the controller never repeats a write merely because its response was lost. Full local controls and independent review are required before activating this feature.
+
+Private merge intents are durably journaled before dispatch, including the exact derived OID and raw commit bytes. The controller revalidates its publication checks, source barrier/epoch, local policy and tools at that boundary. Recovery accepts only that recorded intent, including when a push acknowledgement is lost; an unrelated same-shape commit is insufficient. Repository-local Git redirection/includes and implicit transport commands are rejected; inherited Git overrides are neutralized while trusted SSH authentication remains available.
+
+The two-ref transaction does not lock GitHub PR state, visibility or permissions. Those are rechecked observations. A late closure or access change can leave applied refs with an unconfirmed PR result; the controller preserves the intent and checkpoints rather than claiming success or rolling back history. GitHub may report the original approved or the derived PR head; the confirmed merge OID must still equal the exact intended two-parent commit. This is Mentat-operated delivery, not GitHub's paid native auto-merge feature.
+
+The intent pins the original PR number and immutable PR ID/node ID. A separate durable dispatch marker is written exactly once immediately before sending both update commands in the same bounded SSH process that supplied the capability advertisement. Pack construction and capability negotiation happen before that marker. Protocol status for both refs is required; process exit code zero alone does not establish success. Prepared and undispatched work may proceed through fresh guards. Once dispatched, unchanged/open observations remain unknown and never permit another write or a replacement PR/intent. An uncertain network outcome may therefore remain an honest checkpoint until the exact intended result is positively observed. This first mode implements strict no-replay, not bounded idempotent transport retries.

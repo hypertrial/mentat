@@ -149,11 +149,16 @@ The independent discriminator inspects the relevant source, revision-bound evide
 ### Requirement: guarded-merges
 <!-- mentat:requirement-id=72ae2fdf-994e-5ad4-b214-e0e65fa1a39f; area=acceptance -->
 
-Existing SSH and gh authentication advance qualifying PRs only during active sessions, with exact-revision local checks, independent reviews, enforced branch rules, and two reviews for sensitive changes.
+Existing SSH and gh authentication advance qualifying PRs only during active sessions, with exact-revision local checks, independent reviews, and two reviews for sensitive changes. Default merges require enforced GitHub branch rules; an explicitly pinned controller-private policy instead requires private repository identity, atomic exact-base/head fast-forward updates and exact tested-tree reconciliation under the trusted local controller.
 
 #### Scenario: guarded-merges acceptance
 
 The independent discriminator inspects the relevant source, revision-bound evidence, assumptions, and explicit coverage gaps. Missing or stale evidence remains unresolved; agent agreement alone does not establish correctness.
+
+#### Scenario: controller-private merge policy
+
+An operator explicitly initializes a new trusted state with the controller-private policy for one private GitHub repository. The same exact-candidate local verification and independent reviews remain mandatory. The controller creates a two-parent merge commit with the tested candidate tree and atomically fast-forwards both main and its publication branch through one receive-pack request containing both explicit approved-old-to-derived-new ref commands. The server must compare both old OIDs, including a ref that concurrently reaches the derived target. Either stale old value rejects the whole transaction. Missing atomic support never selects a sequential fallback. Unknown remote effects checkpoint and reconcile only the mode-specific derived commit. Public visibility, changed identity, stale evidence or inactive authorization blocks the operation; no paid feature or visibility change is used.
+
 
 ### Requirement: source-fixture
 <!-- mentat:requirement-id=2bcfa241-162e-5b32-8b37-79deae3acd37; area=acceptance -->

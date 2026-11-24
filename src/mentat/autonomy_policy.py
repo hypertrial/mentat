@@ -4,10 +4,44 @@ This is an ordinary trusted local file, not a signed attestation or identity sys
 """
 
 import copy
+import hashlib
 import json
 import os
 import tempfile
 from pathlib import Path
+
+from . import autonomy_private_merge
+
+
+def workspace_state_path(repo: Path, state_root: Path) -> Path:
+    root = state_root.expanduser().resolve()
+    if root.is_relative_to(repo.resolve()):
+        raise ValueError("autonomy state must be outside the application repository")
+    root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    return (
+        root / "workspaces" / hashlib.sha256(str(repo.resolve()).encode()).hexdigest() / "state.db"
+    )
+
+
+def workspace_config(repo: Path, model: str) -> dict:
+    local, worker = minimum_gates(repo)
+    return {
+        "schema_version": 1,
+        "model": model,
+        "reasoning_effort": "high",
+        "session_seconds": 7200,
+        "concurrency": 3,
+        "max_attempts": 3,
+        "auto_merge": bool(local or worker),
+        "base_branch": "main",
+        "remote": "origin",
+        "local_checks": local,
+        "worker_checks": worker,
+        "source_checks": minimum_source_checks(repo),
+        "worker": "mentat-autonomy",
+        "scope": "all first-party application surfaces; trust boundaries and gaps remain explicit",
+    }
+
 
 
 def _commands(value: object) -> list[list[str]]:
@@ -41,17 +75,22 @@ def minimum_source_checks(repo: Path) -> list[dict]:
     }]
 
 
-def pin_policy(repo: Path, state_root: Path, config: dict) -> dict:
+def pin_policy(repo: Path, state_root: Path, config: dict, *, merge_policy: str = "github-protected") -> dict:
     from .autonomy import state_path, validate_source_checks
-    from .autonomy_runtime import git
+    from .autonomy_runtime import gh, git
     from .autonomy_worker import profile_identity
 
+    if merge_policy not in {"github-protected", "controller-private"}:
+        raise ValueError("unsupported merge policy")
     validate_source_checks(config["source_checks"])
     path = state_path(repo, state_root).parent / "policy.json"
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     if path.exists():
         policy = load_policy_path(path.with_name("state.db"))
         check_policy(config, policy)
+        current = merge_authority(policy)
+        if (current["mode"] if current else "github-protected") != merge_policy:
+            raise ValueError("merge authority changed; use a new --state and session")
         return policy
     local, worker = minimum_gates(repo)
     controller_repo = Path(__file__).resolve().parents[2]
@@ -68,6 +107,12 @@ def pin_policy(repo: Path, state_root: Path, config: dict) -> dict:
         "trust": "local controller, local records and authenticated GitHub account",
         "worker_profile": worker_profile,
     }
+    if merge_policy == "controller-private":
+        name = json.loads(gh(repo, "repo", "view", "--json", "nameWithOwner"))["nameWithOwner"]
+        def api(route: str) -> object:
+            return json.loads(gh(repo, "api", "--hostname", "github.com", route))
+        policy["merge_policy"] = autonomy_private_merge.pin_repository(repo, name, git, api)
+        policy["schema_version"] = 3
     minimum = minimum_source_checks(repo)
     for item in minimum:
         required_cases = item["counterexample_cases"]
@@ -98,21 +143,36 @@ def load_policy_path(store_path: Path) -> dict:
     if path.is_symlink() or not path.is_file() or path.stat().st_size > 65536:
         raise ValueError("initialize a trusted local workspace policy before autonomous work")
     value = json.loads(path.read_text())
-    if not isinstance(value, dict) or value.get("schema_version") not in (1, 2):
+    if not isinstance(value, dict) or value.get("schema_version") not in (1, 2, 3):
         raise ValueError("unsupported local policy")
     _commands(value.get("mandatory_local_checks"))
     _commands(value.get("mandatory_worker_checks"))
-    if value["schema_version"] == 2:
+    merge_authority(value)
+    if value["schema_version"] in (2, 3):
         from .autonomy import validate_source_checks
         validate_source_checks(value.get("mandatory_source_checks"))
     return copy.deepcopy(value)
 
 
+def merge_authority(policy: dict) -> dict | None:
+    version = policy.get("schema_version")
+    if version in (1, 2):
+        if "merge_policy" in policy:
+            raise ValueError("legacy policy cannot grant private merge authority")
+        return None
+    if version == 3:
+        value = autonomy_private_merge.validate_policy(policy.get("merge_policy"))
+        if value is not None:
+            return value
+    raise ValueError("unsupported local merge authority")
+
+
 def check_policy(config: dict, policy: dict) -> None:
+    merge_authority(policy)
     version = policy.get("schema_version")
     if version == 1 and any(check.get("counterexample_cases") for check in config["source_checks"]):
         raise ValueError("counterexample cases require a new --state, policy and session")
-    if version == 2:
+    if version in (2, 3):
         descriptors = [json.dumps(check, sort_keys=True, separators=(",", ":"), allow_nan=False)
                        for check in config["source_checks"]]
         if len(descriptors) != len(set(descriptors)):
