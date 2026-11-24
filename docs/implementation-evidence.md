@@ -482,6 +482,15 @@ JSON was 493,929 characters (494,464 including wrapper) with eighteen synthetic
 4,097-byte findings, one byte above each review's allowed maximum. These are
 capacity and regression results only; historical deferrals remain unchanged.
 
+Independent review additionally found that directly cited or formal-target
+obligations with unlinked inventory surfaces could miss their related record
+context. Selection now follows those explicit path relationships as well as
+surface requirement IDs, using complete verified baseline/current inventories.
+Three positive link regressions fail against the prior candidate, and the
+literal-`#L1` filename boundary remains isolated. The complete source-review test
+file passed all 68 cases; static checks and the repeated v8 capacity measurements
+passed. Fresh frozen-head review and completion remain pending.
+
 PR #69 passed both independent reviews and exact-head completion: canonical native
 and Linux suites each passed 1,993 tests with 53 documented optional skips; the
 protected checker passed all 45 without skips; both packages, fast/static checks,

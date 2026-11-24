@@ -2420,6 +2420,20 @@ class Coordinator:
                     )
                 )
 
+        citation_inventory = inventory_paths
+        if source_mode:
+            # Verify both complete endpoint trees so literal filenames containing
+            # line-anchor syntax cannot be mistaken for citations to another file.
+            citation_inventory = set()
+            for endpoint in (source_base, revision):
+                if not isinstance(endpoint, str):
+                    raise ValueError("source batch lacks baseline")
+                top = list(gitio.ls_tree(self.repo, endpoint, "-z", [], time.monotonic() + 60))
+                rows = list(gitio.ls_tree(self.repo, endpoint, "-rzt", [], time.monotonic() + 60))
+                gitio.verify_listing(self.repo, endpoint, rows, {b""}, top=top)
+                citation_inventory.update(path.decode("utf-8", "strict") for row in rows
+                                          for meta, path in [row.split(b"\t", 1)]
+                                          if meta.split(b" ")[1] != b"tree")
         targets = job["payload"].get("targetfiles")
         if targets is not None:
             if not isinstance(targets, list) or any(not isinstance(p, str) for p in targets):
@@ -2618,7 +2632,7 @@ class Coordinator:
             path = citation.get("path")
             if not isinstance(path, str) or path.startswith(("http://", "https://")):
                 return
-            path = _citation_path(path, inventory_paths)
+            path = _citation_path(path, citation_inventory if source_mode else inventory_paths)
             safe_relative_path(path)
             cited_reference(path, citation.get("source"), citation.get("revision", missing_revision),
                             reserve=reserve)
@@ -2856,7 +2870,7 @@ class Coordinator:
                 if (obligation["path"] in included and isinstance(surface, dict)
                         and obligation["mode"] == "current-source"):
                     cited_reference(obligation["path"], surface.get("note"), reserve=False)
-            for record in autonomy_final_review.batch_linked_records(source_batch):
+            for record in autonomy_final_review.batch_linked_records(source_batch, citation_inventory):
                 citations = record.get("citations", [])
                 if not isinstance(citations, list):
                     raise ValueError("invalid source batch citations")
@@ -2864,7 +2878,7 @@ class Coordinator:
                 if isinstance(lineage, dict):
                     citations = [*citations, *lineage.get("evidence", [])]
                 for citation in citations:
-                    path = _review_citation_path(citation, inventory_paths)
+                    path = _review_citation_path(citation, citation_inventory)
                     if path is not None:
                         support.add(path)
                         cited_record(citation, reserve=False)

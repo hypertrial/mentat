@@ -847,3 +847,61 @@ def test_final_json_eviction_downgrades_support_continuity(source_batch_history,
     assert 'not included' in item['reason']
     assert not any(row['path'] in included for row in data['omitted'])
     assert len(json.dumps(data, ensure_ascii=True)) <= 500_000
+
+
+@pytest.mark.parametrize('link', ['requirement_citation', 'claim_citation', 'formal_contract'])
+def test_unmapped_obligation_links_directly_to_record_support(source_batch_history, link):
+    repo, cited, _, head, original_scope, make_context = source_batch_history
+    scope = deepcopy(original_scope)
+    for side in ('base_surface', 'current_surface'):
+        scope['obligations'][0][side] = {
+            'path': 'mapped.py', 'status': 'gap', 'requirement_ids': []}
+    requirement = {'id': 'active', 'citations': []}
+    claim = {'id': 'claim', 'requirement_ids': ['active'], 'citations': []}
+    historical = {'path': 'mapped.py#L1', 'revision': cited}
+    support = {'path': 'support.py', 'revision': cited}
+    if link == 'requirement_citation':
+        requirement['citations'] = [historical, support]
+    elif link == 'claim_citation':
+        claim['citations'] = [historical, support]
+    else:
+        claim['formal_contract'] = {'path': 'mapped.py'}
+        claim['citations'] = [support]
+    foreign = {'id': 'foreign', 'citations': [{'path': 'unrelated.py', 'revision': cited}]}
+    scope['records'] = {version: {'requirements': [requirement, foreign], 'claims': [claim]}
+                        for version in ('base', 'current')}
+    data, omitted, included = make_context(batch_scope=scope)
+    assert data['files']['mapped.py'] == (repo / 'mapped.py').read_text()
+    assert data['files']['support.py'] == (repo / 'support.py').read_text()
+    assert 'support.py' in included and 'support.py' not in omitted
+    assert 'unrelated.py' in omitted and 'unrelated.py' not in included
+    assert [row['path'] for row in scope['obligations']] == ['mapped.py']
+    support_item = next(row for row in data['cited_source_continuity'] if row['path'] == 'support.py')
+    assert support_item['status'] == 'unchanged' and support_item['ancestor'] is True
+    assert support_item['cited_revision'] == cited and support_item['candidate_revision'] == head
+    assert support_item['cited_blob'] == support_item['candidate_blob'] == git(
+        repo, 'rev-parse', f'{cited}:support.py')
+    if link != 'formal_contract':
+        item = next(row for row in data['cited_source_continuity'] if row['path'] == 'mapped.py')
+        assert item['status'] == 'unchanged' and item['cited_revision'] == cited
+
+
+def test_literal_anchor_filename_outside_batch_does_not_link_foreign_record(source_batch_history):
+    repo, cited, _, _, original_scope, make_context = source_batch_history
+    (repo / 'mapped.py#L1').write_text('distinct literal filename\n')
+    git(repo, 'add', '.')
+    git(repo, 'commit', '-qm', 'literal anchor-looking filename')
+    head = git(repo, 'rev-parse', 'HEAD')
+    scope = deepcopy(original_scope)
+    for side in ('base_surface', 'current_surface'):
+        scope['obligations'][0][side] = {
+            'path': 'mapped.py', 'status': 'unexamined', 'requirement_ids': []}
+    foreign = {'id': 'foreign', 'citations': [
+        {'path': 'mapped.py#L1', 'revision': head}, {'path': 'support.py', 'revision': cited}]}
+    scope['records'] = {version: {'requirements': [foreign], 'claims': []}
+                        for version in ('base', 'current')}
+    data, omitted, included = make_context(head, scope, parent=head)
+    assert 'mapped.py' in included
+    assert 'mapped.py#L1' not in included and 'mapped.py#L1' in omitted
+    assert 'support.py' not in included and 'support.py' in omitted
+    assert not any(row['path'] == 'support.py' for row in data.get('cited_source_continuity', []))
