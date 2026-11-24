@@ -2,6 +2,7 @@
 
 import json
 import subprocess
+import sys
 import time
 import uuid
 from copy import deepcopy
@@ -688,11 +689,12 @@ def test_legacy_no_case_timeout_is_forwarded_without_changing_logical_contract(c
 
     def capture(repo, rev, **check):
         calls.append(deepcopy(check))
-        return verify(repo, rev, **check)
+        # Check forwarding separately from the proof subprocess's wall time.
+        return verify(repo, rev, **{**check, 'timeout_ms': 5000})
 
     monkeypatch.setattr(source_verify, 'verify_source', capture)
     _, evidence = execute_check(repo, head, config, tmp_path, ReplayWorker())
-    assert evidence['status'] == 'passed'
+    assert evidence['status'] == 'passed', evidence['source']
     assert len(calls) == 1 and calls[0]['timeout_ms'] == 750
     assert evidence['source'][0]['status'] == 'proved'
     assert evidence['source'][0]['claim_id'] == 'claim-one'
@@ -719,17 +721,37 @@ def test_case_solver_timeout_inherits_descriptor_and_remaining_budget(checked_ca
 
     def capture(repo, rev, **check):
         calls.append(deepcopy(check))
-        return verify(repo, rev, **check)
+        return verify(repo, rev, **{**check, 'timeout_ms': 5000})
 
     monkeypatch.setattr(source_verify, 'verify_source', capture)
     result = coordinator._execute({'id': 'timed', 'loop': 'ivl', 'item_id': 'timed',
         'attempt': 1, 'payload': {'kind': 'pre_review_checks', 'target_head': head,
         'commands': [], 'source_checks': [], 'check_key': 'key'}}, 100 + remaining)
-    assert result['evidence']['status'] == 'passed', result
+    assert result['evidence']['status'] == 'passed', (result['evidence']['source'], result['evidence']['source_cases'])
     assert [call['path'] for call in calls] == ['subject.py', 'bad.py']
     assert [call['timeout_ms'] for call in calls] == [expected, expected]
     assert len(worker.replays) == 1
     assert 'timeout_ms' not in worker.replays[0]['contract']
+
+
+def test_source_worker_deadline_leaves_proof_incomplete(checked_case_repo, monkeypatch):
+    from mentat import source_verify
+
+    repo, head, _ = checked_case_repo
+    run = source_verify.process.run
+
+    def deadline(argv, **kwargs):
+        if argv[0] == sys.executable:
+            raise TimeoutError('source worker deadline')
+        return run(argv, **kwargs)
+
+    monkeypatch.setattr(source_verify.process, 'run', deadline)
+    evidence = source_verify.verify_source(
+        repo, head, 'subject.py', 'clamp', inputs={'x': 'int'},
+        requires='x == 0', ensures='0 <= result <= 10', timeout_ms=500,
+    )
+    assert evidence['status'] == 'incomplete'
+    assert evidence['reason'] == 'source worker deadline'
 
 
 @pytest.mark.parametrize('timeout', [0, True, 30001])

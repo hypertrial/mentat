@@ -1151,3 +1151,16 @@ It covered CLI freshness, Git transactions, HTTP, projection, source corrections
 final source reviews, proof cases, and correction scope. It ran against the
 checkpoint plus test updates before the reviewed error-classification patch was
 integrated. The new HTTP cases were separately verified red and green.
+
+The integrated HTTP, projection, freshness and state checks passed all 56
+cases in 28.91 seconds. The independent native gate on frozen `edd63d5`
+was interrupted once after three source-case timeout-forwarding failures,
+reporting 371 passed and 3 failed in 390.00 seconds. It ran while another
+worktree's suite was active. The same three cases passed on isolated rerun;
+the original output does not establish why their evidence was incomplete.
+The tests now capture and assert the exact short forwarded timeout, then run
+the real proof under its ordinary test allowance. A separate injected
+worker timeout verifies the incomplete result. Controller timeout policy
+and proof qualification are unchanged. The full native gate must run again.
+The focused rerun passed 16 cases with 53 deselected in 24.36 seconds:
+`uv run --locked --no-sync pytest -n 0 -q -ra tests/test_autonomy_source_cases.py -k 'timeout or deadline or real_solver_counterexample'`.
