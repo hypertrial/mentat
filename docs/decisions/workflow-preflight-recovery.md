@@ -69,6 +69,20 @@ Hosted CI remains syntax/whitespace only.
 
 ## Real integration rehearsal before the self-run
 
+Preparation exposed an additional capability gap: a generic repository's
+configured checks cannot currently authorize automatic merge because only the
+two built-in repository profiles provide mandatory gate floors. Do not spoof a
+recognized repository or manufacture a policy for the rehearsal. Add an explicit
+`init --trust-configured-checks` operator opt-in that pins reviewed configured
+checks as additional immutable mandatory gates. Preserve built-in minima, require
+at least one real pinned command before enabling auto-merge, and leave default
+initialization and all existing policies unchanged. A changed opt-in cannot
+silently repin an existing state; require fresh state when the requested gates
+are not already pinned. Keep workspace/policy file schemas compatible. Test
+generic refusal by default, explicit positive enrollment, later gate removal,
+empty checks, built-in minima and existing-state immutability. This is a declared
+capability extension, not a finding that the existing default was unsafe.
+
 Use a new disposable private GitHub repository and authoritative local state,
 never Titanic. Run meaningful passing and failing gates in the existing isolated
 Lima worker. Exercise actual SSH receive-pack, both explicit expected-old ref
