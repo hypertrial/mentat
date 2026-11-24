@@ -125,6 +125,11 @@ def _gh(repo: Path, *args: str) -> str:
     return _run(["gh", *args], cwd=repo, timeout=60)
 
 
+def gh(repo: Path, *args: str) -> str:
+    """Run a bounded GitHub CLI command for other autonomy modules."""
+    return _gh(repo, *args)
+
+
 def diagnostics(repo: Path) -> dict:
     result: dict[str, Any] = {"codex": {"available": bool(shutil.which("codex")), "model": _MODEL, "reasoning_effort": "high"},
                               "gh": {"available": bool(shutil.which("gh"))},

@@ -1004,3 +1004,17 @@ Independent security and data review of f5d1e7f identified text conversion on th
 Independent security and data re-review accepted the three fixes at b39a9cc611016dac735d37cc5b0d13683d05fe57 within their scope. That revision passed 69 focused cases in 33.01s plus Ruff/Pyright. Overall acceptance was withheld after a separate real-Git probe demonstrated that ordinary atomic push skips the expected-old lease on an already-at-target destination. An independent local receive-pack probe explicitly submitted both old/new commands and rejected both already-target and third-OID races atomically. The server exited zero even on protocol rejection, demonstrating the need to validate both ref statuses. These are disposable local feasibility checks, not GitHub workflow or full-gate evidence. The versioned receive-pack design preceded implementation; implementation, independent adversarial tests and renewed exact-head review/gates remain in progress.
 
 The dedicated receive-pack implementation and independently authored adversarial tests are now frozen for review. A serial focused run passed 93 tests in 40.49s with no skips, exercising the real bidirectional local Git server and controlled protocol peers. It covers exact transmitted old/new commands, both-ref races including already-target OIDs, malformed statuses, cancellation, process-group cleanup, permission-denied fallback without false success, immutable intent/session fencing, existing private integration and transport execution-source drift. Ruff and explicit-interpreter Pyright passed for the implementation; test-file Ruff passed. Earlier interrupted and failing development runs were fixture diagnostics and are not acceptance evidence. Full native/Linux/package/protected gates and live GitHub PR recognition remain pending.
+
+The full native gate on 00d439bc1f02c9511e6ca65eb6747a4809ea5706 completed with 1 failed, 2,213 passed and 53 optional skips in 1,172.95s. The failure was `tests/test_boundaries.py::test_no_private_name_crosses_a_mentat_module_boundary`: policy initialization imported runtime's private `_gh`. All 239 frozen source/script/test hashes matched afterward and the checkout stayed clean. Linux, package and protected gates were not started. The monitor's tail-only scans missed an earlier failure marker; subsequent full-gate monitoring must scan the entire accumulated log.
+
+A focused boundary fix exposes public `gh` through the same bounded runtime implementation and switches the policy dependency to that public name. Existing `_gh` compatibility and the empty private-boundary allowlist are preserved. The exact failed boundary test failed before this fix and passed afterward. The following local command passed 43 cases in 2.28s (session 2672 collected, exit zero); Ruff and diff checks passed. Renewed exact-revision review and complete gates remain required.
+
+```sh
+UV_CACHE_DIR=/private/tmp/mentat-uv-cache uv run --locked --no-sync pytest -q \
+  tests/test_boundaries.py::test_no_private_name_crosses_a_mentat_module_boundary \
+  tests/test_autonomy_private_merge.py::test_private_policy_is_explicit_and_pinned_without_workspace_schema_change \
+  tests/test_autonomy_private_merge.py::test_private_policy_cannot_rewrite_existing_protected_policy \
+  tests/test_autonomy_private_merge.py::test_default_mode_does_not_downgrade_on_protection_api_failure \
+  tests/test_autonomy_private_merge.py::test_cli_init_explicit_private_policy \
+  tests/test_autonomy_policy.py tests/test_autonomy_runtime.py
+```

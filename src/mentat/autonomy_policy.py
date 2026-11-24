@@ -77,7 +77,7 @@ def minimum_source_checks(repo: Path) -> list[dict]:
 
 def pin_policy(repo: Path, state_root: Path, config: dict, *, merge_policy: str = "github-protected") -> dict:
     from .autonomy import state_path, validate_source_checks
-    from .autonomy_runtime import _gh, git
+    from .autonomy_runtime import gh, git
     from .autonomy_worker import profile_identity
 
     if merge_policy not in {"github-protected", "controller-private"}:
@@ -108,9 +108,9 @@ def pin_policy(repo: Path, state_root: Path, config: dict, *, merge_policy: str 
         "worker_profile": worker_profile,
     }
     if merge_policy == "controller-private":
-        name = json.loads(_gh(repo, "repo", "view", "--json", "nameWithOwner"))["nameWithOwner"]
+        name = json.loads(gh(repo, "repo", "view", "--json", "nameWithOwner"))["nameWithOwner"]
         def api(route: str) -> object:
-            return json.loads(_gh(repo, "api", "--hostname", "github.com", route))
+            return json.loads(gh(repo, "api", "--hostname", "github.com", route))
         policy["merge_policy"] = autonomy_private_merge.pin_repository(repo, name, git, api)
         policy["schema_version"] = 3
     minimum = minimum_source_checks(repo)
