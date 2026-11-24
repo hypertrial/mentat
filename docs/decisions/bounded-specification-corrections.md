@@ -1,0 +1,25 @@
+# Bounded specification review corrections
+
+Status: approved implementation work specification; actual workflow qualification remains pending.
+
+The v13 self-run preserved nine accepted partial specification checkpoints, then blocked before verification. An admitted draft changed only the worker-test surface. A reviewer requested a narrower statement, but the correction mapped seven additional included test surfaces. Its complete required source context exceeded the existing review bound at the final configured round. The controller correctly refused admission and checkpointed; this is not evidence of a missing eligible handoff. Preserve the blocked session, its limits and all raw evidence.
+
+## Intended behavior
+
+New SCL review-correction jobs receive a controller-derived edit envelope from the actual admitted draft compared with its accepted checkpoint. Bind the accepted checkpoint, rejected draft, cumulative review base, authenticated review cohort and deterministic envelope identity. Verify immutable Git identities, ancestry and complete valid FAS/inventory before deriving editable requirement IDs, claim IDs, surface paths and changed/linked CAS or document paths. Do not derive authority from all source included in a prompt.
+
+Distinguish editable records from read-only supporting evidence in generation context and guidance. Enforce the same decoded-record and allowed-file delta after full writes and patch materialization, before commit or review. Compare against the attempt input so unrelated accepted and pending records remain unchanged; existing identifier, lineage, status and file-safety checks remain mandatory. Controller inventory additions are permitted only for genuinely new allowed specification files, never arbitrary mapped rows.
+
+Do not parse free-text findings to widen scope. Initially, review targets outside the authenticated draft envelope remain explicit dependencies or deferrals; any structured linked-target extension must be narrowly derived, immutable and independently tested rather than an unrestricted union. CAS file permission is a path boundary, not proof of semantic isolation within the file. Retain full cumulative independent review and existing requirement validation.
+
+Keep the envelope and its identity across retries, resume, capacity recovery and source-correction descendants. Capacity recovery may restore authorized draft records from an accepted checkpoint but may not introduce unrelated changes. After two fresh reviewers accept the correction, end that envelope and continue the ordinary remaining frontier, preserving accepted work, original cumulative base, provenance and revisit tracking. Old jobs without envelopes retain their legacy behavior; no old approval becomes current authority.
+
+Scope violations use existing bounded invalid-result retries and explicit feedback. Do not increase, split or reset retry/round limits, context bytes, file bounds, concurrency, tool identities or source requirements. A genuine indivisible or out-of-scope dependency stays a bounded explicit gap. Keep the coordinator below its existing 240000-byte source cap, with pure helper extraction and narrow orchestration glue as needed. Application loop models remain GPT-6.1 Terra high.
+
+## Regression and acceptance
+
+Reproduce the actual one-surface admitted draft, independent accept/revise feedback, overbroad eight-surface correction and final-round capacity edge. Reject the unrelated mappings before commit; allow a narrow correction under the same budget, require two fresh reviews, then continue the unchanged pending frontier. Cover full FAS writes and patches, unrelated insertion/change/removal, legitimate scoped record and CAS edits, retry/resume/partial/capacity/source-correction propagation, forged envelopes and cross-cohort or revision changes, unsafe paths, immutable input identity and legacy jobs. Verify no forged review/receipt and no repeated unreviewable proposal.
+
+All new files need complete FAS inventory and module classification; no proof status is authored as established. Independent architecture/code, security/data review and a separate final verifier precede normal protected publication. Run canonical native and local Linux suites, both package checks, static/lineage/inventory checks and all 45 protected fixtures without skips. Heavy checks stay local; hosted CI remains syntax and whitespace only.
+
+A new tested controller starts a fresh actual qualification session. The original v13 ledger remains blocked historical evidence; do not reset its attempts, manufacture acceptance or silently treat its partial checkpoint as a newly trusted baseline. Any retained partial input requires current source-aware review. Titanic remains untouched until actual Mentat qualification and guarded publication complete.
