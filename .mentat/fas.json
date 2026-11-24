@@ -468,9 +468,11 @@
     },
     {
       "path": "docs/vision.md",
-      "status": "gap",
-      "requirement_ids": [],
-      "reason": "Awaiting independently reviewed source correspondence."
+      "status": "mapped",
+      "requirement_ids": [
+        "b4085f53-5591-5dbf-8718-d21877944bf5"
+      ],
+      "note": "At task input revision 8b3f2b97aee07a691b02f3d05bda879d87ea5763, this product vision states the intended autonomous SCL, IVL, and IIL workflow with optional human feedback; it describes intent rather than demonstrating implementation behavior."
     },
     {
       "path": "examples/iceberg-go/LICENSE",
@@ -642,9 +644,11 @@
     },
     {
       "path": "examples/source-proof/clamp.py",
-      "status": "gap",
-      "requirement_ids": [],
-      "reason": "Awaiting independently reviewed source correspondence."
+      "status": "mapped",
+      "requirement_ids": [
+        "2bcfa241-162e-5b32-8b37-79deae3acd37"
+      ],
+      "note": "At task input revision 8b3f2b97aee07a691b02f3d05bda879d87ea5763, this primitive returns lower when value is below lower, upper when above upper, and otherwise value. Its contribution to the stated clamp requirement is conditional on exact integer inputs and ordered bounds; this observation does not establish a proof or the faulty-case replay."
     },
     {
       "path": "examples/source-proof/clamp_faulty.py",
@@ -1740,10 +1744,9 @@
       "path": "tests/test_autonomy_context_budget.py",
       "status": "mapped",
       "requirement_ids": [
-        "dda11903-8c6a-5849-8fc3-cbedfcfd3ab2",
-        "ce55ac49-b6d5-5469-833f-b5262a895ea1"
+        "dda11903-8c6a-5849-8fc3-cbedfcfd3ab2"
       ],
-      "note": "Regression coverage for bounded complete review context, explicit optional-source omissions and mandatory evidence preservation; this mapping is not a formal proof."
+      "note": "At task input revision 8b3f2b97aee07a691b02f3d05bda879d87ea5763, these tests check that bounded review context retains the candidate revision, cumulative diff, required source and mandatory evidence while recording omitted optional source; this covers part of provenance and is not a formal proof."
     },
     {
       "path": "tests/test_autonomy_final_sources.py",
