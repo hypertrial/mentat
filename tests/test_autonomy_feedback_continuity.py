@@ -367,3 +367,204 @@ def test_distinct_human_inputs_do_not_share_same_head_verification(repo, tmp_pat
     assert len({j["item_id"] for j in verifications}) == 2
     sources = [j for j in snapshot["jobs"] if j["payload"]["kind"] == "review_final_source"]
     assert {j["payload"]["human_feedback"] for j in sources} == set(messages)
+
+
+@pytest.mark.parametrize("with_human", [True, False], ids=["human-feedback", "no-human-control"])
+def test_failed_pre_review_check_retry_preserves_originating_feedback(repo, tmp_path, monkeypatch, with_human):
+    """Exercise feedback SCL to IVL retry after a genuinely failed mocked worker check."""
+    message = "Please preserve this optional context"
+    original_consume = Coordinator._consume_feedback
+    injected = []
+
+    def deliver(self):
+        if with_human and not injected:
+            injected.append(True)
+            self.control("feedback", {"message": message})
+        return original_consume(self)
+
+    monkeypatch.setattr(Coordinator, "_consume_feedback", deliver)
+
+    class FailedCheckWorker(Worker):
+        def run(self, repo, rev, argv, *, timeout_seconds):
+            self.commands.append(argv)
+            self.revisions.append(rev)
+            failed = argv == ["bad-command"]
+            return {"status": "failed" if failed else "succeeded", "returncode": 127 if failed else 0,
+                    "revision": rev, "tools": {"python": "test"}, "stdout": "",
+                    "stderr": "command not found" if failed else ""}
+
+    class RetryAgent(Agent):
+        def run(self, repo, job, output, *, timeout_seconds):
+            payload = job["payload"]
+            kind = payload["kind"]
+            if with_human and kind == "generate_spec" and job["item_id"] == "cas.inventory":
+                return {"status": "succeeded", "session_id": job["id"], "result": {
+                    "decision": "defer", "summary": "await feedback", "findings": [],
+                    "verification_requests": [],
+                }}
+            if kind == "generate_verification" and payload.get("round") == 1:
+                return {"status": "succeeded", "session_id": job["id"], "result": {
+                    "decision": "defer", "summary": "capture retry", "findings": [],
+                    "verification_requests": [],
+                }}
+            if kind == "generate_spec" and "surfaces" not in payload:
+                tracked = git(repo, "ls-files").splitlines()
+                job = {**job, "payload": {**payload, "surfaces": [{"path": p} for p in tracked]}}
+            result = super().run(repo, job, output, timeout_seconds=timeout_seconds)
+            if kind == "generate_verification":
+                result["result"]["verification_requests"] = [
+                    {"argv": ["bad-command"], "claim_ids": [], "method": "test"}
+                ]
+            return result
+
+    worker = FailedCheckWorker()
+    snapshot, _, github = run(repo, tmp_path, agent=RetryAgent(), worker=worker)
+    original = [j for j in snapshot["jobs"] if j["payload"]["kind"] == "generate_verification"
+                and j["payload"].get("round", 0) == 0]
+    retry = [j for j in snapshot["jobs"] if j["payload"]["kind"] == "generate_verification"
+             and j["payload"].get("round") == 1]
+    assert len(original) == len(retry) == 1, snapshot
+    assert ["check"] in worker.commands and ["bad-command"] in worker.commands
+    checks = retry[0]["payload"]["feedback"]["check_summary"]["checks"]
+    assert any(c["command"] == ["bad-command"] and c["status"] != "passed" for c in checks)
+    assert retry[0]["payload"]["target_head"] == original[0]["outcome"]["head"]
+    if with_human:
+        assert original[0]["payload"]["human_feedback"] == message
+        assert retry[0]["payload"]["human_feedback"] == message
+    else:
+        assert "human_feedback" not in original[0]["payload"]
+        assert "human_feedback" not in retry[0]["payload"]
+    assert not github.published
+
+
+@pytest.mark.parametrize(("active_cycle", "repair_failure"), [
+    (True, True), (False, True), (False, False),
+], ids=["source-cycle-repair", "independent-repair", "independent-additional-check"])
+def test_failed_repair_check_checkpoints_source_cycle_without_losing_barrier(repo, tmp_path, active_cycle, repair_failure):
+    """A correction cannot silently become a mixed application repair."""
+    from test_autonomy_source_corrections import (
+        _review_result,
+        _source_job_payload,
+        _source_outcome_and_decision,
+    )
+
+    head = git(repo, "rev-parse", "HEAD")
+    store = Store(tmp_path / "repair/state.db")
+    config = default_config(repo)
+    session = store.new_session(str(repo), head, head, config, 1, 1000)
+    if active_cycle:
+        store.register_source_pass(session, "cycle", "final-item", head, head,
+                                   "plan", "check", ["batch"], continuing=False)
+        for index, role in enumerate(("code-reviewer", "data-reviewer")):
+            source_payload = {**_source_job_payload(head, "plan", "check"), "human_feedback": "Human intent"}
+            store.enqueue_job(session, "ivl", role, f"source-{index}", f"input-{index}", source_payload)
+        sources = [store.claim_job(session, f"reviewer-{i}", now=2) for i in range(2)]
+        feedback = []
+        for index, source in enumerate(sources):
+            assert source
+            result = _review_result() if index == 0 else _review_result(decision="accept", corrections=[])
+            outcome, decision = _source_outcome_and_decision(
+                source["id"], head, "check", f"reviewer-{index}", f"decision-{index}", result
+            )
+            store.finish_job(source["id"], source["lease_token"], outcome, now=3)
+            store.record_source_decision(session, "cycle", decision)
+            store.finish_transition(source["id"])
+            feedback.append({"job_id": source["id"], "decision_id": decision["id"], "result": result})
+        correction = {"kind": "generate_spec", "target_head": head, "accepted_spec_base": head,
+                      "review_base": head, "source_cycle_id": "cycle", "source_cycle_round": 1,
+                      "feedback": feedback, "human_feedback": "Human intent"}
+        assert store.finalize_source_correction(session, "cycle", head, feedback, "correction", "input",
+                                                correction, actionable=True, max_attempts=3)
+    repair = {"requirement": {"id": "requirement"}, "evidence": {"id": "evidence"},
+              "reproduction": {"id": "reproduction"}, "commands": [["repair-check"]],
+              "root_item": "repair", "round": 0, "review_base": head}
+    generator_payload = {"kind": "generate_verification", "human_feedback": "Human intent", "repair": repair}
+    if active_cycle:
+        generator_payload.update(source_cycle_id="cycle", source_cycle_round=1)
+    generator = {"id": "generator", "item_id": "verification", "loop": "ivl", "payload": generator_payload}
+    proposal = {"head": head, "parent": head, "generation_kind": "generate_verification", "root_item": "verification",
+                "round": 0, "author_id": "author", "repair": repair}
+    precheck = {"id": "precheck", "item_id": "precheck", "loop": "ivl", "payload": {
+        "kind": "pre_review_checks", "review_request": {"job": generator, "proposal": proposal,
+                                                           "kind": "review_verification"}}}
+    failed_command = ["repair-check"] if repair_failure else ["additional-check"]
+    outcome = {"evidence": {"status": "failed", "head": head, "base": head, "check_key": "check",
+                            "checks": [{"command": failed_command, "status": "failed", "returncode": 1}]}}
+    coordinator = Coordinator(repo, store, Agent(), Worker(), GitHub())
+    coordinator.config, coordinator.session_id = config, session
+    coordinator._advance(precheck, outcome)
+    reopened = Store(store.path)
+    snapshot = reopened.snapshot(session)
+    retry_kind = "investigate_defect" if repair_failure else "generate_verification"
+    retry = [j for j in snapshot["jobs"] if j["payload"].get("kind") == retry_kind]
+    if active_cycle and repair_failure:
+        assert not retry
+        assert reopened.source_cycles(session)[0]["status"] == "blocked"
+        with closing(reopened._connect()) as db:
+            barrier = db.execute("SELECT status, cycle_id FROM source_finalization_barriers WHERE session_id=?",
+                                 (session,)).fetchone()
+        assert tuple(barrier) == ("active", "cycle")
+        assert any("Source correction requires application repair" in f.get("summary", "")
+                   for f in snapshot["findings"])
+    else:
+        assert len(retry) == 1
+        assert retry[0]["payload"]["human_feedback"] == "Human intent"
+        if repair_failure:
+            assert retry[0]["payload"]["requirement"] == repair["requirement"]
+        if active_cycle:
+            assert retry[0]["payload"]["source_cycle_id"] == "cycle"
+            assert retry[0]["payload"]["source_cycle_round"] == 1
+
+
+def test_failed_check_retry_retains_real_correction_cycle(tmp_path, monkeypatch):
+    """Use the existing end-to-end correction flow and fail one post-SCL check."""
+    import test_autonomy_source_corrections as correction_tests
+
+    original_run = correction_tests.run
+    observed = []
+
+    class OnceAfterCorrection(Worker):
+        def __init__(self):
+            super().__init__()
+            self.failed = False
+
+        def run(self, repo, rev, argv, *, timeout_seconds):
+            self.commands.append(argv)
+            self.revisions.append(rev)
+            store = Store(tmp_path / "state/state.db")
+            cycles = store.source_cycles(store.snapshot()["session"]["id"])
+            in_correction = any(c["status"] == "correcting" and c["failed_passes"] == 1 for c in cycles)
+            fail = in_correction and not self.failed and argv == ["check"]
+            if fail:
+                self.failed = True
+            return {"status": "failed" if fail else "succeeded", "returncode": 1 if fail else 0,
+                    "revision": rev, "tools": {"python": "test"}, "stdout": "",
+                    "stderr": "injected check failure" if fail else ""}
+
+    class Captured(BaseException):
+        pass
+
+    worker = OnceAfterCorrection()
+
+    def capture_run(repo, run_tmp_path, agent=None, **kwargs):
+        snapshot, _, github = original_run(repo, run_tmp_path, agent=agent, worker=worker, **kwargs)
+        observed.append((snapshot, github))
+        raise Captured()
+
+    monkeypatch.setattr(correction_tests, "run", capture_run)
+    with pytest.raises(Captured):
+        correction_tests.test_source_revision_routes_to_current_head_specification_correction(
+            tmp_path, monkeypatch, peer_defers=False, review_order="first", correction_defers=False,
+            scl_revise=False, scl_peer="accept",
+        )
+    snapshot, _ = observed[0]
+    assert worker.failed
+    retry = [j for j in snapshot["jobs"] if j["payload"].get("kind") == "generate_verification"
+             and j["payload"].get("source_cycle_id") and j["payload"].get("round") == 1]
+    assert len(retry) == 1, snapshot
+    assert retry[0]["payload"]["source_cycle_round"] == 1
+    assert any(c["command"] == ["check"] and c["status"] != "passed"
+               for c in retry[0]["payload"]["feedback"]["check_summary"]["checks"])
+    cycle = Store(tmp_path / "state/state.db").source_cycles(snapshot["session"]["id"])[0]
+    assert cycle["id"] == retry[0]["payload"]["source_cycle_id"]
+    assert cycle["failed_passes"] == 1

@@ -3184,6 +3184,10 @@ class Coordinator:
                             command in repair.get("commands", []) for command in failed_commands
                         )
                     ):
+                        cycle_id = request["job"]["payload"].get("source_cycle_id")
+                        if cycle_id:
+                            self.store.block_source_cycle(self.session_id, cycle_id, self.store.source_cycle_head(self.session_id, cycle_id), "Source correction requires application repair; resolve the failed repair check before continuing")
+                            return
                         generator = "investigate_defect"
                         root_item = repair.get("root_item", root_item)
                         round_number = repair.get("round", 0)
@@ -3206,6 +3210,7 @@ class Coordinator:
                     if retry:
                         payload = {
                             "kind": generator,
+                            **{key: request["job"]["payload"][key] for key in ("source_cycle_id", "source_cycle_round") if key in request["job"]["payload"]},
                             "target_head": proposal["head"],
                             "review_base": (
                                 repair.get("review_base", session["base"])
@@ -3248,7 +3253,7 @@ class Coordinator:
                                     for key in ("requirement", "evidence", "reproduction")
                                 }
                             )
-                        self._enqueue(job["loop"], "implementer", root_item, payload)
+                        self._enqueue(job["loop"], "implementer", root_item, payload, predecessor=request["job"])
                     return
                 if request["kind"] == "review_final":
                     self._start_final_sources(request["job"], proposal, evidence)
