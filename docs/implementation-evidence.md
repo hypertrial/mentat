@@ -1263,3 +1263,14 @@ The controller reached a durable blocked checkpoint with no publication. Its
 full candidate, checks, reviews and evidence remain available in private state.
 The next fresh qualification will enforce the selected source scope at session
 initialization and retain all configured checks and publication authority.
+
+The first enforced scoped candidate `816648a8fcdb` contained one surface
+change. All configured checks passed. The clamp proof and faulty-control
+replay passed at that exact revision. Two independent source responses
+accepted the substantive observation. One included the extra JSON keys
+`validation` and `scope`, so its strict version 2 response validation failed.
+
+The invalid response never became an accepted decision. Its job had already
+been classified as successful, so the controller blocked the source pass
+without the normal bounded retry. There was no publication. The original
+session and independent outputs remain intact.

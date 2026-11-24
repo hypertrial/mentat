@@ -7,7 +7,92 @@ from pathlib import Path
 
 import pytest
 from test_autonomy import Agent, _valid_publication_spec, git, run
+from test_autonomy import repo as repo
 from test_autonomy import repo as repo_fixture
+from test_autonomy_spec_surface import seeded as seeded
+
+
+@pytest.mark.parametrize('always_malformed', [False, True])
+def test_malformed_source_review_retries_before_recording_success(seeded, tmp_path, monkeypatch, always_malformed):
+    from test_autonomy import GitHub, Worker
+
+    from mentat import autonomy_runtime
+    from mentat.autonomy import Coordinator
+    from mentat.autonomy_state import Store
+
+    repo, store, _, _, head = seeded
+    local = threading.local()
+    calls = []
+    original_run = autonomy_runtime._run
+    features = ('shell_tool', 'unified_exec', 'apps', 'browser_use', 'computer_use',
+                'multi_agent', 'code_mode', 'code_mode_host')
+
+    def fake_run(argv, **kwargs):
+        if argv[:3] == ['codex', 'exec', '--help']:
+            return '--ignore-user-config --disable'
+        if argv[:3] == ['codex', 'features', 'list']:
+            return '\n'.join(f'{feature} stable true' for feature in features)
+        return original_run(argv, **kwargs)
+
+    def fake_execute(self, argv, **kwargs):
+        job = local.job
+        calls.append((job['id'], job['role'], job['attempt']))
+        detail = {'schema_version': 2, 'findings': 'The source matches its observation.',
+                  'unresolved_dependencies': [], 'spec_corrections': []}
+        if job['role'] == 'code-reviewer' and (always_malformed or job['attempt'] == 1):
+            detail.update(validation='checked', scope='src.py')
+        answer = {'schema_version': 1, 'decision': 'accept', 'summary': json.dumps(detail),
+                  'requirements': [], 'claims': [], 'findings': [], 'verification_requests': [],
+                  'defects': [], 'changes': []}
+        Path(argv[argv.index('--output-last-message') + 1]).write_text(json.dumps(answer))
+        return json.dumps({'type': 'thread.started', 'thread_id': f"{job['id']}-{job['attempt']}"}) + '\n'
+
+    monkeypatch.setattr(autonomy_runtime, '_run', fake_run)
+    monkeypatch.setattr(autonomy_runtime.CodexAgent, '_execute', fake_execute)
+
+    class ReviewAgent(Agent):
+        def run(self, worktree, job, output, *, timeout_seconds):
+            kind = job['payload']['kind']
+            if kind == 'review_final_source':
+                local.job = job
+                return autonomy_runtime.CodexAgent().run(worktree, job, output, timeout_seconds=timeout_seconds)
+            if kind in {'generate_spec', 'generate_verification'}:
+                return {'status': 'succeeded', 'session_id': job['id'], 'result': {
+                    'decision': 'accept', 'summary': 'No changes', 'findings': [],
+                    'verification_requests': []}}
+            return super().run(worktree, job, output, timeout_seconds=timeout_seconds)
+
+    github = GitHub()
+    snapshot = Coordinator(repo, store, ReviewAgent(), Worker(), github).run(spec_surface='src.py')
+    code = [row for row in calls if row[1] == 'code-reviewer']
+    sibling = [row for row in calls if row[1] == 'data-reviewer']
+    assert len({row[0] for row in code}) == len({row[0] for row in sibling}) == 1
+    assert code[0][0] != sibling[0][0] and [row[2] for row in sibling] == [1]
+    expected_attempts = [1, 2, 3] if always_malformed else [1, 2]
+    assert [row[2] for row in code] == expected_attempts
+    job_id = code[0][0]
+    finished = [event['payload'] for event in snapshot['events']
+                if event['kind'] == 'job_finished' and event['payload']['job_id'] == job_id]
+    assert [event['attempt'] for event in finished] == expected_attempts
+    assert all(event['status'] == 'queued' and event['outcome']['status'] == 'failed'
+               for event in finished[:-1])
+    for attempt in expected_attempts:
+        folder = store.path.parent / 'agents' / job_id / str(attempt)
+        assert list(folder.glob('manifest-*.json')) and list(folder.glob('prompt-*.txt'))
+        result = json.loads((folder / 'codex-result.json').read_text())
+        detail = json.loads(result['summary'])
+        assert ('validation' in detail) == (always_malformed or attempt == 1)
+    decisions = [row for row in snapshot['decisions'] if row.get('job_id') == job_id]
+    if always_malformed:
+        assert not decisions and not github.published and not github.merged
+        assert snapshot['session']['status'] == 'blocked'
+    else:
+        assert finished[-1]['status'] == 'succeeded'
+        assert len(decisions) == 1 and decisions[0]['decision'] == 'accept'
+        assert github.published == [head] and len(github.merged) == 1
+        pair = [row for row in snapshot['decisions'] if row.get('review_kind') == 'review_final_source']
+        assert len(pair) == 2 and len({row['reviewer_id'] for row in pair}) == 2
+    assert Store(store.path).snapshot(snapshot['session']['id'])['events'] == snapshot['events']
 
 
 @pytest.mark.parametrize('peer_defers', [False, True])

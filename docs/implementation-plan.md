@@ -148,6 +148,25 @@ Keep that candidate and its decisions in the original ledger.
   rejection, exact final coverage, and the unchanged default workflow. Use a
   fresh protected run to qualify one headless observation in the current vision.
 
+### Validate source-review responses before successful completion
+
+The first enforced scoped run reached both source reviewers after its current
+checks and proof controls passed. One reviewer returned the required findings
+along with extra keys in the version 2 summary. The strict validator rejected
+that response during transition advancement, after the store had recorded the
+attempt as successful. The pass then blocked with its retry budget unused.
+
+- Validate final-source result content before marking any model attempt
+  successful. A malformed response follows the existing bounded job retry
+  policy and retains the attempt's private input and output evidence.
+- Preserve the exact response schema, finding and context limits, source
+  targets, immutable input checks at advancement and publication, reviewer
+  independence, and legitimate defer and correction behavior. Exhausted
+  malformed attempts block the pass without creating an approval.
+- Tell reviewers to return exactly the four version 2 summary keys. Put scope
+  and validation explanations inside the findings text. Regress the live
+  extra-key response followed by a valid fresh attempt and repeated failures.
+
 ## Baseline evidence
 
 Before source changes: `scripts/verify` completed with 1,479 passed and 53 skipped in 105.85 seconds. Skips concern unavailable Lean, dedicated Linux checker, and upstream mirrors; this is not the full no-gap readiness gate. Python 3.12.16 and locked development dependencies were installed into the ignored local environment. GitHub CLI and Lima were not available on the initial sandbox PATH.

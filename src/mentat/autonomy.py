@@ -1092,11 +1092,14 @@ class Coordinator:
         assert self.session_id
         return autonomy_source_corrections.input_bindings(job, self.session_id, self.authority_digest, self.tool_identity)
 
-    def _validate_source_input(self, job: dict, decision: dict, scope: dict) -> None:
-        outcome = autonomy_source_corrections.source_decision_outcome(job, decision)
+    def _validate_source_result(self, job: dict, result: dict, scope: dict) -> None:
         paths = {item["path"] for endpoint in (job["payload"]["proposal"]["parent"], job["payload"]["proposal"]["head"])
                  for item in inventory(self.repo, endpoint)}
-        autonomy_source_corrections.validate_result(outcome["result"], scope, paths)
+        autonomy_source_corrections.validate_result(result, scope, paths)
+
+    def _validate_source_input(self, job: dict, decision: dict, scope: dict) -> None:
+        outcome = autonomy_source_corrections.source_decision_outcome(job, decision)
+        self._validate_source_result(job, outcome["result"], scope)
         context, _, _, _ = self._source_context(job["payload"]["proposal"]["head"], job)
         session = self.store.snapshot(self.session_id)["session"]
         autonomy_review_inputs.validate(self.repo, self.store.path.parent, job, decision,
@@ -1515,6 +1518,8 @@ class Coordinator:
             raise ValueError("agent cannot produce controller capacity outcomes")
         if result.get("status") != "succeeded":
             return result
+        if kind == "review_final_source":
+            self._validate_source_result(job, result["result"], job["payload"]["source_batch"])
         # File contents are committed in Git; do not duplicate them or the raw
         # provider event stream into every durable job and review payload.
         if not isinstance(result.get("session_id"), str) or not result["session_id"]:
@@ -3071,8 +3076,9 @@ class Coordinator:
         if kind == "review_final_source":
             return (common + "Inspect only the specified source batch contribution against its records and relevant full diff. "
                     "Do not claim to review omitted files. Return summary as a JSON object encoded in the summary string "
-                    "with schema_version 2, findings (nonempty string), unresolved_dependencies (array of strings), "
-                    "and spec_corrections (array of {collection, key, reason}). For revise, identify existing "
+                    "with exactly these four keys: schema_version 2, findings (nonempty string), unresolved_dependencies (array of strings), "
+                    "and spec_corrections (array of {collection, key, reason}). Include scope and validation explanations in findings. "
+                    "For revise, identify existing "
                     "batch-linked requirement, claim, or surface targets explicitly; use an empty array otherwise. "
                     "Report all substantive findings in summary and findings. For accept or revise, requirements, claims, "
                     "verification_requests, defects and changes must each be empty arrays; do not hide defects or "
