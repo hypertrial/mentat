@@ -102,6 +102,24 @@ could not qualify. Keep that session and its independent decisions as history.
   priority and the unchanged existing opposite-order checkpoint behavior.
   Reverify the finished engine and repeat the actual private rehearsal.
 
+### Surface observation continuity in reviewer context
+
+The renewed live rehearsal retained the repair through independent fix and
+specification acceptance. Its final source reviewers received the current
+files but neither received endpoint evidence for three observations recorded
+under `notes` in the accepted surface records. Both independently deferred.
+
+- Use the existing exact revision parser on surface observation text from
+  `note` and `notes` in specification and final source contexts. Agreeing
+  revisions describe one citation. Ambiguous or malformed revisions remain
+  unverified under the existing rules.
+- Name `note` explicitly in new generator instructions. Preserve accepted
+  record bytes, source inclusion requirements, context limits, Git ancestry
+  and blob/mode checks, and every independent approval requirement.
+- Regress the actual surface shape, canonical observations and conflicting
+  observations. Preserve the deferred session and obtain fresh independent
+  source review before any publication.
+
 ## Baseline evidence
 
 Before source changes: `scripts/verify` completed with 1,479 passed and 53 skipped in 105.85 seconds. Skips concern unavailable Lean, dedicated Linux checker, and upstream mirrors; this is not the full no-gap readiness gate. Python 3.12.16 and locked development dependencies were installed into the ignored local environment. GitHub CLI and Lima were not available on the initial sandbox PATH.
