@@ -163,7 +163,7 @@ reviewer checkpoints the correction, leaving the barrier in place. Existing
 source-pass and SCL retry limits remain separate. Source input outcome and lease
 checks moved to pure helpers with unchanged coordinator interfaces.
 
-The independent real-Codex regression failed on the rejected candidate. On the
+The independent Git/Codex-adapter regression failed on the rejected candidate. On the
 revised frozen source, nine focused cases passed, including both reviewer arrival
 orders, revising and deferring peers, exhausted peers, lease expiry, resume,
 replay, and preserving critique through a later frontier handoff. The broader
@@ -172,6 +172,25 @@ corrected and those four passed separately on the same production hashes.
 Candidate-interpreter Pyright and scoped Ruff passed. New independent exact-head
 reviews, full native/Linux/package gates, protected fixtures and a fresh real
 self-run remain pending.
+
+Both independent reviewers accepted
+`6dd40d58b790c1fb82f63a03bda1adac153dc79e`. Its canonical native suite finished
+with 2,112 passes, 53 documented skips and three failures in 1,196.37 seconds;
+Linux finished with 2,113 passes, 53 skips and two failures in 417.13 seconds.
+Both package checks, fast checks, Ruff, Pyright and the 298-path FAS inventory
+passed, and all 235 recorded source/script/test hashes matched before and after.
+The protected checker was held because the completion suites failed.
+
+Independent diagnosis traced all failures to two fixtures: a synthetic snapshot
+proxy lacked the new real Store guard, and the atomic race expected an old
+head-fence message where the session-wide barrier correctly rejected the effect.
+The proxy now delegates actual Store operations while retaining its injected
+snapshot. The race asserts `SourceBarrierHeld`, exactly one winner and no
+unauthorized remote-start event. The three original failures and two additional
+deterministic barrier cases passed in 51.72 seconds; Ruff and whitespace checks
+passed. Production module hashes are unchanged. These targeted results do not
+replace new exact-head review, full completion and protected gates, or the
+required actual self-run.
 
 The paused v12 checkpoint was archived as recoverable trusted-local evidence at
 `/Users/mattfaltyn/.local/state/mentat-self-assurance/controller-history/20261124T060800Z-v12-paused-checkpoint`;

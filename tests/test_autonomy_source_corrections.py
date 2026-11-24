@@ -449,7 +449,7 @@ def _source_outcome_and_decision(job_id, head, check, reviewer, decision_id, res
 def test_source_revision_fences_remote_effect_atomically(tmp_path, remote_head):
     from concurrent.futures import ThreadPoolExecutor
 
-    from mentat.autonomy_state import Store
+    from mentat.autonomy_state import SourceBarrierHeld, Store
 
     store = Store(tmp_path / 'atomic/state.db')
     session = store.new_session(str(tmp_path / 'repo'), 'base', 'head', {}, 1, 1000)
@@ -488,12 +488,27 @@ def test_source_revision_fences_remote_effect_atomically(tmp_path, remote_head):
     if 'revision' in results:
         assert store.source_head_fenced(session, 'head')
         assert not any(event['kind'] == 'publication_started' for event in events)
-        with pytest.raises(ValueError, match='fenc'):
+        with pytest.raises(SourceBarrierHeld, match='holds remote effects'):
             store.begin_remote_effect(session, 'publication_started', {'head': remote_head})
+        assert not any(event['kind'] == 'publication_started' for event in store.snapshot(session)['events'])
     else:
         assert not store.source_head_fenced(session, 'head')
         assert sum(event['kind'] == 'publication_started' for event in events) == 1
         assert not any(row['id'] == 'revision' for row in store.snapshot(session)['decisions'])
+
+
+@pytest.mark.parametrize('remote_head', ['head', 'foreign-head'])
+def test_active_source_correction_blocks_remote_effect_without_start_event(tmp_path, remote_head):
+    from mentat.autonomy_state import SourceBarrierHeld, Store
+
+    store = Store(tmp_path / 'barrier-wins/state.db')
+    session = store.new_session(str(tmp_path / 'repo'), 'base', 'head', {}, 1, 1000)
+    store.register_source_pass(session, 'cycle', 'item', 'head', 'base', 'plan', 'check', ['batch'],
+                               continuing=False)
+    store.block_source_cycle(session, 'cycle', 'head', 'source correction unresolved')
+    with pytest.raises(SourceBarrierHeld, match='holds remote effects'):
+        store.begin_remote_effect(session, 'publication_started', {'head': remote_head})
+    assert not any(event['kind'] == 'publication_started' for event in store.snapshot(session)['events'])
 
 
 @pytest.mark.parametrize('peer_revises', [False, True])
