@@ -156,3 +156,15 @@ def validate_findings(result: dict) -> dict:
     if result.get("decision") == "accept" and detail["unresolved_dependencies"]:
         raise ValueError("accepted final source review has unresolved dependencies")
     return detail
+
+
+def batch_linked_records(source_batch: dict) -> list[dict]:
+    """Select records linked to the batch's base or current surface obligations."""
+    linked = {key for item in source_batch["obligations"]
+              for surface in (item.get("base_surface"), item.get("current_surface"))
+              if isinstance(surface, dict) for key in surface.get("requirement_ids", [])}
+    records = [record for version in ("base", "current")
+               for collection in ("requirements", "claims")
+               for record in source_batch["records"][version][collection]]
+    return [record for record in records if record.get("id") in linked
+            or linked.intersection(record.get("requirement_ids", []))]
