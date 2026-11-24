@@ -859,6 +859,12 @@
       "reason": "Awaiting independently reviewed source correspondence."
     },
     {
+      "path": "src/mentat/autonomy_spec_scope.py",
+      "status": "unexamined",
+      "requirement_ids": [],
+      "reason": "Bounded specification correction implementation awaits independent source correspondence and operational qualification; no formal application proof is claimed."
+    },
+    {
       "path": "src/mentat/autonomy_state.py",
       "status": "gap",
       "requirement_ids": [],
@@ -1869,6 +1875,12 @@
       "status": "gap",
       "requirement_ids": [],
       "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "tests/test_autonomy_spec_scope.py",
+      "status": "unexamined",
+      "requirement_ids": [],
+      "reason": "Bounded specification correction implementation awaits independent source correspondence and operational qualification; no formal application proof is claimed."
     },
     {
       "path": "tests/test_autonomy_state.py",

@@ -24,6 +24,7 @@ from . import (
     autonomy_private_merge,
     autonomy_review_inputs,
     autonomy_source_corrections,
+    autonomy_spec_scope,
     gitio,
     process,
 )
@@ -231,166 +232,8 @@ def inventory(repo: Path, revision: str) -> list[dict]:
     return result
 
 
-def _bounded_json(path: Path) -> dict:
-    if path.is_symlink() or not path.is_file() or path.stat().st_size > MAX_ARTIFACT:
-        raise ValueError("missing, linked, or oversized specification artifact")
-    value = json.loads(path.read_text())
-    if not isinstance(value, dict):
-        raise ValueError("specification artifact must be an object")
-    return value
-
-
-def validate_specification(
-    repo: Path, *, tracked: list[str] | None = None, prior: dict | None = None
-) -> dict:
-    """Validate identifiers and complete area accounting, not English truth."""
-    fas = _bounded_json(repo / FAS_PATH)
-    if (
-        set(fas) != {"schema_version", "requirements", "claims", "surfaces"}
-        or fas["schema_version"] != 1
-    ):
-        raise ValueError("unsupported FAS inventory")
-    for field in ("requirements", "claims", "surfaces"):
-        if not isinstance(fas[field], list) or len(fas[field]) > 4096:
-            raise ValueError(f"invalid {field} inventory")
-    ids = set()
-    areas = set()
-    for requirement in fas["requirements"]:
-        if not isinstance(requirement, dict):
-            raise ValueError("invalid requirement")
-        rid = requirement.get("id")
-        try:
-            uuid.UUID(rid)
-        except (ValueError, AttributeError, TypeError) as exc:
-            raise ValueError("requirements need persistent UUIDs") from exc
-        if (
-            rid in ids
-            or requirement.get("area") not in AREAS
-            or requirement.get("origin") not in {"observed", "intended", "inferred", "uncertain"}
-        ):
-            raise ValueError("duplicate or invalid requirement")
-        statement = requirement.get("statement")
-        if not isinstance(statement, str) or not statement.strip():
-            raise ValueError("empty requirement")
-        spec_path = requirement.get("spec_path")
-        if not isinstance(spec_path, str) or not spec_path.startswith("openspec/specs/"):
-            raise ValueError("requirement must reference its repository OpenSpec document")
-        safe_relative_path(spec_path)
-        spec = repo / spec_path
-        if (
-            spec.is_symlink()
-            or not spec.is_file()
-            or not isinstance(rid, str)
-            or rid not in spec.read_text()
-        ):
-            raise ValueError("OpenSpec document is missing its persistent requirement ID")
-        ids.add(rid)
-        areas.add(requirement["area"])
-    if areas != set(AREAS):
-        raise ValueError("CAS must account for all six areas, including explicit uncertainty")
-    claim_ids = set()
-    for claim in fas["claims"]:
-        if not isinstance(claim, dict):
-            raise ValueError("invalid formal claim")
-        try:
-            uuid.UUID(claim.get("id"))
-        except (ValueError, AttributeError, TypeError) as exc:
-            raise ValueError("formal claims need persistent UUIDs") from exc
-        refs = claim.get("requirement_ids")
-        if (
-            claim["id"] in claim_ids
-            or not isinstance(refs, list)
-            or not refs
-            or not set(refs) <= ids
-        ):
-            raise ValueError("invalid claim traceability")
-        if not isinstance(claim.get("statement"), str) or not claim["statement"].strip():
-            raise ValueError("empty formal claim")
-        if not isinstance(claim.get("assumptions", []), list):
-            raise ValueError("claim assumptions must be explicit")
-        if claim.get("status", "unattempted") not in {"unattempted", "unsupported", "inconclusive"}:
-            raise ValueError("claim status must not assert an agent-authored proof")
-        contract = claim.get("formal_contract")
-        if "formal_contract" in claim:
-            if not isinstance(contract, dict) or set(contract) != {
-                "path",
-                "function",
-                "inputs",
-                "requires",
-                "ensures",
-            }:
-                raise ValueError("invalid source formal contract")
-            if (
-                not isinstance(contract["path"], str)
-                or not isinstance(contract["function"], str)
-                or not contract["function"].isidentifier()
-            ):
-                raise ValueError("invalid source formal contract identity")
-            safe_relative_path(contract["path"])
-            if not isinstance(contract["inputs"], dict) or any(
-                not isinstance(k, str) or not k.isidentifier() or v not in ("int", "bool")
-                for k, v in contract["inputs"].items()
-            ):
-                raise ValueError("invalid source formal contract inputs")
-            if not all(
-                isinstance(contract[key], str) and contract[key] for key in ("requires", "ensures")
-            ):
-                raise ValueError("invalid source formal contract predicates")
-        claim_ids.add(claim["id"])
-    for surface in fas["surfaces"]:
-        if not isinstance(surface, dict) or surface.get("status") not in {
-            "mapped",
-            "gap",
-            "unsupported",
-            "unexamined",
-        }:
-            raise ValueError("every inventoried surface needs a mapping or explicit gap")
-        safe_relative_path(surface.get("path", ""))
-        if surface.get("status") == "mapped" and (
-            not surface.get("requirement_ids") or not set(surface.get("requirement_ids", [])) <= ids
-        ):
-            raise ValueError("surface references unknown requirements")
-    surface_paths = [surface["path"] for surface in fas["surfaces"]]
-    if len(surface_paths) != len(set(surface_paths)):
-        raise ValueError("duplicate surface inventory path")
-    if tracked is not None and not set(tracked) <= set(surface_paths):
-        raise ValueError("surface inventory omits tracked paths")
-    if prior is not None:
-        for key in ("requirements", "claims"):
-            current = {item["id"]: item for item in fas[key]}
-            for old in prior[key]:
-                new = current.get(old["id"])
-                if new is None:
-                    raise ValueError("existing identifiers cannot be removed")
-                if new == old:
-                    continue
-                lineage = new.get("revision")
-                previous_revision = old.get("revision", {})
-                old_version = (
-                    previous_revision.get("version", 1)
-                    if isinstance(previous_revision, dict)
-                    else 1
-                )
-                if (
-                    not isinstance(lineage, dict)
-                    or type(lineage.get("version")) is not int
-                    or lineage["version"] != old_version + 1
-                    or lineage.get("previous_digest") != digest(old)
-                    or not isinstance(lineage.get("reason"), str)
-                    or not lineage["reason"].strip()
-                    or not isinstance(lineage.get("evidence"), list)
-                    or not lineage["evidence"]
-                ):
-                    raise ValueError(
-                        "revised records require versioned lineage, rationale and evidence"
-                    )
-                if (
-                    key == "requirements"
-                    and old.get("origin") in {"observed", "intended"}
-                    and new.get("origin") not in {"observed", "intended"}
-                ):
-                    raise ValueError("established intent cannot be downgraded")
-    return fas
+def validate_specification(repo: Path, *, tracked: list[str] | None = None, prior: dict | None = None) -> dict:
+    return autonomy_spec_scope.validate_specification(repo, tracked=tracked, prior=prior)
 
 
 def project_snapshot(snapshot: dict, *, identity: dict | None = None) -> dict:
@@ -631,7 +474,7 @@ class Coordinator:
             )
             self._event("feedback_consumed", {"seq": event["seq"]})
 
-    def _enqueue(self, loop: str, role: str, item: str, payload: dict, *, predecessor: dict | None = None) -> str:
+    def _enqueue(self, loop: str, role: str, item: str, payload: dict, *, predecessor: dict | None = None, end_correction_scope: bool = False) -> str:
         assert self.session_id
         if predecessor and payload.get("source_cycle_id") and payload.get("kind") == "generate_spec":
             cycle_id = payload["source_cycle_id"]
@@ -642,6 +485,8 @@ class Coordinator:
                 payload["capacity_feedback"] = payload["feedback"]
             payload.setdefault("scl_review_feedback", self.store.source_correction_scl_feedback(self.session_id, cycle_id))
             payload.update(feedback=original, review_base=cycle["origin_base"])
+        if predecessor and not end_correction_scope and "correction_scope" in predecessor.get("payload", {}) and payload.get("kind") == "generate_spec":
+            payload = {**payload, "correction_scope": predecessor["payload"]["correction_scope"]}
         snapshot = self.store.snapshot(self.session_id)
         session = snapshot["session"]
         if (
@@ -1576,6 +1421,13 @@ class Coordinator:
                 parent = selected
                 job = {**job, "payload": {**job["payload"], "target_head": parent}}
         worktree = self._worktree(job, parent)
+        correction_scope = autonomy_spec_scope.authenticate(self, job, inventory, _git_paths) if kind == "generate_spec" else None
+        if correction_scope:
+            tracked_input = [item["path"] for item in inventory(self.repo, parent)]
+            if FAS_PATH in tracked_input:
+                validate_specification(worktree, tracked=tracked_input)
+            elif parent != correction_scope["binding"]["accepted"]:
+                raise ValueError("correction input has no FAS")
         output = self.store.path.parent / "agents" / job["id"] / str(job["attempt"])
         if kind != "review_final_source":
             output.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -1597,8 +1449,12 @@ class Coordinator:
             and job["payload"]["evidence"]["source_identity"]["path"] not in included_paths
         ):
             raise ValueError("domain reviewer cannot inspect the complete source module")
+        task_payload = dict(job["payload"])
+        task_scope = task_payload.pop("correction_scope", None)
+        if task_scope is not None:
+            task_payload["correction_scope_id"] = task_scope["id"]
         task["payload"] = {
-            **job["payload"],
+            **task_payload,
             "prompt": self._prompt(job, session) + context,
             "purpose": "discriminator"
             if kind.startswith("review_") or kind in {"adjudicate_defect", "adjudicate_domain"}
@@ -1752,6 +1608,10 @@ class Coordinator:
                     "--no-textconv",
                 )
             fas = validate_specification(worktree, tracked=sorted(candidate_paths), prior=prior)
+            if correction_scope:
+                if prior is None and parent != correction_scope["binding"]["accepted"]:
+                    raise ValueError("correction input has no FAS")
+                autonomy_spec_scope.validate_delta(correction_scope, prior or {"requirements": [], "claims": [], "surfaces": []}, fas, staged)
             old_surfaces = {item["path"]: item for item in (prior or {}).get("surfaces", [])}
             old_requirements = {item["id"]: item for item in (prior or {}).get("requirements", [])}
             new_requirements = {item["id"]: item for item in fas["requirements"]}
@@ -2560,6 +2420,9 @@ class Coordinator:
             + len(json.dumps(patch_index, ensure_ascii=True))
             + len(fas_sha256)
         )
+        scope = job["payload"].get("correction_scope")
+        if scope is not None:
+            reserved += len(', "correction_scope": ') + len(json.dumps(scope, ensure_ascii=True))
         if diff is not None:
             reserved += len(json.dumps(diff, ensure_ascii=True))
         # Keep room for field names and omission metadata; the final bound is checked below.
@@ -3013,6 +2876,8 @@ class Coordinator:
         if source_mode and FAS_PATH in inventory_paths and FAS_PATH not in included:
             omitted.append({"path": FAS_PATH, "reason": "relevant FAS records supplied in source_batch"})
         context = {"revision": revision, "files": included, "omitted": omitted}
+        if scope is not None:
+            context["correction_scope"] = scope
         if cited_continuity:
             context["cited_source_continuity"] = cited_continuity
         if source_mode:
@@ -3134,7 +2999,13 @@ class Coordinator:
     def _prompt(self, job: dict, session: dict) -> str:
         kind = job["payload"]["kind"]
         input_revision = job["payload"].get("target_head", session["head"])
-        common = f"Mentat {job['loop'].upper()} {kind}. Session head {session['head']}; session base {session['base']}; task input revision {input_revision}. {_OUTPUT_INSTRUCTIONS}\nTask: {json.dumps(job['payload'])}\n"
+        prompt_payload = dict(job["payload"])
+        scope = prompt_payload.pop("correction_scope", None)
+        if scope is not None:
+            prompt_payload["correction_scope_id"] = scope["id"]
+        common = f"Mentat {job['loop'].upper()} {kind}. Session head {session['head']}; session base {session['base']}; task input revision {input_revision}. {_OUTPUT_INSTRUCTIONS}\nTask: {json.dumps(prompt_payload)}\n"
+        if scope is not None:
+            common += "The correction_scope in SOURCE_CONTEXT_JSON is the editable envelope; all other context is read-only and outside dependencies must be deferred.\n"
         if kind in {"generate_spec", "generate_verification", "investigate_defect"}:
             common += (
                 "The controller automatically runs configured completion gates and configured or reviewed FAS source contracts before acceptance reviews. "
@@ -3747,6 +3618,8 @@ class Coordinator:
                     self.store.block_source_cycle(self.session_id, cycle_id, self.store.source_cycle_head(self.session_id, cycle_id), "SCL review unresolved")
                     return
                 payload = autonomy_source_corrections.scl_revision_payload(job, pair, inventory(self.repo, proposal["head"]))
+                revised = next(d for d in self.store.snapshot(self.session_id)["decisions"] if d.get("review_cohort") == cohort and d.get("decision") == "revise")
+                payload["correction_scope"] = job["payload"].get("correction_scope") or autonomy_spec_scope.derive_for_review(self, revised["job_id"], revised["id"], inventory, _git_paths)
                 self._enqueue("scl", "implementer", proposal["root_item"], payload, predecessor={"id": pair[0]["job_id"]})
                 return
         if result["decision"] != "accept":
@@ -3785,6 +3658,7 @@ class Coordinator:
                     root_item,
                     {
                         "kind": original_kind,
+                        **({"correction_scope": job["payload"].get("correction_scope") or autonomy_spec_scope.derive_for_review(self, job["id"], decision["id"], inventory, _git_paths)} if original_kind == "generate_spec" else {}),
                         **{key: job["payload"][key] for key in ("source_cycle_id", "source_cycle_round") if key in job["payload"]},
                         "target_head": proposal["head"],
                         "review_base": proposal["parent"],
@@ -3970,6 +3844,7 @@ class Coordinator:
                         ),
                     },
                     predecessor=job,
+                    end_correction_scope=True,
                 )
                 return
             self._enqueue(
@@ -4099,9 +3974,10 @@ class Coordinator:
         retry = next_round < self.config["max_attempts"] and valid_base
         snapshot = self.store.snapshot(self.session_id)
         session = snapshot["session"]
-        recovery_review_base = accepted_base
+        recovery_review_base = job["payload"].get("correction_scope", {}).get("binding", {}).get("review_base", accepted_base)
         if (
             retry
+            and "correction_scope" not in job["payload"]
             and isinstance(accepted_base, str)
             and accepted_base
             and session["head"] != session["base"]
@@ -4274,6 +4150,7 @@ class Coordinator:
                 "revisit_files": payload.get("revisit_files", []),
                 **({"correspondence_refresh": payload["correspondence_refresh"]} if payload.get("correspondence_refresh") is not None else {}),
                 "unavailable_files": payload.get("unavailable_files", []),
+                **({"correction_scope": payload["correction_scope"]} if "correction_scope" in payload else {}),
                 "check_evidence_id": check_id,
                 "check_key": check_key,
                 "authority_digest": self.authority_digest,
@@ -4319,6 +4196,7 @@ class Coordinator:
                     "batch_limit": job["payload"].get("batch_limit"),
                     "revisit_files": job["payload"].get("revisit_files", []),
                     "unavailable_files": job["payload"].get("unavailable_files", []),
+                    **({"correction_scope": job["payload"]["correction_scope"]} if "correction_scope" in job["payload"] else {}),
                     "check_evidence_id": check_id,
                     "check_key": check_key,
                     "review_cohort": cohort,
