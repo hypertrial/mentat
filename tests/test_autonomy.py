@@ -2395,9 +2395,11 @@ def test_revision_cannot_drop_previously_added_surface(repo, tmp_path):
     )
 
 
-def test_structured_fas_patch_keeps_lineage_and_reaches_both_reviewers(repo, tmp_path):
+@pytest.mark.parametrize('correction', [False, True])
+def test_structured_fas_patch_keeps_lineage_and_reaches_both_reviewers(repo, tmp_path, monkeypatch, correction):
     import hashlib
 
+    from mentat import autonomy_runtime
     from mentat.autonomy import digest
     from mentat.autonomy_state import record_digest
 
@@ -2424,46 +2426,107 @@ def test_structured_fas_patch_keeps_lineage_and_reaches_both_reviewers(repo, tmp
     git(repo, 'commit', '-qm', 'prior specification')
     git(repo, 'update-ref', 'refs/remotes/origin/main', git(repo, 'rev-parse', 'HEAD'))
     prompts = []
+    generation_prompts = []
+    refresh_prompts = []
+    non_generator_prompts = []
 
     class PatchAgent(Agent):
         def run(self, repo, job, output, *, timeout_seconds):
             payload = job['payload']
             if payload['kind'] == 'generate_spec':
+                if payload.get('targetfiles') and 'src.py' not in payload['targetfiles']:
+                    refresh_prompts.append(payload['prompt'])
+                    return {'status': 'succeeded', 'session_id': job['id'], 'result': {
+                        'decision': 'defer', 'summary': 'Other batch remains unexamined',
+                        'findings': [], 'verification_requests': []}}
                 current = (repo / '.mentat/fas.json').read_bytes()
+                generation_prompts.append(payload['prompt'])
                 context = json.loads(payload['prompt'].split('SOURCE_CONTEXT_JSON:\n', 1)[1])
                 old = json.loads(current)['requirements'][0]
+                assert 'src.py' in context['files'], (payload.get('round'), payload.get('kind'), payload.get('targetfiles'), list(context['files']))
                 assert context['files']['src.py'] == (repo / 'src.py').read_text()
                 assert context['files']['z_cited.py'] == cited_source.read_text()
                 assert context['fas_sha256'] == hashlib.sha256(current).hexdigest()
                 assert context['patch_record_digest_index']['requirements'][old['id']] == record_digest(old)
-                assert context['patch_record_digest_index']['surfaces']['src.py'] == record_digest(next(s for s in surfaces if s['path'] == 'src.py'))
-                updated = {**old, 'statement': 'Clarified', 'revision': {
-                    'version': 2, 'previous_digest': digest(old),
-                    'reason': 'Reviewed source', 'evidence': ['src.py']},
+                surface = next(s for s in json.loads(current)['surfaces'] if s['path'] == 'src.py')
+                assert context['patch_record_digest_index']['surfaces']['src.py'] == record_digest(surface)
+                retry = payload.get('round') == 1
+                updated = {**old, 'statement': 'Clarified after review' if retry else 'Clarified', 'revision': {
+                    'version': old.get('revision', {}).get('version', 1) + 1,
+                    'previous_digest': digest(old), 'reason': 'Reviewed source', 'evidence': ['src.py']},
                     'citations': ['z_cited.py:1']}
-                patch = {'schema_version': 1, 'expected_sha256': context['fas_sha256'], 'edits': [{
-                    'collection': 'requirements', 'key': old['id'],
-                    'expected_digest': record_digest(old), 'record': updated}, {
-                    'collection': 'surfaces', 'key': 'src.py',
-                    'expected_digest': record_digest(next(s for s in surfaces if s['path'] == 'src.py')), 'record': {
-                        'path': 'src.py', 'status': 'mapped', 'requirement_ids': [old['id']]}}]}
-                spec = repo / 'openspec/specs/application/spec.md'
-                spec.write_text(spec.read_text() + '\n' + 's' * 30_000)
-                return {'status': 'succeeded', 'session_id': job['id'], 'result': {
-                    'decision': 'accept', 'summary': 'refined', 'findings': [],
-                    'verification_requests': [], 'changes': [{
-                        'path': '.mentat/fas.json', 'operation': 'patch_fas',
-                        'content': json.dumps(patch)}]}}
+                edits = [{'collection': 'requirements', 'key': old['id'],
+                          'expected_digest': record_digest(old), 'record': updated}]
+                if not retry:
+                    edits.append({'collection': 'surfaces', 'key': 'src.py',
+                                  'expected_digest': record_digest(surface), 'record': {
+                                      'path': 'src.py', 'status': 'mapped', 'requirement_ids': [old['id']]}})
+                patch = {'schema_version': 1, 'expected_sha256': context['fas_sha256'], 'edits': edits}
+                if not retry:
+                    spec = repo / 'openspec/specs/application/spec.md'
+                    spec.write_text(spec.read_text() + '\n' + 's' * 30_000)
+                # Exercise the real adapter and schema with a deterministic
+                # data-only model that declines contradictory operation guidance.
+                features = ('shell_tool', 'unified_exec', 'apps', 'browser_use',
+                            'computer_use', 'multi_agent', 'code_mode', 'code_mode_host')
+                original_run = autonomy_runtime._run
+
+                def fake_run(argv, **kwargs):
+                    if argv[:3] == ['codex', 'exec', '--help']:
+                        return '--ignore-user-config --disable'
+                    if argv[:3] == ['codex', 'features', 'list']:
+                        return '\n'.join(f'{feature} stable true' for feature in features)
+                    return original_run(argv, **kwargs)
+
+                def fake_execute(self, argv, **kwargs):
+                    schema = json.loads(Path(argv[argv.index('--output-schema') + 1]).read_text())
+                    operations = schema['properties']['changes']['items']['properties']['operation']['enum']
+                    assert 'patch_fas' in operations
+                    assert argv[-1] == payload['prompt']
+                    conflict = 'use operation write or delete' in argv[-1]
+                    answer = {'schema_version': 1, 'decision': 'defer' if conflict else 'accept',
+                              'summary': 'Conflicting operation guidance' if conflict else 'refined',
+                              'requirements': [], 'claims': [], 'findings': [],
+                              'verification_requests': [], 'defects': [], 'changes': []}
+                    if not conflict:
+                        answer['changes'] = [{'path': '.mentat/fas.json', 'operation': 'patch_fas',
+                                              'content': json.dumps(patch)}]
+                    Path(argv[argv.index('--output-last-message') + 1]).write_text(json.dumps(answer))
+                    return '{"type":"thread.started","thread_id":"test-model"}\n'
+
+                with monkeypatch.context() as adapter_patch:
+                    adapter_patch.setattr(autonomy_runtime, '_run', fake_run)
+                    adapter_patch.setattr(autonomy_runtime.CodexAgent, '_execute', fake_execute)
+                    return autonomy_runtime.CodexAgent().run(repo, job, output, timeout_seconds=timeout_seconds)
+            if payload['kind'] in {'review_spec', 'generate_verification'}:
+                non_generator_prompts.append((payload['kind'], payload['prompt']))
             if payload['kind'] == 'review_spec':
-                prompts.append(payload['prompt'])
-            return super().run(repo, job, output, timeout_seconds=timeout_seconds)
+                prompts.append((payload['proposal'].get('round', 0), payload['prompt']))
+            result = super().run(repo, job, output, timeout_seconds=timeout_seconds)
+            if payload['kind'] == 'review_spec':
+                assert not result['result']['changes']
+                if correction and payload['proposal'].get('round', 0) == 0:
+                    result['result']['decision'] = 'revise'
+                    result['result']['findings'] = [{'summary': 'Clarify further'}]
+            return result
 
     snapshot, _, github = run(repo, tmp_path, agent=PatchAgent())
     updated = next(r for r in snapshot['requirements'] if r['id'] == requirements[0]['id'])
-    assert updated['statement'] == 'Clarified', snapshot
+    assert updated['statement'] == ('Clarified after review' if correction else 'Clarified'), snapshot
     assert any(e['kind'] == 'record_revised' for e in snapshot['events'])
-    assert len(prompts) == 2
-    for prompt in prompts:
+    assert len(generation_prompts) == (2 if correction else 1)
+    if correction:
+        assert refresh_prompts
+    for prompt in [*generation_prompts, *refresh_prompts]:
+        assert 'use operation write or delete' not in prompt
+        assert 'Only generate_spec may use patch_fas, only at .mentat/fas.json' in prompt
+        assert 'prefer operation patch_fas' in prompt
+    for kind, prompt in non_generator_prompts:
+        assert 'Only generate_spec may use patch_fas, only at .mentat/fas.json' in prompt
+        if kind == 'review_spec':
+            assert 'Reviewers must return an empty changes list' in prompt
+    assert len(prompts) == (4 if correction else 2)
+    for _, prompt in prompts:
         context = json.loads(prompt.split('SOURCE_CONTEXT_JSON:\n', 1)[1])
         assert '.mentat/fas.json' in context['proposal_diff']
         assert 'Clarified' in context['proposal_diff']
@@ -2471,14 +2534,19 @@ def test_structured_fas_patch_keeps_lineage_and_reaches_both_reviewers(repo, tmp
         assert context['files']['z_cited.py'] == cited_source.read_text()
         assert any(item['reason'] == 'context budget exhausted' for item in context['omitted'])
         assert context['files']['.mentat/fas.json'] == git(repo, 'show', f"{context['proposal_head']}:.mentat/fas.json") + '\n'
-    review = next(j for j in snapshot['jobs'] if j['payload']['kind'] == 'review_spec')
+    review = next(j for j in snapshot['jobs'] if j['payload']['kind'] == 'review_spec'
+                  and j['payload']['proposal'].get('round', 0) == int(correction))
     candidate = json.loads(git(repo, 'show', f"{review['payload']['proposal']['head']}:.mentat/fas.json"))
     assert candidate['requirements'][1:] == requirements[1:]
     mapped = next(s for s in candidate['surfaces'] if s['path'] == 'src.py')
     assert mapped == {'path': 'src.py', 'status': 'mapped', 'requirement_ids': [requirements[0]['id']]}
     assert [s for s in candidate['surfaces'] if s['path'] != 'src.py'] == [
         s for s in surfaces if s['path'] != 'src.py']
-    assert github.published
+    reviewed = [d for d in snapshot['decisions'] if d.get('review_kind') == 'review_spec'
+                and d.get('head') == review['payload']['proposal']['head'] and d.get('decision') == 'accept']
+    assert len({d['reviewer_id'] for d in reviewed}) == 2
+    if not correction:
+        assert github.published
 
 
 def test_spec_provenance_tracks_observed_input_across_review_retries(repo, tmp_path):
