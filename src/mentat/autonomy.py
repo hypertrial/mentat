@@ -661,6 +661,7 @@ class Coordinator:
             payload = dict(payload)
             if "feedback" in payload and payload["feedback"] != original:
                 payload["capacity_feedback"] = payload["feedback"]
+            payload.setdefault("scl_review_feedback", self.store.source_correction_scl_feedback(self.session_id, cycle_id))
             payload.update(feedback=original, review_base=cycle["origin_base"])
         snapshot = self.store.snapshot(self.session_id)
         session = snapshot["session"]
@@ -749,6 +750,7 @@ class Coordinator:
     def _drain_source_cycles(self) -> None:
         """Drain completed source passes."""
         assert self.session_id
+        self.store.checkpoint_source_scl_failures(self.session_id)
         snapshot = self.store.snapshot(self.session_id)
         for cycle in self.store.source_cycles(self.session_id):
             if cycle["status"] not in {"reviewing", "draining", "resolved"}:
@@ -1226,17 +1228,7 @@ class Coordinator:
         return autonomy_source_corrections.input_bindings(job, self.session_id, self.authority_digest, self.tool_identity)
 
     def _validate_source_input(self, job: dict, decision: dict, scope: dict) -> None:
-        outcome = job.get("outcome") or {}
-        if (job.get("status") != "succeeded" or outcome.get("status") != "succeeded"
-                or outcome.get("input_manifest_sha256") != decision.get("input_manifest_sha256")
-                or outcome.get("input_manifest") != decision.get("input_manifest")
-                or outcome.get("author_id") != decision.get("reviewer_id")
-                or outcome.get("head") != decision.get("head")
-                or outcome.get("diff_digest") != decision.get("diff_digest")
-                or outcome.get("result", {}).get("decision") != decision.get("decision")
-                or outcome.get("result", {}).get("summary") != decision.get("summary")
-                or outcome.get("result", {}).get("findings") != decision.get("findings")):
-            raise ValueError("source decision lacks matching fenced outcome")
+        outcome = autonomy_source_corrections.source_decision_outcome(job, decision)
         paths = {item["path"] for endpoint in (job["payload"]["proposal"]["parent"], job["payload"]["proposal"]["head"])
                  for item in inventory(self.repo, endpoint)}
         autonomy_source_corrections.validate_result(outcome["result"], scope, paths)
@@ -1302,10 +1294,7 @@ class Coordinator:
     def _source_input_artifacts(self, job: dict, prompt: str, context: str) -> dict:
         assert self.session_id
         snapshot = self.store.snapshot(self.session_id)
-        live = next((item for item in snapshot["jobs"] if item["id"] == job["id"]), None)
-        if (not live or live["status"] != "running" or live["attempt"] != job["attempt"]
-                or live["lease_until"] <= self.clock()):
-            raise ValueError("source review input requires a live job lease")
+        autonomy_source_corrections.validate_live_source_job(snapshot, job, self.clock())
         return autonomy_review_inputs.persist(self.repo, self.store.path.parent, job, prompt,
                                               context, self._source_input_bindings(job))
 
@@ -1345,6 +1334,7 @@ class Coordinator:
                 seen.add(key)
                 plan.append(argv)
         return plan
+
 
     def _source_cases(self, head: str, deadline: float) -> list[dict]:
         from .source_verify import verify_source
@@ -3224,6 +3214,7 @@ class Coordinator:
             + "Independently inspect actual source and all changes against recorded requirements. For fix, verification, and final reviews the controller supplies actual protected completion-gate and source-contract evidence in check_summary before acceptance review. Do not request those same checks again; if a genuinely missing method is needed, request a concrete additional executable command or defer with the unsupported gap. Return accept only for defensible correspondence; identify source/model gaps, weakened requirements, unsupported assumptions, hidden failures, unintended changes, and incomplete cases. Do not edit anything. Agent acceptance does not establish a theorem."
         )
 
+
     def _advance(self, job: dict, outcome: dict) -> None:
         assert self.session_id
         kind = job["payload"]["kind"]
@@ -3765,6 +3756,19 @@ class Coordinator:
             self.store.record_source_decision(self.session_id, job["payload"]["source_cycle_id"], decision)
             return
         self.store.put_record(self.session_id, "decision", decision)
+        if kind == "review_spec" and job["payload"].get("source_cycle_id"):
+            cycle_id = job["payload"]["source_cycle_id"]
+            pair = self.store.source_scl_pair(self.session_id, cycle_id, cohort)
+            if not pair:
+                return
+            if any(r["result"].get("decision") != "accept" for r in pair):
+                if (any(r["result"].get("decision") not in {"accept", "revise"} for r in pair)
+                        or proposal.get("round", 0) + 1 >= self.config["max_attempts"]):
+                    self.store.block_source_cycle(self.session_id, cycle_id, self.store.source_cycle_head(self.session_id, cycle_id), "SCL review unresolved")
+                    return
+                payload = autonomy_source_corrections.scl_revision_payload(job, pair, inventory(self.repo, proposal["head"]))
+                self._enqueue("scl", "implementer", proposal["root_item"], payload, predecessor={"id": pair[0]["job_id"]})
+                return
         if result["decision"] != "accept":
             next_round = proposal.get("round", 0) + 1
             retry = result["decision"] == "revise" and next_round < self.config["max_attempts"]

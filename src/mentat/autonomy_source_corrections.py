@@ -103,3 +103,42 @@ def allowed_path(kind: str, path: str) -> bool:
         }
         or Path(path).name.startswith(("requirements", "conftest"))
     )
+
+
+def scl_revision_payload(job: dict, pair: list[dict], surfaces: list) -> dict:
+    """Build a correction retry with both source and SCL feedback preserved."""
+    prior = job["payload"]
+    proposal = prior["proposal"]
+    return {
+        "kind": "generate_spec", "source_cycle_id": prior["source_cycle_id"],
+        "source_cycle_round": prior["source_cycle_round"],
+        "target_head": proposal["head"], "root_item": proposal["root_item"],
+        "round": proposal.get("round", 0) + 1, "scl_review_feedback": pair,
+        "prior_authors": [*proposal.get("prior_authors", []), proposal["author_id"]],
+        "source_checks": prior.get("source_checks", []), "repair": prior.get("repair"),
+        "accepted_spec_base": proposal.get("accepted_spec_base"), "surfaces": surfaces,
+        **{key: prior[key] for key in ("targetfiles", "chunk", "batch_limit", "revisit_files", "unavailable_files") if key in prior},
+    }
+
+
+def source_decision_outcome(job: dict, decision: dict) -> dict:
+    outcome = job.get("outcome") or {}
+    if (job.get("status") != "succeeded" or outcome.get("status") != "succeeded"
+            or outcome.get("input_manifest_sha256") != decision.get("input_manifest_sha256")
+            or outcome.get("input_manifest") != decision.get("input_manifest")
+            or outcome.get("author_id") != decision.get("reviewer_id")
+            or outcome.get("head") != decision.get("head")
+            or outcome.get("diff_digest") != decision.get("diff_digest")
+            or outcome.get("result", {}).get("decision") != decision.get("decision")
+            or outcome.get("result", {}).get("summary") != decision.get("summary")
+            or outcome.get("result", {}).get("findings") != decision.get("findings")):
+        raise ValueError("source decision lacks matching fenced outcome")
+    return outcome
+
+
+
+def validate_live_source_job(snapshot: dict, job: dict, now: float) -> None:
+    live = next((item for item in snapshot["jobs"] if item["id"] == job["id"]), None)
+    if (not live or live["status"] != "running" or live["attempt"] != job["attempt"]
+            or live["lease_until"] <= now):
+        raise ValueError("source review input requires a live job lease")

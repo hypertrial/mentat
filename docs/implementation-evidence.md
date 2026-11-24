@@ -154,6 +154,33 @@ independent acceptance of this candidate. New exact-commit reviews, complete
 native/Linux and package gates, all 45 protected fixtures, and a fresh real
 self-run remain pending.
 
+Both independent reviews rejected candidate `985b440417debd036d5ab7f7ac7af673464fd7a9`:
+an SCL reviewer revision during source correction created an unauthorized stale
+retry and discarded the original source feedback. The revised implementation
+waits for the complete authenticated reviewer pair and atomically hands off one
+retry with both reviewer results and the original source feedback. An exhausted
+reviewer checkpoints the correction, leaving the barrier in place. Existing
+source-pass and SCL retry limits remain separate. Source input outcome and lease
+checks moved to pure helpers with unchanged coordinator interfaces.
+
+The independent real-Codex regression failed on the rejected candidate. On the
+revised frozen source, nine focused cases passed, including both reviewer arrival
+orders, revising and deferring peers, exhausted peers, lease expiry, resume,
+replay, and preserving critique through a later frontier handoff. The broader
+correction/runtime run passed 89 cases; four large-context fixture failures were
+corrected and those four passed separately on the same production hashes.
+Candidate-interpreter Pyright and scoped Ruff passed. New independent exact-head
+reviews, full native/Linux/package gates, protected fixtures and a fresh real
+self-run remain pending.
+
+The paused v12 checkpoint was archived as recoverable trusted-local evidence at
+`/Users/mattfaltyn/.local/state/mentat-self-assurance/controller-history/20261124T060800Z-v12-paused-checkpoint`;
+its manifest SHA-256 is `46e1c0a77466cef246eef90b87b82f1b9c6d2b2db82c80840ec149edac2a2d72`.
+An independent completion audit reported 71 retired worktrees and refs removed
+and the canonical paused database logical dump unchanged. Restore the archived
+checkpoint before resuming that historical session; the archive is not a remote
+or OS-immutable attestation.
+
 ## Local workflow foundation
 
 PR [47](https://github.com/hypertrial/mentat/pull/47) merged as

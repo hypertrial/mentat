@@ -682,6 +682,93 @@ class Store:
                 raise ValueError("current source correction is unavailable")
             return json.loads(row[0]).get("feedback")
 
+    def source_correction_scl_feedback(self, session_id: str, cycle_id: str) -> object:
+        with self._connect() as db:
+            row = db.execute("SELECT jobs.payload FROM source_correction_cycles JOIN jobs ON jobs.id=source_correction_cycles.correction_job_id WHERE source_correction_cycles.id=? AND source_correction_cycles.session_id=?", (cycle_id, session_id)).fetchone()
+            if not row:
+                raise ValueError("current source correction is unavailable")
+            return json.loads(row[0]).get("scl_review_feedback")
+
+    def _source_scl_pair(self, db: sqlite3.Connection, session_id: str, cycle: sqlite3.Row, cohort: str) -> list[dict] | None:
+        """Read the complete authenticated SCL cohort under the caller's transaction."""
+        rows = db.execute("SELECT jobs.*, transitions.status AS transition_status FROM jobs LEFT JOIN transitions ON transitions.job_id=jobs.id WHERE jobs.session_id=? AND json_extract(jobs.payload,'$.kind')='review_spec' AND json_extract(jobs.payload,'$.review_cohort')=? ORDER BY jobs.id", (session_id, cohort)).fetchall()
+        if len(rows) != 2 or any(r["status"] in {"queued", "running"} for r in rows):
+            return None
+        if any(r["status"] != "succeeded" or r["transition_status"] not in {"pending", "done"} for r in rows):
+            raise ValueError("source correction SCL reviewer unavailable")
+        if any(db.execute("SELECT 1 FROM source_correction_handoffs WHERE predecessor=? AND cycle_id=?", (r["id"], cycle["id"])).fetchone() for r in rows):
+            return []
+        current = db.execute("SELECT * FROM jobs WHERE id=? AND session_id=?", (cycle["correction_job_id"], session_id)).fetchone()
+        if not current or current["status"] != "succeeded":
+            raise ValueError("source correction generator unavailable")
+        generated = json.loads(current["outcome"] or "{}")
+        barrier = self._barrier(db, session_id)
+        pair = []
+        proposal = None
+        for row in rows:
+            payload, outcome = json.loads(row["payload"]), json.loads(row["outcome"] or "{}")
+            proposed = payload.get("proposal", {})
+            decisions = [json.loads(r[0]) for r in db.execute("SELECT data FROM records WHERE session_id=? AND kind='decision' AND json_extract(data,'$.job_id')=?", (session_id, row["id"]))]
+            if not decisions:
+                return None
+            if len(decisions) != 1:
+                raise ValueError("ambiguous source correction SCL decision")
+            decision = decisions[0]
+            if (not barrier or barrier["status"] != "active" or barrier["cycle_id"] != cycle["id"]
+                    or not db.execute("SELECT 1 FROM source_finalization_job_epochs WHERE job_id=? AND epoch=?", (row["id"], barrier["epoch"])).fetchone()
+                    or payload.get("source_cycle_id") != cycle["id"] or payload.get("review_cohort") != cohort
+                    or payload.get("source_cycle_round") != cycle["failed_passes"]
+                    or proposed != (proposal if proposal is not None else proposed)
+                    or generated.get("head") != proposed.get("head") or generated.get("author_id") != proposed.get("author_id")
+                    or generated.get("result", {}).get("decision") != "accept"
+                    or not db.execute("SELECT 1 FROM transitions WHERE job_id=? AND status='done'", (current["id"],)).fetchone()
+                    or outcome.get("head") != proposed.get("head") or outcome.get("diff_digest") != proposed.get("diff_digest")
+                    or decision.get("review_cohort") != cohort or decision.get("review_kind") != "review_spec"
+                    or decision.get("reviewer_id") != outcome.get("author_id")
+                    or decision.get("decision") != outcome.get("result", {}).get("decision")
+                    or decision.get("summary") != outcome.get("result", {}).get("summary")
+                    or decision.get("head") != outcome.get("head") or decision.get("diff_digest") != outcome.get("diff_digest")
+                    or decision.get("reviewer_id") in [proposed.get("author_id"), *proposed.get("prior_authors", [])]
+                    or db.execute("SELECT 1 FROM stale_transitions WHERE job_id=?", (row["id"],)).fetchone()):
+                raise ValueError("source correction SCL cohort changed")
+            proposal = proposed
+            pair.append({"job_id": row["id"], "decision_id": decision["id"], "reviewer_id": decision["reviewer_id"], "review_cohort": cohort, "result": outcome["result"]})
+        if len({review["reviewer_id"] for review in pair}) != 2:
+            raise ValueError("source correction SCL reviewers are not independent")
+        return pair
+
+    def source_cycle_head(self, session_id: str, cycle_id: str) -> str:
+        with self._connect() as db:
+            row = db.execute("SELECT active_head FROM source_correction_cycles WHERE session_id=? AND id=?", (session_id, cycle_id)).fetchone()
+            if not row:
+                raise ValueError("source correction is unavailable")
+            return str(row[0])
+
+    def checkpoint_source_scl_failures(self, session_id: str) -> None:
+        """Keep a correction blocked when a required SCL peer has exhausted its job."""
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            cycles = db.execute("SELECT * FROM source_correction_cycles WHERE session_id=? AND status='correcting'", (session_id,)).fetchall()
+            for cycle in cycles:
+                current = db.execute("SELECT outcome FROM jobs WHERE id=?", (cycle["correction_job_id"],)).fetchone()
+                if not current or not current[0]:
+                    continue
+                head = json.loads(current[0]).get("head")
+                failed = db.execute("SELECT 1 FROM jobs WHERE session_id=? AND (status='failed' OR (status='succeeded' AND json_extract(outcome,'$.exhausted')=1)) AND json_extract(payload,'$.kind')='review_spec' AND json_extract(payload,'$.source_cycle_id')=? AND json_extract(payload,'$.proposal.head')=?", (session_id, cycle["id"], head)).fetchone()
+                if failed:
+                    db.execute("UPDATE source_correction_cycles SET status='blocked' WHERE id=? AND status='correcting'", (cycle["id"],))
+                    self._source_block_finding(db, session_id, cycle["id"], cycle["active_head"], "SCL reviewer failed")
+                    self._event(db, session_id, "source_correction_blocked", {"cycle_id": cycle["id"], "head": cycle["active_head"], "reason": "SCL reviewer failed"})
+            db.commit()
+
+    def source_scl_pair(self, session_id: str, cycle_id: str, cohort: str) -> list[dict] | None:
+        with self._connect() as db:
+            db.execute("BEGIN")
+            cycle = db.execute("SELECT * FROM source_correction_cycles WHERE id=? AND session_id=?", (cycle_id, session_id)).fetchone()
+            if not cycle or cycle["status"] != "correcting":
+                raise ValueError("source correction is not active")
+            return self._source_scl_pair(db, session_id, cycle, cohort)
+
     def handoff_source_correction(self, session_id: str, cycle_id: str, predecessor_id: str,
                                   item: str, input_digest: str, payload: dict) -> str:
         """Atomically replace an authorized correction with its exact successor."""
@@ -713,6 +800,9 @@ class Store:
                     or payload.get("feedback") != original.get("feedback")
                     or payload.get("review_base") != cycle["origin_base"]):
                 raise ValueError("correction successor lost its lineage or feedback")
+            if (not (prior.get("kind") == "review_spec" and any(d.get("decision") == "revise" for d in [json.loads(r[0]) for r in db.execute("SELECT data FROM records WHERE session_id=? AND kind='decision' AND json_extract(data,'$.review_cohort')=?", (session_id, prior.get("review_cohort")))]))
+                    and payload.get("scl_review_feedback") != original.get("scl_review_feedback")):
+                raise ValueError("correction successor lost SCL review feedback")
             if predecessor_id == current["id"]:
                 if payload.get("capacity_feedback"):
                     finding_id = hashlib.sha256(json.dumps({"job": predecessor_id, "record": "review-capacity"}, sort_keys=True, allow_nan=False).encode()).hexdigest()
@@ -736,7 +826,17 @@ class Store:
                 generated = json.loads(current["outcome"] or "{}")
                 cohort = prior.get("review_cohort")
                 decisions = [json.loads(row[0]) for row in db.execute("SELECT data FROM records WHERE session_id=? AND kind='decision' AND json_extract(data,'$.review_cohort')=?", (session_id, cohort))]
-                if (not cohort or generated.get("head") != proposal.get("head")
+                if any(d.get("decision") == "revise" for d in decisions):
+                    pair = self._source_scl_pair(db, session_id, cycle, cohort)
+                    maximum = json.loads(self._session(db, session_id)["policy"]).get("max_attempts", 3)
+                    if (pair is None or payload["scl_review_feedback"] != pair
+                            or not any(r["result"].get("decision") == "revise" for r in pair)
+                            or any(r["result"].get("decision") not in {"accept", "revise"} for r in pair)
+                            or payload.get("target_head") != proposal.get("head")
+                            or payload.get("round") != proposal.get("round", 0) + 1
+                            or payload["round"] >= maximum):
+                        raise ValueError("invalid source correction SCL revision")
+                elif (not cohort or generated.get("head") != proposal.get("head")
                         or generated.get("author_id") != proposal.get("author_id")
                         or generated.get("result", {}).get("decision") != "accept"
                         or not db.execute("SELECT 1 FROM transitions WHERE job_id=? AND status='done'", (current["id"],)).fetchone()
@@ -744,20 +844,21 @@ class Store:
                         or len({d.get("reviewer_id") for d in decisions if d.get("decision") == "accept" and d.get("status") == "passed"}) < 2
                         or any(d.get("decision") != "accept" for d in decisions)):
                     raise ValueError("correction frontier lacks accepted SCL pair")
-                for decision in decisions:
-                    reviewer = db.execute("SELECT jobs.*, transitions.status AS transition_status FROM jobs LEFT JOIN transitions ON transitions.job_id=jobs.id WHERE jobs.id=? AND jobs.session_id=?", (decision.get("job_id"), session_id)).fetchone()
-                    if not reviewer or reviewer["status"] != "succeeded" or reviewer["transition_status"] not in {"pending", "done"} or db.execute("SELECT 1 FROM stale_transitions WHERE job_id=?", (reviewer["id"],)).fetchone():
-                        raise ValueError("correction reviewer transition is unavailable")
-                    review_payload, review_outcome = json.loads(reviewer["payload"]), json.loads(reviewer["outcome"])
-                    if (review_payload.get("kind") != "review_spec" or review_payload.get("source_cycle_id") != cycle_id
-                            or review_payload.get("review_cohort") != cohort or review_payload.get("proposal") != proposal
-                            or review_outcome.get("head") != proposal.get("head") or review_outcome.get("author_id") != decision.get("reviewer_id")
-                            or review_outcome.get("result", {}).get("decision") != "accept"
-                            or decision.get("reviewer_id") in [proposal.get("author_id"), *proposal.get("prior_authors", [])]):
-                        raise ValueError("correction reviewer outcome does not match")
-                pending = sorted(set(proposal.get("context_pending", [])) | set(prior.get("revisit_files", [])))
-                if not pending or payload.get("targetfiles") != pending:
-                    raise ValueError("correction successor does not match accepted frontier")
+                if not any(d.get("decision") == "revise" for d in decisions):
+                    for decision in decisions:
+                        reviewer = db.execute("SELECT jobs.*, transitions.status AS transition_status FROM jobs LEFT JOIN transitions ON transitions.job_id=jobs.id WHERE jobs.id=? AND jobs.session_id=?", (decision.get("job_id"), session_id)).fetchone()
+                        if not reviewer or reviewer["status"] != "succeeded" or reviewer["transition_status"] not in {"pending", "done"} or db.execute("SELECT 1 FROM stale_transitions WHERE job_id=?", (reviewer["id"],)).fetchone():
+                            raise ValueError("correction reviewer transition is unavailable")
+                        review_payload, review_outcome = json.loads(reviewer["payload"]), json.loads(reviewer["outcome"])
+                        if (review_payload.get("kind") != "review_spec" or review_payload.get("source_cycle_id") != cycle_id
+                                or review_payload.get("review_cohort") != cohort or review_payload.get("proposal") != proposal
+                                or review_outcome.get("head") != proposal.get("head") or review_outcome.get("author_id") != decision.get("reviewer_id")
+                                or review_outcome.get("result", {}).get("decision") != "accept"
+                                or decision.get("reviewer_id") in [proposal.get("author_id"), *proposal.get("prior_authors", [])]):
+                            raise ValueError("correction reviewer outcome does not match")
+                    pending = sorted(set(proposal.get("context_pending", [])) | set(prior.get("revisit_files", [])))
+                    if not pending or payload.get("targetfiles") != pending:
+                        raise ValueError("correction successor does not match accepted frontier")
             else:
                 raise ValueError("stale correction predecessor")
             job_id = uuid.uuid4().hex

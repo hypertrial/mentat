@@ -13,8 +13,11 @@ from test_autonomy import repo as repo_fixture
 @pytest.mark.parametrize('peer_defers', [False, True])
 @pytest.mark.parametrize('review_order', ['first', 'last'])
 @pytest.mark.parametrize('correction_defers', [False, True])
+@pytest.mark.parametrize(('scl_revise', 'scl_peer'), [
+    (False, 'accept'), (True, 'accept'), (True, 'revise'), (True, 'defer'), (True, 'failed'),
+])
 def test_source_revision_routes_to_current_head_specification_correction(
-    tmp_path, monkeypatch, peer_defers, review_order, correction_defers
+    tmp_path, monkeypatch, peer_defers, review_order, correction_defers, scl_revise, scl_peer
 ):
     from mentat import autonomy_runtime
 
@@ -43,8 +46,10 @@ def test_source_revision_routes_to_current_head_specification_correction(
     lock = threading.Lock()
     local = threading.local()
     source_code_returned = threading.Event()
+    spec_code_returned = threading.Event()
     state = {'source_revised': False, 'corrected': False, 'drain': None, 'code_job': None,
-             'correction_deferred': False, 'source_head': None, 'stale_descendant_seen': False}
+             'correction_deferred': False, 'source_head': None, 'stale_descendant_seen': False,
+             'scl_revised': False, 'spec_code_job': None, 'scl_first_head': None}
     calls = []
     original_run = autonomy_runtime._run
     features = ('shell_tool', 'unified_exec', 'apps', 'browser_use', 'computer_use',
@@ -64,6 +69,47 @@ def test_source_revision_routes_to_current_head_specification_correction(
         assert prompt == payload['prompt']
         schema = json.loads(Path(argv[argv.index('--output-schema') + 1]).read_text())
         assert 'summary' in schema['required']
+        if payload['kind'] == 'review_spec':
+            first_slot = job['item_id'].endswith('.1')
+            if not first_slot and state['scl_first_head'] is None:
+                assert spec_code_returned.wait(timeout=15)
+                import time
+
+                from mentat.autonomy_state import Store
+
+                review_store = Store(tmp_path / 'state/state.db')
+                deadline = time.monotonic() + 15
+                while time.monotonic() < deadline:
+                    review_jobs = review_store.snapshot()['jobs']
+                    if any(row['id'] == state['spec_code_job'] and row['status'] == 'succeeded'
+                           for row in review_jobs):
+                        break
+                    time.sleep(0.01)
+                else:
+                    raise AssertionError('first SCL reviewer did not persist its outcome')
+            with lock:
+                if state['scl_first_head'] is None:
+                    state['scl_first_head'] = payload['proposal']['head']
+                initial = state['scl_first_head'] == payload['proposal']['head']
+                selected = first_slot == (review_order == 'first')
+                revise_scl = initial and (selected or scl_peer == 'revise')
+                if revise_scl and selected:
+                    state['scl_revised'] = True
+                scl_decision = ('revise' if revise_scl else
+                                'defer' if initial and not selected and scl_peer == 'defer' else 'accept')
+            if initial and not selected and scl_peer == 'failed':
+                raise RuntimeError('SCL peer unavailable')
+            answer = {'schema_version': 1, 'decision': scl_decision,
+                      'summary': 'Clarify the current source observation.',
+                      'requirements': [], 'claims': [], 'verification_requests': [], 'defects': [],
+                      'changes': [], 'findings': [{'id': 'scl-detail', 'summary': 'Specify integer return.',
+                                                    'requirement_ids': [requirement], 'severity': 'medium'}]
+                      if revise_scl else []}
+            Path(argv[argv.index('--output-last-message') + 1]).write_text(json.dumps(answer))
+            if first_slot:
+                state['spec_code_job'] = job['id']
+                spec_code_returned.set()
+            return json.dumps({'type': 'thread.started', 'thread_id': job['id']}) + '\n'
         source_scope = payload['source_batch']
         has_source = any(row['path'] == 'src.py' for row in source_scope['obligations'])
         target_role = 'code-reviewer' if review_order == 'first' else 'data-reviewer'
@@ -124,6 +170,9 @@ def test_source_revision_routes_to_current_head_specification_correction(
                         state['source_head'] = git(repo, 'rev-parse', 'HEAD')
                 local.job = job
                 return autonomy_runtime.CodexAgent().run(repo, job, output, timeout_seconds=timeout_seconds)
+            if kind == 'review_spec' and scl_revise and revised:
+                local.job = job
+                return autonomy_runtime.CodexAgent().run(repo, job, output, timeout_seconds=timeout_seconds)
             if kind == 'generate_spec':
                 if revised:
                     if correction_defers and not state['correction_deferred']:
@@ -152,7 +201,13 @@ def test_source_revision_routes_to_current_head_specification_correction(
                     current = json.loads(path.read_text())
                     context = json.loads(payload['prompt'].split('SOURCE_CONTEXT_JSON:\n', 1)[1])
                     included = set(context['files'])
-                    if 'src.py' in included and not state['corrected']:
+                    source_row = next(row for row in current['surfaces'] if row['path'] == 'src.py')
+                    if (scl_revise and state['scl_revised'] and 'src.py' in included
+                            and source_row.get('note') != 'The selected function returns the integer 1.'):
+                        source_row['note'] = 'The selected function returns the integer 1.'
+                        with lock:
+                            state['corrected'] = True
+                    elif 'src.py' in included and not state['corrected']:
                         next(row for row in current['surfaces'] if row['path'] == 'src.py')['note'] = (
                             'The selected function returns 1.')
                         with lock:
@@ -189,11 +244,44 @@ def test_source_revision_routes_to_current_head_specification_correction(
         assert not any(kind == 'generate_spec' and payload.get('source_cycle_round', 0) > 0
                        for kind, payload, _ in calls)
         return
+    if scl_revise:
+        first_reviews = [job for job in snapshot['jobs']
+                         if job['payload'].get('kind') == 'review_spec'
+                         and job['payload'].get('source_cycle_round')
+                         and job['payload'].get('proposal', {}).get('round', 0) == 0
+                         and job['payload'].get('proposal', {}).get('head') == state['scl_first_head']]
+        assert len(first_reviews) == 2
+        assert len({review['payload']['review_cohort'] for review in first_reviews}) == 1
+        expected_slot = '.1' if review_order == 'first' else '.2'
+        for review in first_reviews:
+            expected = 'revise' if review['item_id'].endswith(expected_slot) else scl_peer
+            if expected == 'failed':
+                assert review['attempt'] == 3
+                assert review['status'] == 'failed' or review['outcome'].get('exhausted') is True
+                assert not any(row.get('job_id') == review['id'] for row in snapshot['decisions'])
+            else:
+                assert review['status'] == 'succeeded'
+                assert review['outcome']['result']['decision'] == expected
+                assert any(row.get('job_id') == review['id'] and row.get('decision') == expected
+                           for row in snapshot['decisions'])
+    if scl_revise and scl_peer in {'defer', 'failed'}:
+        if scl_peer == 'failed':
+            from mentat.autonomy_state import Store
+
+            cycles = Store(tmp_path / 'state/state.db').source_cycles(snapshot['session']['id'])
+            assert cycles[0]['status'] == 'blocked'
+            assert any('SCL' in row.get('summary', '') for row in snapshot['findings'])
+        assert not github.published and not github.merged
+        assert not any(job['payload'].get('kind') == 'generate_spec'
+                       and job['payload'].get('source_cycle_round')
+                       and job['payload'].get('round', 0) > 0 for job in snapshot['jobs'])
+        assert snapshot['session']['status'] == 'blocked'
+        return
     corrections = [(payload, head) for kind, payload, head in calls
                    if kind == 'generate_spec' and payload.get('source_cycle_round', 0) > 0]
     assert len(corrections) >= (2 if correction_defers else 1), snapshot
     if not correction_defers:
-        assert len(corrections) == 1
+        assert len(corrections) == (2 if scl_revise else 1)
     payload, correction_head = corrections[0]
     if correction_defers:
         resumed = corrections[1][0]
@@ -202,6 +290,34 @@ def test_source_revision_routes_to_current_head_specification_correction(
         assert resumed['source_cycle_id'] == payload['source_cycle_id']
         assert resumed['source_cycle_round'] == payload['source_cycle_round']
         assert state['stale_descendant_seen'], 'an accepted partial descendant must hand off before completion'
+    if scl_revise:
+        retry, retry_head = next(item for item in corrections
+                                 if item[0].get('scl_review_feedback')
+                                 and item[0].get('round') == 1
+                                 and item[0].get('target_head') == state['scl_first_head'])
+        assert retry_head == retry['target_head'] != first_head
+        assert retry['accepted_spec_base'] == first_head
+        assert retry['review_base'] == payload['review_base']
+        assert retry['feedback'] == payload['feedback']
+        assert retry['source_cycle_id'] == payload['source_cycle_id']
+        assert retry['source_cycle_round'] == payload['source_cycle_round']
+        assert retry['round'] == payload.get('round', 0) + 1
+        assert 'Specify integer return.' in json.dumps(retry['scl_review_feedback'])
+        assert 'Clarify the current source observation.' in json.dumps(retry['scl_review_feedback'])
+        review_decisions = [row for row in snapshot['decisions'] if row.get('review_kind') == 'review_spec'
+                            and row.get('head') == retry_head]
+        assert {row['decision'] for row in review_decisions} == {'revise', scl_peer}
+        review_feedback = retry['scl_review_feedback']
+        assert [row['job_id'] for row in review_feedback] == sorted(row['job_id'] for row in review_feedback)
+        assert {row['decision_id'] for row in review_feedback} == {row['id'] for row in review_decisions}
+        for entry in review_feedback:
+            review_job = next(job for job in first_reviews if job['id'] == entry['job_id'])
+            decision = next(row for row in review_decisions if row['id'] == entry['decision_id'])
+            assert entry['result'] == review_job['outcome']['result']
+            assert entry['reviewer_id'] == decision['reviewer_id']
+            assert entry['review_cohort'] == decision['review_cohort']
+        assert 'Specify integer return.' in retry['prompt']
+        assert 'Narrow the note to the observed return value.' in retry['prompt']
     assert correction_head == payload['target_head'] == payload['accepted_spec_base'] == first_head
     assert git(repo, 'show', f'{correction_head}:verification/check.txt') == 'check'
     assert 'Overbroad source assertion.' in git(repo, 'show', f'{correction_head}:.mentat/fas.json')
@@ -234,7 +350,7 @@ def test_source_revision_routes_to_current_head_specification_correction(
     assert git(repo, 'show', f'{final_head}:verification/check.txt') == 'check'
     final_fas = json.loads(git(repo, 'show', f'{final_head}:.mentat/fas.json'))
     assert next(row for row in final_fas['surfaces'] if row['path'] == 'src.py')['note'] == (
-        'The selected function returns 1.')
+        'The selected function returns the integer 1.' if scl_revise else 'The selected function returns 1.')
 
 
 def _source_review_scope():
@@ -1045,3 +1161,95 @@ def test_unknown_remote_outcome_checkpoints_pending_source_revision(tmp_path, mo
     snapshot = store.snapshot(session)
     assert not any(row['id'] == 'decision' for row in snapshot['decisions'])
     assert any(event['kind'] == 'remote_reconciliation_pending' for event in snapshot['events'])
+
+
+def test_scl_revision_pair_survives_reopen_lease_expiry_and_atomic_replay(tmp_path):
+    from mentat.autonomy_state import Store
+
+    path = tmp_path / 'pair-resume/state.db'
+    store = Store(path)
+    session = store.new_session(str(tmp_path / 'repo'), 'base', 'h0', {'max_attempts': 3}, 1, 1000)
+    store.register_source_pass(session, 'cycle', 'item', 'h0', 'base', 'plan', 'check', ['batch'],
+                               continuing=False)
+    for index, role in enumerate(('code-reviewer', 'data-reviewer')):
+        store.enqueue_job(session, 'ivl', role, f'source-{index}', f'source-input-{index}',
+                          _source_job_payload('h0', 'plan', 'check'))
+    feedback = []
+    for index in range(2):
+        job = store.claim_job(session, f'source-worker-{index}', now=2)
+        result = _review_result() if index == 0 else _review_result(decision='accept', corrections=[])
+        outcome, decision = _source_outcome_and_decision(
+            job['id'], 'h0', 'check', f'source-reviewer-{index}', f'source-decision-{index}', result)
+        store.finish_job(job['id'], job['lease_token'], outcome, now=3)
+        store.record_source_decision(session, 'cycle', decision)
+        store.finish_transition(job['id'])
+        feedback.append({'job_id': job['id'], 'decision_id': decision['id'], 'result': result})
+    correction = {'kind': 'generate_spec', 'target_head': 'h0', 'accepted_spec_base': 'h0',
+                  'review_base': 'base', 'source_cycle_id': 'cycle', 'source_cycle_round': 1,
+                  'feedback': feedback}
+    generator_id = store.finalize_source_correction(session, 'cycle', 'h0', feedback,
+                                                     'corrector', 'input', correction,
+                                                     actionable=True, max_attempts=3)
+    generator = store.claim_job(session, 'generator', now=4)
+    assert generator and generator['id'] == generator_id
+    store.finish_job(generator_id, generator['lease_token'], {
+        'status': 'succeeded', 'head': 'h1', 'author_id': 'generator-author',
+        'result': {'decision': 'accept'}}, now=5)
+    store.finish_transition(generator_id)
+    proposal = {'head': 'h1', 'diff_digest': 'diff-h1', 'author_id': 'generator-author',
+                'prior_authors': [], 'round': 0}
+    review_payload = {'kind': 'review_spec', 'source_cycle_id': 'cycle', 'source_cycle_round': 1,
+                      'target_head': 'h1', 'review_cohort': 'cohort', 'proposal': proposal}
+    review_payload['source_epoch'] = store.source_finalization_epoch(session, review_payload)
+    ids = [store.enqueue_job(session, 'scl', 'code-reviewer', f'review-{index}', f'input-{index}',
+                             review_payload) for index in range(2)]
+    first = store.claim_job(session, 'reviewer-one', now=6)
+    second = store.claim_job(session, 'reviewer-two', now=6, lease_seconds=2)
+    assert first and second and {first['id'], second['id']} == set(ids)
+    results = [{'decision': 'revise', 'summary': 'Repair the note', 'findings': [{'summary': 'note'}]},
+               {'decision': 'accept', 'summary': 'Scope is supported', 'findings': []}]
+    def finish_review(job, index, now):
+        outcome = {'status': 'succeeded', 'head': 'h1', 'diff_digest': 'diff-h1',
+                   'author_id': f'scl-reviewer-{index}', 'result': results[index]}
+        store.finish_job(job['id'], job['lease_token'], outcome, now=now)
+        decision = {'id': f'scl-decision-{index}', 'job_id': job['id'], 'review_kind': 'review_spec',
+                    'review_cohort': 'cohort', 'reviewer_id': f'scl-reviewer-{index}',
+                    'head': 'h1', 'diff_digest': 'diff-h1', **results[index]}
+        store.put_record(session, 'decision', decision)
+        return outcome, decision
+    first_outcome, first_decision = finish_review(first, 0, 7)
+    assert store.source_scl_pair(session, 'cycle', 'cohort') is None
+    store = Store(path)
+    assert store.source_scl_pair(session, 'cycle', 'cohort') is None
+    assert store.recover(session, now=9) == 1
+    with pytest.raises(ValueError):
+        store.finish_job(second['id'], second['lease_token'], {'status': 'succeeded'}, now=9)
+    second_retry = store.claim_job(session, 'reviewer-two-resumed', now=10)
+    assert second_retry and second_retry['id'] == second['id'] and second_retry['attempt'] == 2
+    second_outcome, second_decision = finish_review(second_retry, 1, 11)
+    pair = store.source_scl_pair(session, 'cycle', 'cohort')
+    assert pair and [entry['job_id'] for entry in pair] == sorted(ids)
+    assert {entry['decision_id'] for entry in pair} == {first_decision['id'], second_decision['id']}
+    assert {json.dumps(entry['result'], sort_keys=True) for entry in pair} == {
+        json.dumps(first_outcome['result'], sort_keys=True), json.dumps(second_outcome['result'], sort_keys=True)}
+    successor = {**correction, 'target_head': 'h1', 'round': 1, 'scl_review_feedback': pair,
+                 'targetfiles': ['a.py', 'b.py'], 'chunk': 0}
+    successor_id = store.handoff_source_correction(session, 'cycle', first['id'], 'next', 'next-input', successor)
+    assert store.handoff_source_correction(session, 'cycle', first['id'], 'next', 'next-input', successor) == successor_id
+    assert store.source_scl_pair(session, 'cycle', 'cohort') == []
+    with pytest.raises(ValueError):
+        store.handoff_source_correction(session, 'cycle', second['id'], 'other', 'other-input', successor)
+    continued = store.claim_job(session, 'continued-generator', now=12)
+    assert continued and continued['id'] == successor_id
+    store.finish_job(successor_id, continued['lease_token'], {
+        'status': 'succeeded', 'head': 'h1', 'context_pending': ['a.py'],
+        'result': {'decision': 'defer', 'summary': 'smaller frontier'}}, now=13)
+    frontier = {**successor, 'targetfiles': ['a.py'], 'chunk': 1}
+    frontier_id = store.handoff_source_correction(session, 'cycle', successor_id,
+                                                 'frontier', 'frontier-input', frontier)
+    snapshot = Store(path).snapshot(session)
+    assert len([job for job in snapshot['jobs'] if job['payload'].get('kind') == 'generate_spec']) == 3
+    frontier_job = next(job for job in snapshot['jobs'] if job['id'] == frontier_id)
+    assert frontier_job['payload']['feedback'] == feedback
+    assert frontier_job['payload']['scl_review_feedback'] == pair
+    assert Store(path).source_cycles(session)[0]['failed_passes'] == 1
