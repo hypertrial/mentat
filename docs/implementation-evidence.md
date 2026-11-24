@@ -57,6 +57,51 @@ all 296 surfaces remain present, requirements and claims are unchanged, and only
 the three named surface records differ. Full native/Linux, protected-checker,
 independent review and a fresh real self-run remain outstanding for this change.
 
+## Required one-hop source support after v11
+
+Actual session `8791e4b422c14e3cb105d533933712bb` ended blocked on candidate
+`6d00ba0e4f1c37480241a073eb9e97de6c68fe80`. Seventeen SCL cohorts, the
+configured Linux suite (2,012 passed and 53 documented skips), package check,
+all 45 protected fixtures, positive clamp and real negative SAT/protected
+replay, and two IVL reviews completed before final source review. Of 20 source
+reviewers across ten scopes, 18 accepted and two deferred the same scope; no
+aggregate review or publication followed. These outcomes remain historical.
+
+On the frozen working source, read-only sizing against the private disposable
+v11 database rederived 83 obligations in 11 batches. The previously blocked
+five-path scope split two plus three: each received the linked vision file,
+with files/context JSON sizes 262,647/367,107 and 115,701/221,679 characters.
+The largest source context was 414,624 characters. An aggregate sizing context
+with 22 synthetic summaries one byte above the per-review serialized bound
+was 497,297 JSON characters (497,832 including the wrapper). These are sizing
+checks only, not fresh reviews or approval. The database was verified private,
+regular and owned before the read-only run; its session and candidate were
+asserted inside the run. No live state, decisions or manifests were modified.
+
+Targeted development checks passed on controller source SHA-256
+`18f07c39bb6ff5f6d2c9f09371ad46b0b06ab4182f01589a4d5c15de929be149`:
+23 citation-continuity and context-budget tests, candidate-interpreter Pyright,
+scoped Ruff and whitespace validation. The independent test owner ran the
+complete `tests/test_autonomy_final_sources.py` suite: 76 passed in 94.41 seconds
+with four workers. Its real two-plus-three split exercised two fresh reviewers
+per scope, saved actual-input manifests, aggregate review and publication. An
+indivisible 200 KB plus 165 KB case produced no source or final approvals and
+no GitHub effects. The suite also covered lineage, formal targets, deletion,
+rename and required-versus-optional trimming. These are development checks;
+independent exact-candidate reviews, full native and Linux gates, package checks,
+all 45 protected fixtures and a fresh v12 real self-run remain outstanding.
+
+That scope's supplied files subtotal was 357,813 JSON characters and its full
+context was 466,289 characters; linked intended authority `docs/vision.md`
+required another 4,240-character file entry and was omitted. A sizing-only
+two-plus-three split fit, with respective file subtotals of 262,908 and
+115,701 and contexts of 371,557 and 224,250 characters. This simulation did
+not create reviews or approval. The proposed controller correction makes
+one-hop linked local support mandatory and splits on genuine capacity, keeping
+removed sources explicit in the complete diff. It does not alter the old
+session, promote its deferrals or establish correctness by hash. Fresh review,
+complete native/Linux and protected gates, and a new real run remain required.
+
 ## Local workflow foundation
 
 PR [47](https://github.com/hypertrial/mentat/pull/47) merged as

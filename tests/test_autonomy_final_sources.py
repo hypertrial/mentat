@@ -599,12 +599,17 @@ def test_cas_only_change_requires_current_source_review_before_publication(tmp_p
 
     repo = repo_fixture.__wrapped__(tmp_path)
     _valid_publication_spec(repo)
+    (repo / 'support.py').write_text('# supporting authority\n' + 's' * 23_470)
+    git(repo, 'add', '.')
+    git(repo, 'commit', '-qm', 'supporting source')
     observed = git(repo, 'rev-parse', 'HEAD')
     source_blob = git(repo, 'rev-parse', f'{observed}:src.py')
     fas_path = repo / '.mentat/fas.json'
     fas = json.loads(fas_path.read_text())
     requirement_id = fas['requirements'][0]['id']
-    fas['requirements'][0]['citations'] = [{'path': 'src.py', 'revision': observed}]
+    fas['requirements'][0]['citations'] = [
+        {'path': 'src.py', 'revision': observed}, {'path': 'support.py', 'revision': observed}]
+    fas['surfaces'].append({'path': 'support.py', 'status': 'unexamined', 'requirement_ids': []})
     for surface in fas['surfaces']:
         if surface['path'] == 'src.py':
             surface.update(status='mapped', requirement_ids=[requirement_id],
@@ -650,12 +655,18 @@ def test_cas_only_change_requires_current_source_review_before_publication(tmp_p
         assert item['cited_revision'] == observed and item['candidate_revision'] == data['revision']
         assert item['cited_blob'] == item['candidate_blob'] == source_blob
         assert item['cited_mode'] == item['candidate_mode'] == '100644'
+        assert data['files']['support.py'] == (repo / 'support.py').read_text()
+        assert not any(row['path'] == 'support.py' for row in data['omitted'])
+        support_item = next(row for row in data['cited_source_continuity'] if row['path'] == 'support.py')
+        assert support_item['status'] == 'unchanged' and support_item['cited_revision'] == observed
         decision = next(row for row in snapshot['decisions'] if row.get('job_id') == job_id)
         manifest_path = tmp_path / 'state' / decision['input_manifest']
         manifest = json.loads(manifest_path.read_bytes())
         prompt_path = manifest_path.parent / f"prompt-{manifest['prompt_sha256']}.txt"
         assert prompt_path.read_text() == payload['prompt']
         assert manifest['head'] == data['revision']
+        assert next(row for row in manifest['files'] if row['path'] == 'support.py')['content_sha256'] == (
+            hashlib.sha256((repo / 'support.py').read_bytes()).hexdigest())
     assert len(aggregate) == 2
     assert max(i for i, row in enumerate(calls) if row in matching) < min(
         i for i, row in enumerate(calls) if row[1] == 'review_final')
@@ -700,10 +711,10 @@ def source_batch_history(tmp_path):
         'records': {'base': {'requirements': [requirement, foreign], 'claims': [claim]},
                     'current': {'requirements': [requirement, foreign], 'claims': [claim]}}}
     coordinator = Coordinator(repo, Store(tmp_path / 'batch-state/state.db'), Agent(), None, None)
-    def make_context(revision=head, batch_scope=scope, parent=None):
+    def make_context(revision=head, batch_scope=scope, parent=None, targets=None):
         text, omitted, included, _ = coordinator._source_context(revision, {'payload': {
             'kind': 'review_final_source', 'proposal': {'parent': parent or cited},
-            'targetfiles': ['mapped.py'], 'source_batch': batch_scope}})
+            'targetfiles': targets or ['mapped.py'], 'source_batch': batch_scope}})
         return json.loads(text.split('SOURCE_CONTEXT_JSON:\n', 1)[1]), omitted, included
     return repo, cited, intermediate, head, scope, make_context
 
@@ -763,14 +774,17 @@ def test_source_batch_never_promotes_uncertain_or_changed_citation(source_batch_
     assert item['status'] != 'unchanged'
 
 
-@pytest.mark.parametrize('fault', ['missing', 'oversized', 'capacity'])
-def test_unavailable_support_is_never_affirmative(source_batch_history, fault):
+@pytest.mark.parametrize('fault', ['missing', 'oversized', 'capacity', 'symlink'])
+def test_unavailable_required_support_fails_closed(source_batch_history, fault):
     repo, _, _, _, scope, make_context = source_batch_history
     support = repo / 'support.py'
     if fault == 'missing':
         support.unlink()
     elif fault == 'oversized':
         support.write_text('s' * 240_001)
+    elif fault == 'symlink':
+        support.unlink()
+        support.symlink_to('mapped.py')
     else:
         cas = repo / 'openspec/specs/app/spec.md'
         cas.parent.mkdir(parents=True)
@@ -778,13 +792,8 @@ def test_unavailable_support_is_never_affirmative(source_batch_history, fault):
     git(repo, 'add', '-A')
     git(repo, 'commit', '-qm', 'unavailable supporting context')
     head = git(repo, 'rev-parse', 'HEAD')
-    data, omitted, included = make_context(head, scope, parent=head)
-    assert 'support.py' not in included
-    assert 'support.py' in omitted or any(
-        item['path'] == 'support.py' and item['status'] == 'unverified'
-        for item in data.get('cited_source_continuity', []))
-    assert not any(item['path'] == 'support.py' and item['status'] == 'unchanged'
-                   for item in data.get('cited_source_continuity', []))
+    with pytest.raises((ValueError, OSError)):
+        make_context(head, scope, parent=head)
 
 
 def test_source_batch_rejects_unsafe_linked_support(source_batch_history):
@@ -810,7 +819,9 @@ def test_source_batch_continuity_count_is_bounded(source_batch_history):
         make_context(revision, scope, parent=revision)
 
 
-def test_final_json_eviction_downgrades_support_continuity(source_batch_history, monkeypatch):
+def test_final_json_capacity_fails_without_dropping_required_support(source_batch_history, monkeypatch):
+    from mentat.autonomy import ReviewContextCapacity
+
     repo, _, _, _, scope, make_context = source_batch_history
     (repo / 'support.py').write_text('s' * 100_000)
     folder = repo / ('long_inventory_' + 'x' * 140)
@@ -836,15 +847,42 @@ def test_final_json_eviction_downgrades_support_continuity(source_batch_history,
         return original_dumps(value, *args, **kwargs)
 
     monkeypatch.setattr(json, 'dumps', track_serialization)
-    data, omitted, included = make_context(head, scope, parent=cited)
-    assert support_in_full_serializations[:2] == [True, False]
-    assert len(data['proposal_diff']) > 140_000
-    assert 'support.py' in omitted and 'support.py' not in included
-    assert any(item['path'] == 'support.py' and item['reason'] == 'context budget exhausted'
-               for item in data['omitted'])
+    with pytest.raises(ReviewContextCapacity):
+        make_context(head, scope, parent=cited)
+    assert support_in_full_serializations and all(support_in_full_serializations)
+
+
+def test_final_json_eviction_removes_only_unrelated_optional_source(source_batch_history, monkeypatch):
+    repo, cited, _, _, scope, make_context = source_batch_history
+    optional = repo / 'zz_optional.py'
+    optional.write_text('o' * 80_000)
+    folder = repo / ('long_inventory_' + 'x' * 140)
+    folder.mkdir()
+    for index in range(300):
+        (folder / f'file{index:03}.txt').write_text('x')
+    git(repo, 'add', '.')
+    git(repo, 'commit', '-qm', 'optional file and large inventory')
+    parent = git(repo, 'rev-parse', 'HEAD')
+    (repo / 'diff_only.txt').write_text('d' * 145_000)
+    git(repo, 'add', '.')
+    git(repo, 'commit', '-qm', 'large cumulative diff')
+    head = git(repo, 'rev-parse', 'HEAD')
+    original_dumps = json.dumps
+    snapshots = []
+
+    def track_serialization(value, *args, **kwargs):
+        if isinstance(value, dict) and {'revision', 'files', 'omitted'} <= value.keys():
+            snapshots.append(set(value['files']))
+        return original_dumps(value, *args, **kwargs)
+
+    monkeypatch.setattr(json, 'dumps', track_serialization)
+    data, omitted, included = make_context(head, scope, parent=parent,
+                                           targets=['mapped.py', 'zz_optional.py'])
+    assert 'zz_optional.py' in snapshots[0] and 'zz_optional.py' not in snapshots[-1]
+    assert 'zz_optional.py' in omitted and 'zz_optional.py' not in included
+    assert 'support.py' in included and 'support.py' not in omitted
     item = next(item for item in data['cited_source_continuity'] if item['path'] == 'support.py')
-    assert item['status'] == 'unverified'
-    assert 'not included' in item['reason']
+    assert item['status'] == 'unchanged' and item['cited_revision'] == cited
     assert not any(row['path'] in included for row in data['omitted'])
     assert len(json.dumps(data, ensure_ascii=True)) <= 500_000
 
@@ -905,3 +943,189 @@ def test_literal_anchor_filename_outside_batch_does_not_link_foreign_record(sour
     assert 'mapped.py#L1' not in included and 'mapped.py#L1' in omitted
     assert 'support.py' not in included and 'support.py' in omitted
     assert not any(row['path'] == 'support.py' for row in data.get('cited_source_continuity', []))
+
+
+def test_linked_authority_forces_real_git_source_batch_split(tmp_path):
+    from mentat.autonomy import Coordinator
+    from mentat.autonomy_final_review import build_plan
+    from mentat.autonomy_state import Store
+
+    repo = repo_fixture.__wrapped__(tmp_path)
+    selected = [f'a{index}.py' for index in range(5)]
+    others = [f'z{index}.py' for index in range(4)]
+    authority = 'y_authority.md'
+    for path in selected:
+        (repo / path).write_text('# source\n' + 'x' * 70_990)
+    for path in others:
+        (repo / path).write_text('# unrelated source\n')
+    (repo / authority).write_text('authority\n' + 'v' * 6_000)
+    git(repo, 'add', '.')
+    git(repo, 'commit', '-qm', 'observed source')
+    observed = git(repo, 'rev-parse', 'HEAD')
+    requirement = {'id': 'active', 'citations': [{'path': authority, 'revision': observed}]}
+    surfaces = [{'path': path, 'status': 'mapped', 'requirement_ids': ['active']}
+                for path in selected]
+    fas = {'schema_version': 1, 'requirements': [requirement], 'claims': [], 'surfaces': surfaces}
+    (repo / '.mentat/fas.json').write_text(json.dumps(fas))
+    git(repo, 'add', '.')
+    git(repo, 'commit', '-qm', 'mapped requirements')
+    head = git(repo, 'rev-parse', 'HEAD')
+    entries = {}
+    for path in [*selected, authority, *others]:
+        tree = git(repo, 'ls-tree', head, '--', path).split()
+        entry = {'mode': tree[0], 'type': tree[1], 'blob': tree[2]}
+        entries[path] = {'base': entry, 'current': entry}
+    baseline = {'requirements': [], 'claims': [], 'surfaces': []}
+    plan = build_plan(baseline, fas, [*selected, *others], entries, {})
+    coordinator = Coordinator(repo, Store(tmp_path / 'split-state/state.db'), Agent(), None, None)
+    evidence = {'id': 'check', 'head': head, 'base': head, 'status': 'passed',
+                'check_key': 'key', 'checks': []}
+    proposal = {'head': head, 'parent': head}
+    batches = coordinator._final_source_batches({}, proposal, evidence, plan)
+    assert batches == coordinator._final_source_batches({}, proposal, evidence, plan)
+    assert len({batch['id'] for batch in batches}) == len(batches)
+    assert len(batches) > 2
+    selected_groups = []
+    for scope in batches:
+        targets = [row['path'] for row in scope['obligations'] if row['mode'] == 'current-source']
+        subset = set(targets) & set(selected)
+        if not subset:
+            continue
+        selected_groups.append(subset)
+        text, omitted, included, _ = coordinator._source_context(head, {'payload': {
+            'kind': 'review_final_source', 'proposal': proposal,
+            'source_batch': scope, 'targetfiles': targets, 'check_summary': coordinator._check_summary(evidence)}})
+        data = json.loads(text.split('SOURCE_CONTEXT_JSON:\n', 1)[1])
+        assert data['files'][authority] == (repo / authority).read_text()
+        assert authority in included and authority not in omitted
+        item = next(row for row in data['cited_source_continuity'] if row['path'] == authority)
+        assert item['status'] == 'unchanged' and item['cited_revision'] == observed
+        assert len(json.dumps(data, ensure_ascii=True)) <= 500_000
+        assert sum(len(json.dumps({path: contents}, ensure_ascii=True))
+                   for path, contents in data['files'].items()) <= 360_000
+    assert set.union(*selected_groups) == set(selected)
+    assert max(map(len, selected_groups)) < 5
+
+
+def test_revision_lineage_evidence_is_required_support(source_batch_history):
+    repo, cited, _, _, original_scope, make_context = source_batch_history
+    scope = deepcopy(original_scope)
+    record = scope['records']['current']['requirements'][0]
+    record['citations'] = []
+    record['revision'] = {'evidence': [{'path': 'support.py', 'revision': cited}]}
+    data, omitted, included = make_context(batch_scope=scope)
+    assert data['files']['support.py'] == (repo / 'support.py').read_text()
+    assert 'support.py' in included and 'support.py' not in omitted
+    item = next(row for row in data['cited_source_continuity'] if row['path'] == 'support.py')
+    assert item['status'] == 'unchanged' and item['cited_revision'] == cited
+
+
+@pytest.mark.parametrize('operation', ['delete', 'rename'])
+def test_removed_support_remains_explicit_in_complete_diff(source_batch_history, operation):
+    repo, cited, _, _, scope, make_context = source_batch_history
+    if operation == 'delete':
+        (repo / 'support.py').unlink()
+    else:
+        (repo / 'support.py').rename(repo / 'renamed_support.py')
+    git(repo, 'add', '-A')
+    git(repo, 'commit', '-qm', 'remove old support path')
+    head = git(repo, 'rev-parse', 'HEAD')
+    data, omitted, included = make_context(head, scope, parent=cited)
+    assert 'support.py' not in included and 'support.py' in omitted
+    assert any(row['path'] == 'support.py' and 'deleted' in row['reason'] for row in data['omitted'])
+    assert 'support.py' in data['proposal_diff']
+    item = next(row for row in data['cited_source_continuity'] if row['path'] == 'support.py')
+    assert item['status'] == 'unverified'
+
+
+@pytest.mark.parametrize('indivisible', [False, True])
+def test_required_authority_split_reaches_both_actors_and_aggregate(tmp_path, indivisible):
+    from test_autonomy import _valid_publication_spec
+
+    repo = repo_fixture.__wrapped__(tmp_path)
+    _valid_publication_spec(repo)
+    selected = [f'a{index}.py' for index in range(5)]
+    others = [f'z{index}.py' for index in range(4)]
+    authority = 'y_authority.md'
+    for path in selected:
+        (repo / path).write_text('# source\n' + 'x' * (200_000 if indivisible else 70_990))
+    for path in others:
+        (repo / path).write_text('# small source\n')
+    (repo / authority).write_text('authority\n' + 'v' * (165_000 if indivisible else 6_000))
+    git(repo, 'add', '.')
+    git(repo, 'commit', '-qm', 'source inputs')
+    observed = git(repo, 'rev-parse', 'HEAD')
+    fas_path = repo / '.mentat/fas.json'
+    fas = json.loads(fas_path.read_text())
+    requirement_id = fas['requirements'][0]['id']
+    fas['requirements'][0]['citations'] = [{'path': authority, 'revision': observed}]
+    fas['surfaces'].extend(
+        {'path': path, 'status': 'mapped', 'requirement_ids': [requirement_id]}
+        for path in [*selected, *others])
+    fas['surfaces'].append({'path': authority, 'status': 'unexamined', 'requirement_ids': []})
+    fas_path.write_text(json.dumps(fas))
+    git(repo, 'add', '.')
+    git(repo, 'commit', '-qm', 'existing mappings')
+    base = git(repo, 'rev-parse', 'HEAD')
+    git(repo, 'update-ref', 'refs/remotes/origin/main', base)
+    spec = repo / 'openspec/specs/app/spec.md'
+    spec.write_text(spec.read_text() + '\nChanged intent.\n')
+    git(repo, 'commit', '-qam', 'CAS-only change')
+    calls = []
+
+    class NoopAgent(Agent):
+        def run(self, repo, job, output, *, timeout_seconds):
+            kind = job['payload']['kind']
+            data = json.loads(job['payload']['prompt'].split('SOURCE_CONTEXT_JSON:\n', 1)[1])
+            calls.append((job['id'], kind, job['payload'], data))
+            if kind in {'generate_spec', 'generate_verification'}:
+                return {'status': 'succeeded', 'session_id': job['id'], 'result': {
+                    'decision': 'accept', 'summary': 'No changes', 'findings': [],
+                    'verification_requests': []}}
+            return super().run(repo, job, output, timeout_seconds=timeout_seconds)
+
+    snapshot, _, github = run(repo, tmp_path, agent=NoopAgent())
+    if indivisible:
+        assert not github.published and not github.merged
+        assert not any(row[1] in {'review_final_source', 'review_final'} for row in calls)
+        assert not any(row.get('review_kind') == 'review_final_source' and row.get('status') == 'passed'
+                       for row in snapshot['decisions'])
+        return
+    assert github.published, snapshot
+    source = [row for row in calls if row[1] == 'review_final_source']
+    groups = defaultdict(list)
+    for row in source:
+        groups[row[2]['source_batch']['id']].append(row)
+    selected_groups = []
+    for batch_id, pair in groups.items():
+        assert len(pair) == 2 and len({row[0] for row in pair}) == 2
+        subset = {item['path'] for item in pair[0][3]['source_batch']['obligations']} & set(selected)
+        if not subset:
+            continue
+        selected_groups.append(subset)
+        for job_id, _, payload, data in pair:
+            assert data['revision'] == github.published[0]
+            assert data['files'][authority] == (repo / authority).read_text()
+            assert not any(item['path'] == authority for item in data['omitted'])
+            assert sum(len(json.dumps({path: content}, ensure_ascii=True))
+                       for path, content in data['files'].items()) <= 360_000
+            assert len(json.dumps(data, ensure_ascii=True)) <= 500_000
+            item = next(item for item in data['cited_source_continuity'] if item['path'] == authority)
+            assert item['status'] == 'unchanged' and item['cited_revision'] == observed
+            decision = next(row for row in snapshot['decisions'] if row.get('job_id') == job_id)
+            assert decision['source_batch_id'] == batch_id
+            assert decision['reviewer_id'] != decision['author_id']
+            manifest_path = tmp_path / 'state' / decision['input_manifest']
+            manifest = json.loads(manifest_path.read_bytes())
+            prompt_path = manifest_path.parent / f"prompt-{manifest['prompt_sha256']}.txt"
+            assert prompt_path.read_text() == payload['prompt']
+            assert next(row for row in manifest['files'] if row['path'] == authority)['content_sha256'] == (
+                hashlib.sha256((repo / authority).read_bytes()).hexdigest())
+    assert sorted(map(len, selected_groups)) == [2, 3]
+    assert set.union(*selected_groups) == set(selected)
+    final = [row for row in calls if row[1] == 'review_final']
+    assert len(final) == 2
+    assert max(i for i, row in enumerate(calls) if row[1] == 'review_final_source') < min(
+        i for i, row in enumerate(calls) if row[1] == 'review_final')
+    assert all(row[3]['source_coverage']['batches'] for row in final)
+    assert len({row[2]['check_evidence_id'] for row in source}) == 1

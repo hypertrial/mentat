@@ -2886,25 +2886,28 @@ class Coordinator:
                 if isinstance(contract, dict) and isinstance(contract.get("path"), str):
                     safe_relative_path(contract["path"])
                     support.add(contract["path"])
-            support_omissions = {}
-            for path in sorted(support - set(included)):
+            deleted_support = {path for path in support if path not in inventory_paths
+                               and path in changed and path in citation_inventory}
+            required_source.update(support - deleted_support)
+            for path in sorted(support - deleted_support - set(included)):
                 try:
                     _cited_source_entry(self.repo, revision, path)
                     raw = gitio.read_file(self.repo, revision, path)
                     if len(raw) > 240_000:
-                        raise ValueError("file exceeds supported 240000-byte limit")
+                        raise ReviewContextCapacity("required source support exceeds 240000-byte limit", {path})
                     contents = raw.decode("utf-8")
                     cost = len(json.dumps({path: contents}, ensure_ascii=True))
                     if used + cost > 360_000 or used + cost + reserved > 490_000:
-                        raise ValueError("context budget exhausted")
+                        raise ReviewContextCapacity("required source support exceeds context capacity", {path})
                     included[path] = contents
                     used += cost
-                    optional_files.append(path)
+                except ReviewContextCapacity:
+                    raise
                 except (OSError, ValueError, UnicodeError, subprocess.SubprocessError) as exc:
-                    support_omissions[path] = str(exc)[:200]
+                    raise ValueError(f"required source support unavailable: {path}: {exc}") from exc
             omitted = [item for item in omitted if item["path"] not in support]
-            omitted.extend({"path": path, "reason": reason}
-                           for path, reason in sorted(support_omissions.items()))
+            omitted.extend({"path": path, "reason": "deleted current source; inspect complete proposal diff"}
+                           for path in sorted(deleted_support))
         cited_continuity = []
         for path, cited_revision, problem in sorted(cited_references, key=lambda item: (item[0], item[1] or "", item[2] or "")):
             item = {"path": path, "cited_revision": cited_revision, "candidate_revision": revision,
@@ -2940,17 +2943,6 @@ class Coordinator:
         for item in cited_continuity:
             continuity_by_path.setdefault(item["path"], []).append(item)
         continuity_size = len(json.dumps(cited_continuity, ensure_ascii=True))
-        while source_mode and optional_files and used + reserved + continuity_size + 64 > 490_000:
-            path = optional_files.pop()
-            used -= len(json.dumps({path: included[path]}, ensure_ascii=True))
-            del included[path]
-            omitted.append({"path": path, "reason": "context budget exhausted"})
-            for item in continuity_by_path.get(path, []):
-                if item["status"] in {"unchanged", "changed"}:
-                    before = len(json.dumps(item, ensure_ascii=True))
-                    item["status"] = "unverified"
-                    item["reason"] = "candidate source is not included"
-                    continuity_size += len(json.dumps(item, ensure_ascii=True)) - before
         reserved += continuity_size + 64
         if used + reserved > 490_000:
             raise ReviewContextCapacity("cited source continuity exceeds context capacity", required_source)
