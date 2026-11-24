@@ -13,7 +13,7 @@ from .autonomy import Coordinator, digest, initialize, project_snapshot, state_p
 from .autonomy_policy import load_policy_path, pin_policy
 from .autonomy_runtime import CodexAgent, GitHub, LocalWorker, diagnostics, git
 from .autonomy_state import Store
-from .autonomy_ui import create_server, render_report
+from .autonomy_ui import _github_source_base, create_server, render_report
 from .source_verify import source_tool_identity, verify_source
 
 Repo = Annotated[Path, typer.Option(exists=True, file_okay=False)]
@@ -31,6 +31,13 @@ def _failure(exc: Exception) -> NoReturn:
 
 def _store(ctx: typer.Context, repo: Path) -> Store:
     return Store(state_path(repo.resolve(), ctx.obj["state"]))
+
+
+def _source_base(repo: Path) -> str | None:
+    try:
+        return _github_source_base(git(repo, "config", "--get", "remote.origin.url").removesuffix("\n"))
+    except _ERRORS:
+        return None
 
 
 def _project(snapshot: dict, *, store_path: Path | None = None) -> dict:
@@ -91,6 +98,7 @@ def register(app: typer.Typer) -> None:
         try:
             store = _store(ctx, repo)
             coordinator = Coordinator(repo, store, CodexAgent(), LocalWorker(), GitHub())
+            source_base = _source_base(repo)
 
             def snapshot() -> dict:
                 if coordinator.session_id is None:
@@ -98,12 +106,12 @@ def register(app: typer.Typer) -> None:
                 return _project(store.snapshot(coordinator.session_id), store_path=store.path)
 
             if ui:
-                server = create_server(snapshot, coordinator.control)
+                server = create_server(snapshot, coordinator.control, source_base=source_base)
                 threading.Thread(target=server.serve_forever, daemon=True).start()
                 typer.echo(f"Monitor this session: {server.url}", err=True)
             result = coordinator.run(resume=resume)
             report = store.path.parent / f"{result['session']['id']}.html"
-            report.write_text(render_report(_project(store.snapshot(result['session']['id']), store_path=store.path)), encoding="utf-8")
+            report.write_text(render_report(_project(store.snapshot(result['session']['id']), store_path=store.path), source_base=source_base), encoding="utf-8")
             _emit({"schema_version": 1, "status": result["session"]["status"],
                    "session_id": result["session"]["id"], "report": str(report),
                    "jobs": len(result["jobs"]), "requirements": len(result["requirements"]),
@@ -153,6 +161,7 @@ def register(app: typer.Typer) -> None:
         try:
             store = _store(ctx, repo)
             selected = store.snapshot(session)["session"]["id"]
+            source_base = _source_base(repo)
 
             def control(action: str, payload: dict) -> dict:
                 if action == "feedback":
@@ -160,7 +169,7 @@ def register(app: typer.Typer) -> None:
                     return {"status": "recorded", "detail": "Feedback retained for the next active iteration."}
                 raise ValueError("saved-session viewer cannot control another process")
 
-            server = create_server(lambda: _project(store.snapshot(selected), store_path=store.path), control, port=port)
+            server = create_server(lambda: _project(store.snapshot(selected), store_path=store.path), control, port=port, source_base=source_base)
             typer.echo(f"Monitor: {server.url}")
             server.serve_forever()
         except KeyboardInterrupt:

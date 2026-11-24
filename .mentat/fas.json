@@ -2176,6 +2176,24 @@
       "status": "unexamined",
       "requirement_ids": [],
       "reason": "New workflow preflight decision; source correspondence requires independent review."
+    },
+    {
+      "path": "tests/test_autonomy_bootstrap.py",
+      "status": "unexamined",
+      "requirement_ids": [],
+      "reason": "New workflow preflight regression tests; source correspondence requires independent review."
+    },
+    {
+      "path": "tests/test_autonomy_feedback_continuity.py",
+      "status": "unexamined",
+      "requirement_ids": [],
+      "reason": "New workflow preflight regression tests; source correspondence requires independent review."
+    },
+    {
+      "path": "tests/test_autonomy_citation_paths.py",
+      "status": "unexamined",
+      "requirement_ids": [],
+      "reason": "New workflow preflight regression tests; source correspondence requires independent review."
     }
   ]
 }

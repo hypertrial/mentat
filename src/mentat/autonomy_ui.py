@@ -9,7 +9,7 @@ import secrets
 from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, quote, urlsplit
 
 Snapshot = Callable[[], dict[str, Any]]
 Control = Callable[[str, dict[str, Any]], dict[str, Any]]
@@ -76,13 +76,49 @@ def _value(value: Any, depth: int = 0) -> Any:
     return str(value)[:4000]
 
 
-def _public_snapshot(raw: dict[str, Any]) -> dict[str, Any]:
+def _github_source_base(remote: str) -> str | None:
+    """Accept only canonical GitHub repository remotes, without credentials."""
+    match = re.fullmatch(r"(?:git@github\.com:|ssh://git@github\.com/|https://github\.com/)([A-Za-z0-9][A-Za-z0-9-]{0,38})/([A-Za-z0-9_.-]+)", remote)
+    if match is None:
+        return None
+    owner, repo = match.groups()
+    if repo.endswith(".git"):
+        repo = repo[:-4]
+    if repo in ("", ".", ".."):
+        return None
+    return f"https://github.com/{owner}/{repo}"
+
+
+def _citations(value: Any, source_base: str | None) -> Any:
+    def citation(item: Any, depth: int) -> Any:
+        projected = _value(item, depth)
+        if isinstance(item, dict) and isinstance(projected, dict):
+            path = item.get("path")
+            if (isinstance(path, str) and path and not any(c in path for c in ("\\", ":", "%"))
+                    and not any(ord(c) < 32 or ord(c) == 127 or 0xD800 <= ord(c) <= 0xDFFF for c in path)
+                    and all(part not in ("", ".", "..") and part.lower() != ".git" for part in path.split("/"))):
+                projected["path"] = path
+                revision = item.get("revision")
+                if source_base and isinstance(revision, str) and re.fullmatch(r"[0-9a-fA-F]{40}", revision):
+                    projected["href"] = f"{source_base}/blob/{revision.lower()}/{quote(path, safe='/')}"
+        return projected
+
+    if isinstance(value, list):
+        return [citation(item, 1) for item in value]
+    return citation(value, 0)
+
+
+def _public_snapshot(raw: dict[str, Any], source_base: str | None = None) -> dict[str, Any]:
+    if not isinstance(source_base, str) or _github_source_base(source_base) != source_base:
+        source_base = None
     result: dict[str, Any] = {"schema": raw.get("schema_version", raw.get("schema", 1)), "revision": raw.get("revision", 0)}
     for section, fields in _FIELDS.items():
-        def project(item: Any, fields: tuple[str, ...] = fields) -> dict[str, Any]:
+        def project(item: Any, fields: tuple[str, ...] = fields, section: str = section) -> dict[str, Any]:
             if not isinstance(item, dict):
                 return {}
             projected = {key: _value(item[key]) for key in fields if key in item}
+            if section == "requirements" and "citations" in projected:
+                projected["citations"] = _citations(item["citations"], source_base)
             if "source_identity" in projected:
                 projected["source_identity"] = _source_identity(item["source_identity"])
             if "counterexample" in projected:
@@ -132,7 +168,7 @@ const text = value => typeof value === 'string' ? value : value == null ? '' : J
 function node(tag, value, cls) { const e=document.createElement(tag); if(value != null)e.textContent=text(value); if(cls)e.className=cls; return e; }
 function badge(value) {const v=text(value || 'Incomplete'); return node('span',v,'badge'+(/incomplete|gap|stale|unsupported|fail|missing/i.test(v)?' warn':''));}
 function entry(item, primary) {const d=node('div',null,'entry'); const meta=node('div',null,'meta'); meta.textContent=[item.id, item.origin, item.role].filter(Boolean).join('  /  '); d.append(meta); d.append(node('p',item[primary] || item.statement || item.summary || item.kind || item.method || item.loop || 'No description available')); if(item.freshness)d.append(badge(item.freshness)); if(item.status)d.append(badge((item.freshness==='stale'?'Historical status: ':'Status: ')+item.status)); if(item.state && item.state!==item.status)d.append(badge('State: '+item.state)); return d;}
-function detail(parent, title, value) {if(!value || (Array.isArray(value)&&!value.length))return; const d=node('details'); d.append(node('summary',title)); const vals=Array.isArray(value)?value:[value]; for(const v of vals)d.append(node('p',typeof v==='object'?JSON.stringify(v):v,'meta')); parent.append(d);}
+function detail(parent, title, value) {if(!value || (Array.isArray(value)&&!value.length))return; const d=node('details'); d.append(node('summary',title)); const vals=Array.isArray(value)?value:[value]; for(const v of vals){const p=node('p',null,'meta'); if(title==='Sources' && v && typeof v==='object' && v.href){const {href,...label}=v; const a=node('a',JSON.stringify(label)); a.href=href; a.rel='noopener noreferrer'; p.append(a);}else p.textContent=text(v);d.append(p);} parent.append(d);}
 const areas=[['product','Product'],['function','Function'],['nonfunctional','Nonfunctional'],['architecture','Architecture'],['data-api','Data / API'],['acceptance','Acceptance']];
 function normalize(s){return text(s).toLowerCase().replace(/[^a-z0-9]/g,'');}
 function matches(area,key){const a=normalize(area); return a===normalize(key) || (key==='function' && ['functional','functions'].includes(a)) || (key==='data-api' && ['data','api','dataandapi'].includes(a)) || (key==='nonfunctional' && a==='nonfunctionalrequirements');}
@@ -141,7 +177,7 @@ function render() {
  const s=current, session=s.session||{}; $('session').textContent=[session.id,session.repo,session.status].filter(Boolean).join('  /  ') || 'Session details unavailable'; $('status').textContent=session.status || 'Status unavailable';
  $('invalidation').textContent=session.status==='invalidated'?'Session invalidated. Prior claims and evidence are stale; their statuses are historical.':''; $('revision').textContent='Revision '+text(s.revision ?? 0); const query=$('search').value.toLowerCase(); const main=$('areas'); main.replaceChildren();
  for(const [key,label] of areas){const section=node('section',null,'area');const head=node('div',null,'area-head');head.append(node('h3',label));const all=(s.requirements||[]).filter(x=>matches(x.area,key));const filtered=all.filter(x=>JSON.stringify(x).toLowerCase().includes(query));head.append(node('span',all.length+' requirements','count'));section.append(head);if(!filtered.length)section.append(node('p',all.length?'No matching requirements.':'No requirements recorded for this area.','empty'));for(const r of filtered){const d=entry(r,'statement');detail(d,'Sources',r.citations);section.append(d);}main.append(section);}
- const other=(s.requirements||[]).filter(x=>!areas.some(([key])=>matches(x.area,key))); if(other.length){const section=node('section',null,'area');section.append(node('h3','Other requirements'));for(const r of other.filter(x=>JSON.stringify(x).toLowerCase().includes(query)))section.append(entry(r,'statement'));main.append(section);}
+ const other=(s.requirements||[]).filter(x=>!areas.some(([key])=>matches(x.area,key))); if(other.length){const section=node('section',null,'area');section.append(node('h3','Other requirements'));for(const r of other.filter(x=>JSON.stringify(x).toLowerCase().includes(query))){const d=entry(r,'statement');detail(d,'Sources',r.citations);section.append(d);}main.append(section);}
  const claims=$('claims'); claims.replaceChildren(); const matching=(s.claims||[]).filter(x=>JSON.stringify(x).toLowerCase().includes(query));if(!matching.length)claims.append(node('p','No matching claims recorded.','empty'));for(const c of matching){const d=entry(c,'statement'); if(!c.status)d.append(badge('Incomplete'));detail(d,'Formal meaning',c.formal_meaning);detail(d,'Proof scope',c.proof_scope);detail(d,'Declared status (historical)',c.declared_status);detail(d,'Assumptions',c.assumptions);detail(d,'Requirements',c.requirement_ids);detail(d,'Evidence',c.evidence_ids);claims.append(d);}
  for(const [id,items,field,empty] of [['jobs',s.jobs,'summary','No active loops recorded.'],['findings',s.findings,'statement','No findings recorded.'],['decisions',s.decisions,'statement','No decisions recorded.'],['evidence',s.evidence,'summary','No evidence recorded.'],['events',s.events,'summary','No activity recorded.']]){const el=$(id);el.replaceChildren();if(id==='events' && s.events_truncated)el.append(node('p','Showing '+items.length+' of '+s.event_total+' events; older activity is omitted.','empty'));if(!items||!items.length)el.append(node('p',empty,'empty'));for(const x of (items||[]).slice().reverse()){const d=entry(x,field);if(id==='evidence'){detail(d,'Method',x.method);detail(d,'Source identity',x.source_identity);detail(d,'Contract and conditions',x.contract);detail(d,'Assumptions',x.assumptions);detail(d,'Solver and Python versions',{solver:x.solver_version,python:x.python_version});detail(d,'Solver conditions',{precondition:x.precondition,violation:x.violation});detail(d,'Counterexample',x.counterexample);detail(d,'Claims',x.claim_ids||x.claim_id);detail(d,'Requirements',x.requirement_ids);}el.append(d);}}
 }
@@ -158,9 +194,9 @@ def _page() -> str:
 <aside class="rail" aria-label="Session activity"><section><h2>Loops</h2><div id="jobs"></div></section><section><h2>Findings</h2><div id="findings"></div></section><section><h2>Decisions</h2><div id="decisions"></div></section><section><h2>Evidence</h2><div id="evidence"></div></section><section><h2>Activity</h2><div id="events"></div></section><section class="controls"><h2>Session controls</h2><label for="feedback">Feedback</label><textarea id="feedback" maxlength="4000"></textarea><button id="send" type="button">Send feedback</button><button id="stop" class="secondary" type="button">Request stop</button><p id="notice" class="notice" role="status"></p></section></aside></div><script>{_JS}</script></body></html>'''
 
 
-def render_report(snapshot: dict[str, Any]) -> str:
+def render_report(snapshot: dict[str, Any], *, source_base: str | None = None) -> str:
     """Render a standalone, escaped, non-interactive report without raw logs."""
-    data = _public_snapshot(snapshot)
+    data = _public_snapshot(snapshot, source_base)
     esc = lambda value: html.escape(str(value), quote=True)  # noqa: E731
     session = data["session"]
     parts = [f'<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Autonomy report</title><style>{_CSS}</style></head><body><main class="main"><h1>Autonomy report</h1>',
@@ -179,13 +215,23 @@ def render_report(snapshot: dict[str, Any]) -> str:
                 parts.append('<p class="badge warn">Stale</p>')
             for key, value in item.items():
                 label = "Historical status" if key == "status" and item.get("freshness") == "stale" else "Declared status (historical)" if key == "declared_status" else key
-                parts.append(f'<p><strong>{esc(label)}:</strong> {esc(value)}</p>')
+                if section == "requirements" and key == "citations":
+                    citations = value if isinstance(value, list) else [value]
+                    parts.append(f'<p><strong>{esc(label)}:</strong></p>')
+                    for citation in citations:
+                        if isinstance(citation, dict) and "href" in citation:
+                            text = {k: v for k, v in citation.items() if k != "href"}
+                            parts.append(f'<p><a href="{esc(citation["href"])}" rel="noopener noreferrer">{esc(text)}</a></p>')
+                        else:
+                            parts.append(f'<p>{esc(citation)}</p>')
+                else:
+                    parts.append(f'<p><strong>{esc(label)}:</strong> {esc(value)}</p>')
             parts.append('</div>')
         parts.append('</section>')
     return ''.join(parts) + '</main></body></html>'
 
 
-def create_server(snapshot: Snapshot, control: Control, *, host: str = "127.0.0.1", port: int = 0) -> AutonomyServer:
+def create_server(snapshot: Snapshot, control: Control, *, host: str = "127.0.0.1", port: int = 0, source_base: str | None = None) -> AutonomyServer:
     """Create a loopback-only server; the caller owns serving and shutdown.
 
     Open ``server.url`` and run ``server.serve_forever()`` in a background thread.
@@ -235,7 +281,7 @@ def create_server(snapshot: Snapshot, control: Control, *, host: str = "127.0.0.
                 self._json(401, {"error": "Unauthorized"})
                 return
             if parsed.path == "/api/snapshot":
-                self._json(200, _public_snapshot(snapshot()))
+                self._json(200, _public_snapshot(snapshot(), source_base))
                 return
             if parsed.path == "/api/events":
                 try:
@@ -243,7 +289,7 @@ def create_server(snapshot: Snapshot, control: Control, *, host: str = "127.0.0.
                 except ValueError:
                     self._json(400, {"error": "Invalid event sequence"})
                     return
-                events = _public_snapshot(snapshot())["events"]
+                events = _public_snapshot(snapshot(), source_base)["events"]
                 self._json(200, {"events": [e for e in events if isinstance(e.get("sequence", e.get("seq")), int) and e.get("sequence", e.get("seq")) > after]})
                 return
             self._json(404, {"error": "Not found"})

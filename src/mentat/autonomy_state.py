@@ -144,7 +144,7 @@ class Store:
             raise ValueError("unknown session")
         return row
 
-    def new_session(self, repo: str, base: str, head: str, policy: dict, now: float, deadline: float) -> str:
+    def new_session(self, repo: str, base: str, head: str, policy: dict, now: float, deadline: float, *, bootstrap: dict | None = None) -> str:
         repo = _text(repo, "repo")
         base, head = _text(base, "base"), _text(head, "head")
         now, deadline = _time(now), _time(deadline)
@@ -160,6 +160,36 @@ class Store:
                 raise ValueError("unresolved private merge dispatch blocks a new session")
             db.execute("INSERT INTO sessions VALUES (?, 'running', ?, ?, ?, ?, ?, ?)", (session_id, repo, base, head, now, deadline, policy_json))
             self._event(db, session_id, "session_started", {"repo": repo, "base": base, "head": head, "started_at": now, "deadline": deadline, "policy": policy})
+            if bootstrap is not None:
+                self._event(db, session_id, "authority_pinned", {"digest": bootstrap["authority_digest"]})
+                self._event(db, session_id, "toolchain_pinned", {"identity": bootstrap["tool_identity"]})
+                for kind, record in bootstrap["records"]:
+                    if kind not in {"requirement", "claim"}:
+                        raise ValueError("invalid bootstrap record")
+                    data = dict(record)
+                    record_id = _text(data.get("id"), "record id")
+                    if kind == "requirement" and data.get("area") not in {"product", "functional", "nonfunctional", "architecture", "data-api", "acceptance"}:
+                        raise ValueError("invalid requirement area")
+                    encoded = _json(data)
+                    old = db.execute("SELECT data FROM records WHERE session_id=? AND kind=? AND id=?", (session_id, kind, record_id)).fetchone()
+                    if old and old[0] != encoded:
+                        raise ValueError("records are immutable")
+                    if not old:
+                        db.execute("INSERT INTO records VALUES (?, ?, ?, ?)", (session_id, kind, record_id, encoded))
+                        self._event(db, session_id, "record_added", {"kind": kind, "record": data})
+                surfaces = bootstrap["surfaces"]
+                self._event(db, session_id, "inventory", {"surfaces": surfaces, "count": len(surfaces), "status": "unexamined"})
+                for job in bootstrap["jobs"]:
+                    loop, role, item_id, input_digest, payload = (job[k] for k in ("loop", "role", "item_id", "input_digest", "payload"))
+                    if loop not in LOOPS or role not in ROLES:
+                        raise ValueError("invalid loop or role")
+                    _text(item_id, "item_id")
+                    _text(input_digest, "input_digest")
+                    encoded = _json(payload)
+                    job_id = uuid.uuid4().hex
+                    db.execute("INSERT INTO jobs(id, session_id, loop, role, item_id, input_digest, payload, status) VALUES (?, ?, ?, ?, ?, ?, ?, 'queued')", (job_id, session_id, loop, role, item_id, input_digest, encoded))
+                    db.execute("INSERT INTO source_finalization_job_epochs VALUES (?, 0)", (job_id,))
+                    self._event(db, session_id, "job_enqueued", {"job_id": job_id, "loop": loop, "role": role, "item_id": item_id, "input_digest": input_digest, "payload": payload})
             db.commit()
         return session_id
 
@@ -1247,3 +1277,45 @@ class Store:
             result["events"] = events
             db.commit()
             return result
+
+
+def ordinary_review_pair(self: Any, kind: str, cohort: str, proposal: dict) -> list[dict] | None:
+    assert self.session_id
+    snapshot = self.store.snapshot(self.session_id)
+    jobs = [j for j in snapshot["jobs"] if j["payload"].get("kind") == kind and j["payload"].get("review_cohort") == cohort]
+    if len(jobs) != 2 or any(j["status"] != "succeeded" for j in jobs):
+        return None
+    pair = []
+    expected_items = {f"{proposal.get('root_item')}.{kind}..{proposal.get('round', 0)}.{slot}" for slot in (1, 2)}
+    if {j["item_id"] for j in jobs} != expected_items or any(j["role"] != "code-reviewer" for j in jobs):
+        raise ValueError("review cohort slots are inconsistent")
+    if jobs[0]["payload"] != jobs[1]["payload"]:
+        raise ValueError("review cohort inputs differ")
+    for job in sorted(jobs, key=lambda j: j["id"]):
+        events = [e["payload"] for e in snapshot["events"] if e["kind"] == "job_enqueued" and e["payload"].get("job_id") == job["id"]]
+        if len(events) != 1 or any(events[0].get(k) != job[k] for k in ("loop", "role", "item_id", "input_digest", "payload")):
+            raise ValueError("review cohort scheduling changed")
+        payload, outcome = job["payload"], job.get("outcome") or {}
+        decisions = [d for d in snapshot["decisions"] if d.get("job_id") == job["id"]]
+        if not decisions:
+            return None
+        if len(decisions) != 1:
+            raise ValueError("ambiguous review decision")
+        decision = decisions[0]
+        if (self.store.transition_status(job["id"]) == "stale" or payload.get("proposal") != proposal
+                or self._review_cohort(kind, proposal, payload, payload.get("check_evidence_id"), payload.get("check_key")) != cohort
+                or outcome.get("status") != "succeeded" or outcome.get("head") != proposal.get("head")
+                or outcome.get("diff_digest") != proposal.get("diff_digest")
+                or decision.get("review_cohort") != cohort or decision.get("review_kind") != kind
+                or decision.get("author_id") != proposal.get("author_id") or decision.get("base") != snapshot["session"]["base"]
+                or decision.get("check_evidence_id") != payload.get("check_evidence_id") or decision.get("check_key") != payload.get("check_key")
+                or decision.get("reviewer_id") != outcome.get("author_id")
+                or decision.get("decision") != outcome.get("result", {}).get("decision")
+                or decision.get("summary") != outcome.get("result", {}).get("summary")
+                or decision.get("head") != outcome.get("head") or decision.get("diff_digest") != outcome.get("diff_digest")
+                or decision.get("reviewer_id") in [proposal.get("author_id"), *proposal.get("prior_authors", [])]):
+            raise ValueError("review cohort changed")
+        pair.append({**job, "decision": decision})
+    if len({j["decision"]["reviewer_id"] for j in pair}) != 2:
+        raise ValueError("reviewers are not independent")
+    return pair
