@@ -3,6 +3,35 @@
 The approved scope and delivery gate are in [implementation-plan.md](implementation-plan.md).
 This record distinguishes implemented behavior, completed checks, and pending readiness work.
 
+## FAS operation guidance after v10
+
+The v10 session `6633d94356324d5eac8452f5627a14c7` blocked after 12
+accepted specification cohorts. At input revision
+`05c0311dc3037b55994cb2b98ad43e22eb59fa8d`, its final specification generator
+deferred the remaining trial-workflow and lockfile observations because it
+understood its allowed operations as write/delete and could not return the
+complete FAS within its output capacity. The common prompt instructed
+write/delete while the specification-specific prompt and runtime already
+supported a bounded `patch_fas` operation. This is a prompt contradiction,
+not evidence of source drift or an accepted correction.
+
+The common and specification-generator prompts now consistently describe the
+existing scoped operation and prefer it for fitting, small updates to an existing
+FAS. Before the change, the independent assembled-prompt regression failed: its
+generator deferred instead of applying the supported patch. After the change,
+existing `tests/test_autonomy_runtime.py -k patch_fas -n 0` passed (6 passed,
+26 deselected), and Ruff and Python compilation passed. Pyright initially used
+the wrong interpreter in the new worktree and reported missing imports; rerunning
+with the existing development Python via `--pythonpath` passed with zero errors
+and warnings. The independent real-adapter, schema and Git-patch regression
+passed both initial and correction cases in 17.24 seconds, including targeted
+refresh, materialized FAS and diff, unchanged records, and two distinct
+reviewers. Both cases failed against the isolated `eda325b` baseline, as
+expected. Full native/Linux and protected-checker gates remain pending. V10 did not reach current
+candidate mandatory checks, IVL, final source
+review or publication. A fresh completed self-run remains required before
+readiness or Titanic onboarding.
+
 ## Seed correspondence correction after v9
 
 Actual v9 candidate `9e5379ba634011b1400551db76d9cc2136e253db` reached
