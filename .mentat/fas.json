@@ -1886,6 +1886,11 @@
       "reason": "Bounded specification correction implementation awaits independent source correspondence and operational qualification; no formal application proof is claimed."
     },
     {
+      "path": "tests/test_autonomy_spec_surface.py",
+      "status": "unexamined",
+      "requirement_ids": []
+    },
+    {
       "path": "tests/test_autonomy_state.py",
       "status": "gap",
       "requirement_ids": [],

@@ -433,6 +433,7 @@ class Coordinator:
         self.clock = clock
         self.stop = threading.Event()
         self.session_id: str | None = None
+        self.spec_surface: str | None = None
         self._lock = threading.Lock()
         self.config: dict = {}
         self.authority_digest = ""
@@ -479,6 +480,7 @@ class Coordinator:
         items = [("scl", "implementer", "cas.inventory", {
             "kind": "generate_spec", "surfaces": surfaces, "accepted_spec_base": head,
             **({"target_head": head, "review_base": base} if head != base else {}),
+            **({"targetfiles": [self.spec_surface]} if self.spec_surface is not None else {}),
         })]
         items.extend(("ivl", "verifier", f"source.{index}", {"kind": "source_check", "check": check})
                      for index, check in enumerate(self.config["source_checks"]))
@@ -494,6 +496,9 @@ class Coordinator:
         if len(starts) != 1 or len(inventories) != 1:
             raise ValueError("incomplete initial session bootstrap; start a new session")
         start = starts[0]
+        self.spec_surface = start.get("spec_surface")
+        if self.spec_surface is not None:
+            autonomy_spec_scope.validate_seeded_surface(self, start["base"], start["head"], self.spec_surface, inventory, git)
         surfaces = inventory(self.repo, start["head"])
         if inventories[0] != {"surfaces": surfaces, "count": len(surfaces), "status": "unexamined"}:
             raise ValueError("invalid initial session inventory")
@@ -515,6 +520,8 @@ class Coordinator:
 
     def _enqueue(self, loop: str, role: str, item: str, payload: dict, *, predecessor: dict | None = None, end_correction_scope: bool = False) -> str:
         assert self.session_id
+        if self.spec_surface is not None and payload.get("kind") == "generate_spec":
+            payload = {**payload, "targetfiles": [self.spec_surface]}
         if predecessor:
             prior = predecessor.get("payload", {})
             human = prior.get("human_feedback")
@@ -746,8 +753,11 @@ class Coordinator:
                 for future in pending:
                     future.add_done_callback(release_when_finished)
 
-    def run(self, *, resume: str | None = None) -> dict:
+    def run(self, *, resume: str | None = None, spec_surface: str | None = None) -> dict:
         with self._exclusive():
+            if resume and spec_surface is not None:
+                raise ValueError("surface scope is inferred on resume")
+            self.spec_surface = spec_surface
             self.stop.clear()
             self._pending_tasks = []
             head = git(self.repo, "rev-parse", "HEAD")
@@ -822,6 +832,8 @@ class Coordinator:
                 base = git(
                     self.repo, "rev-parse", f"{self.config['remote']}/{self.config['base_branch']}"
                 )
+                if self.spec_surface is not None:
+                    autonomy_spec_scope.validate_seeded_surface(self, base, head, self.spec_surface, inventory, git)
                 surfaces = inventory(self.repo, head)
                 records = []
                 if (self.repo / FAS_PATH).is_file():
@@ -833,7 +845,7 @@ class Coordinator:
                     now + self.config["session_seconds"],
                     bootstrap={"authority_digest": self.authority_digest,
                                "tool_identity": self.tool_identity, "records": records,
-                               "surfaces": surfaces, "jobs": jobs},
+                               "surfaces": surfaces, "jobs": jobs, "spec_surface": self.spec_surface},
                 )
             assert self.session_id
             deadline = self.store.snapshot(self.session_id)["session"]["deadline"]
@@ -1512,6 +1524,8 @@ class Coordinator:
         if git(worktree, "rev-parse", "HEAD") != parent:
             raise ValueError("agent changed committed source")
         proposed_changes = result["result"].get("changes", [])
+        if self.spec_surface is not None and proposed_changes:
+            raise ValueError("selected surface qualification is read-only")
         if proposed_changes and not (kind == "review_final_source" and result["result"].get("decision") != "accept"):
             if kind.startswith("review_") or kind in {"adjudicate_defect", "adjudicate_domain"}:
                 raise ValueError("reviewers cannot propose file changes")
@@ -1541,6 +1555,8 @@ class Coordinator:
             ]
         result = {**result, "result": structured, "events": []}
         changes = _changed_paths(worktree)
+        if self.spec_surface is not None and changes:
+            raise ValueError("selected surface qualification is read-only")
         if kind.startswith("review_") or kind in {"adjudicate_defect", "adjudicate_domain"}:
             if changes:
                 raise ValueError("reviewer modified candidate files")
@@ -1602,6 +1618,8 @@ class Coordinator:
             "--no-ext-diff",
             "--no-textconv",
         )
+        if self.spec_surface is not None and staged:
+            raise ValueError("selected surface qualification is read-only")
         if any(not _allowed_path(kind, path) for path in staged) or (
             not staged and kind == "investigate_defect" and not job["payload"].get("round")
         ):
@@ -3043,10 +3061,12 @@ class Coordinator:
                 "Never invent an empty argv or target descriptor to request a formal proof. Express source obligations in the reviewed claim's formal_contract. "
                 "If a genuinely required capability is unsupported, defer and describe the explicit gap.\n"
             )
+        if self.spec_surface is not None and kind in {"generate_spec", "generate_verification"}:
+            return common + "This qualification is read-only: propose no file changes. Inspect the committed observation and defer if unsupported."
         if kind == "generate_spec":
             return (
                 common
-                + f"Cite the immutable task input revision and actual observed file blobs or content for observations. For requirement and claim observations and revision evidence, use a citation object {{path: actual repository path, revision: full immutable task input commit SHA, source: precise observed scope}}. For a mapped surface, write observations in the string field note; to cite a revision, use the exact phrase task input revision followed by the full SHA. When changing a surface note, replace a disputed assertion with a current-source observation grounded in the included file and cite exactly one task input revision, the actual input revision for that observation. Do not add a retrospective claim about an earlier proposal, observation, or review unless the actual historical evidence is supplied to later reviewers. Preserve the surface path, supported requirement links, unrelated records and unchanged citations. Preserve existing citations and provenance unless the record actually changes; never invent an observed revision or claim to have inspected external material. Continuity descriptors compare endpoints and do not establish semantic correspondence or review acceptance. A resulting proposal commit is created after generation, so never require a document to cite its own resulting commit hash. Work incrementally on the INCLUDED files in this batch. Preserve all existing records and IDs; map only facts supported by included files and keep omitted surfaces unexamined or gap. Leave newly created CAS/FAS paths unexamined or gap until observed in committed context; the controller adds missing new-path inventory rows. Do not defer the whole batch solely because files are omitted: the controller queues remaining batches. Write OpenSpec CAS documents under openspec/specs/*/spec.md and {FAS_PATH}. For small edits to an existing committed FAS, prefer operation patch_fas when the bounded patch fits; do not defer solely because a complete FAS response would not fit. A new FAS requires a full write; genuine capacity limits, unsafe changes, or missing evidence remain explicit gaps. Use patch_fas only at exactly {FAS_PATH}, with content a JSON string containing {{schema_version: 1, expected_sha256: fas_sha256, edits: [{{collection: requirements/claims/surfaces, key: UUID or exact surface path, expected_digest: null for insertion or patch_record_digest_index digest for update, record: complete replacement object}}]}}. Include only changed records, at most 128 edits; no deletions. The complete resulting FAS and all changes together must fit 300000 bytes. Use prior_revision_index for requirement and claim revision lineage (its digest differs from patch_record_digest_index). FAS JSON exact keys schema_version=1, requirements, claims, surfaces. Every requirement has persistent UUID id, area in {AREAS}, nonempty statement, origin observed/intended/inferred/uncertain, citations, spec_path containing the UUID in an HTML comment. Preserve existing IDs and lineage. For every changed existing requirement or claim, add revision {{version: previous version plus one (initial version 1), previous_digest: SHA-256 canonical digest of previous JSON record, reason: nonempty explanation, evidence: nonempty citations}}; do not remove prior IDs or weaken established intent. Every claim has UUID id, requirement_ids, statement, assumptions, status (unattempted/unsupported/inconclusive only; the controller derives proof status), formal_meaning. Every surface has path, status mapped/gap/unsupported/unexamined and requirement_ids. Account for all six areas, including unknown requirements explicitly. Do not change application code. Flag actual established defects separately; uncertainty is not a defect."
+                + autonomy_spec_scope.GENERATION_INSTRUCTIONS
             )
         if kind == "review_final_source":
             return (common + "Inspect only the specified source batch contribution against its records and relevant full diff. "
@@ -3748,7 +3768,7 @@ class Coordinator:
                 worktree,
                 tracked=[x["path"] for x in inventory(self.repo, proposal["inventory_head"])],
             )
-            gaps = [surface["path"] for surface in fas["surfaces"] if surface["status"] != "mapped"]
+            gaps = [surface["path"] for surface in fas["surfaces"] if surface["status"] != "mapped" and (self.spec_surface is None or surface["path"] == self.spec_surface)]
             continuing_batches = bool(
                 proposal.get("context_pending") or job["payload"].get("revisit_files")
             )

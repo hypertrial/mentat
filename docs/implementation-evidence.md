@@ -1241,3 +1241,25 @@ unchanged mode and blob identities from the verified repair ancestor for all
 three files. Twelve focused tests exercise final source and specification
 contexts. Six cases reproduced the missing and ambiguous observations on the
 specification-only revision. All twelve pass with the fix.
+
+## 2026-11-25 — protected self-run scope
+
+The first protected self-run started from verified `99728cbfa78c` and
+qualified its candidate checks at `8d6f93169b20`. The dedicated worker ran
+2,290 tests with 53 documented skips. Packaging and the 45 protected checker
+fixtures passed. The current clamp proof succeeded, and the faulty control
+replayed the solver witness `value=1`, `lower=-1`, `upper=0` with a violated
+postcondition in protected CPython.
+
+Default inventory scanning updated 89 FAS surface records and left all
+requirement and claim values unchanged. Eleven final source batches returned
+seven accepts and 15 deferrals. Several reviewers needed the historical contents
+of changed cited Git blobs. Two also questioned the API's separation of saved
+lifecycle status and current freshness. The versioned v1 contract requires that
+separation. All 22 focused freshness and projection tests, including the actual
+loopback case, passed when rerun with socket access.
+
+The controller reached a durable blocked checkpoint with no publication. Its
+full candidate, checks, reviews and evidence remain available in private state.
+The next fresh qualification will enforce the selected source scope at session
+initialization and retain all configured checks and publication authority.
