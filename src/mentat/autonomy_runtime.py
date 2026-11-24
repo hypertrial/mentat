@@ -27,6 +27,7 @@ from typing import Any
 from . import (
     autonomy_git_transaction,
     autonomy_private_merge,
+    autonomy_spec_scope,
     autonomy_worker,
     gitio,
     process,
@@ -40,6 +41,7 @@ _LOADED_EXECUTION_SOURCES = (
     Path(autonomy_worker.__file__).read_bytes(),
     Path(autonomy_private_merge.__file__).read_bytes(),
     Path(autonomy_git_transaction.__file__).read_bytes(),
+    Path(autonomy_spec_scope.__file__).read_bytes(),
 )
 
 
@@ -58,6 +60,7 @@ def execution_identity() -> str:
         Path(autonomy_worker.__file__).read_bytes(),
         Path(autonomy_private_merge.__file__).read_bytes(),
         Path(autonomy_git_transaction.__file__).read_bytes(),
+        Path(autonomy_spec_scope.__file__).read_bytes(),
     )
     if sources != _LOADED_EXECUTION_SOURCES:
         raise ValueError("trusted execution code changed after import; restart required")

@@ -38,6 +38,7 @@ VERIFIER_MODULES = (
     "autonomy_git_transaction",
     "autonomy_review_inputs",
     "autonomy_source_corrections",
+    "autonomy_spec_scope",
     "autonomy_cli",
     "autonomy_policy",
     "autonomy_private_merge",

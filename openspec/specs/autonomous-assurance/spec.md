@@ -29,6 +29,10 @@ SCL maintains complete OpenSpec CAS across all six areas and distinguishes obser
 
 The independent discriminator inspects the relevant source, revision-bound evidence, assumptions, and explicit coverage gaps. Missing or stale evidence remains unresolved; agent agreement alone does not establish correctness.
 
+#### Scenario: bounded specification review correction
+
+When an admitted partial draft needs revision, the controller binds its editable record and file scope to the accepted checkpoint, admitted draft, cumulative review base and authenticated review cohort. Included supporting source does not authorize unrelated FAS changes. Both full writes and patches are checked before commit and review. The bound survives retries, resume and capacity recovery; fresh independent acceptance completes the correction before normal remaining inventory work resumes. Existing attempt, round and context limits remain unchanged. Genuine out-of-scope dependencies and indivisible capacity stay explicit gaps.
+
 ### Requirement: fas
 <!-- mentat:requirement-id=c7ddc910-3dec-59a4-af95-4a62094bd503; area=functional -->
 

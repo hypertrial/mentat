@@ -50,7 +50,7 @@ def test_source_revision_routes_to_current_head_specification_correction(
     state = {'source_revised': False, 'corrected': False, 'drain': None, 'code_job': None,
              'correction_deferred': False, 'source_head': None, 'stale_descendant_seen': False,
              'scl_revised': False, 'spec_code_job': None, 'scl_first_head': None,
-             'first_scl_terminal': None}
+             'first_scl_terminal': None, 'reviewed_surface': None}
     calls = []
     original_run = autonomy_runtime._run
     features = ('shell_tool', 'unified_exec', 'apps', 'browser_use', 'computer_use',
@@ -108,10 +108,21 @@ def test_source_revision_routes_to_current_head_specification_correction(
                                 'defer' if initial and not selected and scl_peer == 'defer' else 'accept')
             if initial and not selected and scl_peer == 'failed':
                 raise RuntimeError('SCL peer unavailable')
+            review_finding = 'Specify integer return.'
+            if revise_scl and correction_defers:
+                accepted = payload['proposal']['accepted_spec_base']
+                before = json.loads(git(repo, 'show', f'{accepted}:.mentat/fas.json'))
+                after = json.loads(git(repo, 'show', f'{proposal_head}:.mentat/fas.json'))
+                old = {row['path']: row for row in before['surfaces']}
+                changed = [row['path'] for row in after['surfaces'] if old.get(row['path']) != row]
+                assert len(changed) == 1
+                review_finding += f' Clarify the admitted observation for {changed[0]}.'
+                with lock:
+                    state['reviewed_surface'] = changed[0]
             answer = {'schema_version': 1, 'decision': scl_decision,
                       'summary': 'Clarify the current source observation.',
                       'requirements': [], 'claims': [], 'verification_requests': [], 'defects': [],
-                      'changes': [], 'findings': [{'id': 'scl-detail', 'summary': 'Specify integer return.',
+                      'changes': [], 'findings': [{'id': 'scl-detail', 'summary': review_finding,
                                                     'requirement_ids': [requirement], 'severity': 'medium'}]
                       if revise_scl else []}
             Path(argv[argv.index('--output-last-message') + 1]).write_text(json.dumps(answer))
@@ -208,7 +219,20 @@ def test_source_revision_routes_to_current_head_specification_correction(
                     context = json.loads(payload['prompt'].split('SOURCE_CONTEXT_JSON:\n', 1)[1])
                     included = set(context['files'])
                     source_row = next(row for row in current['surfaces'] if row['path'] == 'src.py')
-                    if (scl_revise and state['scl_revised'] and 'src.py' in included
+                    envelope = context.get('correction_scope')
+                    allowed_surfaces = set(envelope['records']['surfaces']) if envelope else None
+                    if envelope and 'src.py' not in allowed_surfaces:
+                        candidates = [row for row in current['surfaces']
+                                      if row['path'] in allowed_surfaces and row['path'] in included]
+                        if not candidates:
+                            return {'status': 'succeeded', 'session_id': job['id'], 'result': {
+                                'decision': 'defer', 'summary': 'Reviewed source not included',
+                                'findings': [], 'verification_requests': []}}
+                        assert len(candidates) == 1
+                        if correction_defers:
+                            assert candidates[0]['path'] == state['reviewed_surface']
+                        candidates[0]['note'] = 'Clarified the admitted source observation.'
+                    elif (scl_revise and state['scl_revised'] and 'src.py' in included
                             and source_row.get('note') != 'The selected function returns the integer 1.'):
                         source_row['note'] = 'The selected function returns the integer 1.'
                         with lock:
