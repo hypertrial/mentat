@@ -921,6 +921,7 @@ class Coordinator:
             if self.config["auto_merge"] and not required_checks:
                 raise ValueError("automatic merge requires pinned minimum gates")
             self.github.required_checks = required_checks
+            self.github.merge_policy = copy.deepcopy(policy.get("merge_policy"))
             self.mandatory_worker_checks = policy["mandatory_worker_checks"]
             if hasattr(self.worker, "expected_profile"):
                 self.worker.expected_profile = copy.deepcopy(policy.get("worker_profile"))

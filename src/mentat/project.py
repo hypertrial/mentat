@@ -39,6 +39,7 @@ VERIFIER_MODULES = (
     "autonomy_source_corrections",
     "autonomy_cli",
     "autonomy_policy",
+    "autonomy_private_merge",
     "autonomy_runtime",
     "autonomy_state",
     "autonomy_ui",
