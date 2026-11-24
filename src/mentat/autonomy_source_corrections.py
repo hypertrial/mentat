@@ -9,6 +9,8 @@ from .project import safe_relative_path
 
 def validate_result(result: dict, scope: dict, inventory_paths: set[str]) -> dict:
     """Validate complete v2 source findings and existing, scoped correction targets."""
+    if not isinstance(result, dict):
+        raise ValueError("invalid final source result")
     summary, findings = result.get("summary"), result.get("findings")
     if not isinstance(summary, str) or not isinstance(findings, list):
         raise ValueError("invalid final source findings")
@@ -44,7 +46,8 @@ def validate_result(result: dict, scope: dict, inventory_paths: set[str]) -> dic
     seen = set()
     for target in detail["spec_corrections"]:
         if (not isinstance(target, dict) or set(target) != {"collection", "key", "reason"}
-                or target["collection"] not in allowed or not isinstance(target["key"], str)
+                or not isinstance(target["collection"], str) or target["collection"] not in allowed
+                or not isinstance(target["key"], str)
                 or target["key"] not in allowed[target["collection"]]
                 or not isinstance(target["reason"], str) or not target["reason"].strip()):
             raise ValueError("invalid or out-of-scope specification correction")
