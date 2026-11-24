@@ -1209,3 +1209,35 @@ investigation. The three existing ancestral-refresh, chained-refresh, and
 changed-CAS scenarios failed on that draft. All three passed in 64.05 seconds
 after narrowing the hold to the already accepted fix's specification work.
 `scripts/verify-fast` passed after the same change.
+
+Independent verification of `445ec823c94d5d4277ae2ceffe58b9afa1224109`
+passed 2,278 tests on macOS and Ubuntu ARM64, with 53 documented skips on
+each platform. The dedicated protected checker passed all 45 tests with
+zero skips. Both package checks and the installed wheel and sdist smoke
+checks passed. The complete inventory contained 315 tracked paths.
+[PR 80](https://github.com/hypertrial/mentat/pull/80) merged through the
+required check as `2bd197470158a4e6a89d31cc7bfc7e42ed80f804`, with the
+verified tree `528d6dbcf20f0447c9376b1fd6b4900e61f4fcca`. The hosted push
+check passed.
+
+The fresh private run independently approved repair `24b9677ea638` and
+held the two ordinary specification reviews while the repair's specification
+continued. The first generation attempt timed out and the second returned a
+malformed nested FAS patch. The third produced a valid specification. Two
+reviewers accepted the repair-backed `7b41c0eafc42`; the sibling transitions
+staled and implementation verification proceeded from the repaired revision.
+
+Both final source reviewers deferred `7b41c0eafc42` after the worker and
+verification reviews passed. Their retained inputs include the three current
+files and omit continuity descriptors for `.mentat/workspace.json`,
+`check_behavior.py`, and `increment.py` at the cited repair ancestor. The
+files are byte-identical at the two endpoints. The surface records use `notes`
+with an exact revision, while the context builder reads `note`. Recomputing
+the retained scopes from the frozen implementation reproduces the omitted
+descriptors. The ledger blocked publication and remains historical.
+
+With observation aliases recognized, recomputing both retained scopes supplies
+unchanged mode and blob identities from the verified repair ancestor for all
+three files. Twelve focused tests exercise final source and specification
+contexts. Six cases reproduced the missing and ambiguous observations on the
+specification-only revision. All twelve pass with the fix.

@@ -743,6 +743,59 @@ def test_source_batch_admits_only_linked_support_and_proves_endpoints(source_bat
                for path, contents in data['files'].items()) <= 360_000
 
 
+@pytest.mark.parametrize('review_kind', ['review_final_source', 'review_spec'])
+@pytest.mark.parametrize('observation', ['note', 'notes', 'equal', 'conflict', 'malformed', 'split'])
+def test_surface_observation_continuity_uses_both_fields(source_batch_history, tmp_path, review_kind, observation):
+    from mentat.autonomy import Coordinator
+    from mentat.autonomy_state import Store
+
+    repo, cited, intermediate, head, scope, make_context = source_batch_history
+    scope = deepcopy(scope)
+    surface = scope['obligations'][0]['current_surface']
+    surface.pop('note')
+    phrase = f'At task input revision {cited}, the mapped source is observed.'
+    if observation in {'note', 'notes'}:
+        surface[observation] = phrase
+    elif observation == 'equal':
+        surface.update(note=phrase, notes=phrase)
+    elif observation == 'conflict':
+        surface.update(note=phrase, notes=f'task input revision {intermediate}')
+    elif observation == 'malformed':
+        surface.update(note=phrase, notes='task input revision not-a-sha')
+    else:
+        surface.update(note='At task input revision', notes=cited)
+
+    if review_kind == 'review_final_source':
+        data, _, _ = make_context(batch_scope=scope)
+        candidate = head
+    else:
+        fas_path = repo / '.mentat/fas.json'
+        fas = json.loads(fas_path.read_text())
+        fas['surfaces'] = [surface]
+        fas_path.write_text(json.dumps(fas))
+        git(repo, 'add', '.')
+        git(repo, 'commit', '-qm', 'update surface observation')
+        candidate = git(repo, 'rev-parse', 'HEAD')
+        coordinator = Coordinator(repo, Store(tmp_path / 'scl-state/state.db'), Agent(), None, None)
+        text, _, _, _ = coordinator._source_context(candidate, {'payload': {
+            'kind': 'review_spec', 'proposal': {'parent': head, 'head': candidate}}})
+        data = json.loads(text.split('SOURCE_CONTEXT_JSON:\n', 1)[1])
+
+    assert data['files']['mapped.py'] == (repo / 'mapped.py').read_text()
+    items = [item for item in data.get('cited_source_continuity', []) if item['path'] == 'mapped.py']
+    assert len(items) == 1
+    item = items[0]
+    if observation in {'note', 'notes', 'equal'}:
+        assert item['status'] == 'unchanged' and item['ancestor'] is True
+        assert item['cited_revision'] == cited and item['candidate_revision'] == candidate
+        assert item['cited_blob'] == item['candidate_blob'] == git(repo, 'rev-parse', f'{cited}:mapped.py')
+        assert item['cited_mode'] == item['candidate_mode'] == '100644'
+    else:
+        assert item['status'] == 'unverified'
+        assert item['cited_revision'] is None
+        assert item['reason'] == 'malformed or ambiguous citation revision'
+
+
 @pytest.mark.parametrize('fault', ['ambiguous', 'unknown', 'nonancestor', 'content', 'mode'])
 def test_source_batch_never_promotes_uncertain_or_changed_citation(source_batch_history, fault):
     repo, cited, intermediate, _, scope, make_context = source_batch_history

@@ -13,6 +13,12 @@ FAS_PATH = ".mentat/fas.json"
 MAX_ARTIFACT = 1_000_000
 
 
+def surface_observation(surface: dict) -> str:
+    """Keep distinct observation fields from forming a revision token together."""
+    return " | ".join(value for key in ("note", "notes")
+                      if isinstance(value := surface.get(key), str))
+
+
 def ordinary_review(job: dict) -> bool:
     payload = job["payload"]
     return (payload.get("kind") == "review_spec" and not payload.get("source_cycle_id")
