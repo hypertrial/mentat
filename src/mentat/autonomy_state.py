@@ -167,7 +167,7 @@ class Store:
             if self._unresolved_private_dispatch(db):
                 raise ValueError("unresolved private merge dispatch blocks a new session")
             db.execute("INSERT INTO sessions VALUES (?, 'running', ?, ?, ?, ?, ?, ?)", (session_id, repo, base, head, now, deadline, policy_json))
-            self._event(db, session_id, "session_started", {"repo": repo, "base": base, "head": head, "started_at": now, "deadline": deadline, "policy": policy})
+            self._event(db, session_id, "session_started", {"repo": repo, "base": base, "head": head, "started_at": now, "deadline": deadline, "policy": policy, **({"spec_surface": bootstrap["spec_surface"]} if bootstrap and bootstrap.get("spec_surface") is not None else {})})
             if bootstrap is not None:
                 self._event(db, session_id, "authority_pinned", {"digest": bootstrap["authority_digest"]})
                 self._event(db, session_id, "toolchain_pinned", {"identity": bootstrap["tool_identity"]})

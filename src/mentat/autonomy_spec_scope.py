@@ -13,6 +13,9 @@ FAS_PATH = ".mentat/fas.json"
 MAX_ARTIFACT = 1_000_000
 
 
+GENERATION_INSTRUCTIONS = f"Cite the immutable task input revision and actual observed file blobs or content for observations. For requirement and claim observations and revision evidence, use a citation object {{path: actual repository path, revision: full immutable task input commit SHA, source: precise observed scope}}. For a mapped surface, write observations in the string field note; to cite a revision, use the exact phrase task input revision followed by the full SHA. When changing a surface note, replace a disputed assertion with a current-source observation grounded in the included file and cite exactly one task input revision, the actual input revision for that observation. Do not add a retrospective claim about an earlier proposal, observation, or review unless the actual historical evidence is supplied to later reviewers. Preserve the surface path, supported requirement links, unrelated records and unchanged citations. Preserve existing citations and provenance unless the record actually changes; never invent an observed revision or claim to have inspected external material. Continuity descriptors compare endpoints and do not establish semantic correspondence or review acceptance. A resulting proposal commit is created after generation, so never require a document to cite its own resulting commit hash. Work incrementally on the INCLUDED files in this batch. Preserve all existing records and IDs; map only facts supported by included files and keep omitted surfaces unexamined or gap. Leave newly created CAS/FAS paths unexamined or gap until observed in committed context; the controller adds missing new-path inventory rows. Do not defer the whole batch solely because files are omitted: the controller queues remaining batches. Write OpenSpec CAS documents under openspec/specs/*/spec.md and {FAS_PATH}. For small edits to an existing committed FAS, prefer operation patch_fas when the bounded patch fits; do not defer solely because a complete FAS response would not fit. A new FAS requires a full write; genuine capacity limits, unsafe changes, or missing evidence remain explicit gaps. Use patch_fas only at exactly {FAS_PATH}, with content a JSON string containing {{schema_version: 1, expected_sha256: fas_sha256, edits: [{{collection: requirements/claims/surfaces, key: UUID or exact surface path, expected_digest: null for insertion or patch_record_digest_index digest for update, record: complete replacement object}}]}}. Include only changed records, at most 128 edits; no deletions. The complete resulting FAS and all changes together must fit 300000 bytes. Use prior_revision_index for requirement and claim revision lineage (its digest differs from patch_record_digest_index). FAS JSON exact keys schema_version=1, requirements, claims, surfaces. Every requirement has persistent UUID id, area in {AREAS}, nonempty statement, origin observed/intended/inferred/uncertain, citations, spec_path containing the UUID in an HTML comment. Preserve existing IDs and lineage. For every changed existing requirement or claim, add revision {{version: previous version plus one (initial version 1), previous_digest: SHA-256 canonical digest of previous JSON record, reason: nonempty explanation, evidence: nonempty citations}}; do not remove prior IDs or weaken established intent. Every claim has UUID id, requirement_ids, statement, assumptions, status (unattempted/unsupported/inconclusive only; the controller derives proof status), formal_meaning. Every surface has path, status mapped/gap/unsupported/unexamined and requirement_ids. Account for all six areas, including unknown requirements explicitly. Do not change application code. Flag actual established defects separately; uncertainty is not a defect."
+
+
 def surface_observation(surface: dict) -> str:
     """Keep distinct observation fields from forming a revision token together."""
     return " | ".join(value for key in ("note", "notes")
@@ -319,6 +322,42 @@ def _endpoint(controller: Any, revision: str, inventory: Any, *, allow_absent: b
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(gitio.read_file(controller.repo, revision, path))
         return validate_specification(root, tracked=tracked)
+
+
+def validate_seeded_surface(controller: Any, base: str, head: str, path: str, inventory: Any, git: Any) -> None:
+    import time
+
+    from . import gitio
+
+    if not isinstance(path, str):
+        raise ValueError("invalid selected surface path")
+    safe_relative_path(path)
+    if base == head or git(controller.repo, "merge-base", base, head) != base:
+        raise ValueError("selected surface requires a distinct descendant of the pinned base")
+    trees = []
+    for revision in (base, head):
+        deadline = time.monotonic() + 60
+        top = list(gitio.ls_tree(controller.repo, revision, "-z", [], deadline))
+        rows = list(gitio.ls_tree(controller.repo, revision, "-rzt", [], deadline))
+        gitio.verify_listing(controller.repo, revision, rows, {b""}, top=top)
+        trees.append({name: meta for row in rows for meta, name in [row.split(b"\t", 1)]})
+    fas = [tree.pop(FAS_PATH.encode(), b"") for tree in trees]
+    for tree in trees:
+        tree.pop(b".mentat", None)
+    if trees[0] != trees[1] or not fas[0] or fas[0] == fas[1]:
+        raise ValueError("selected surface requires a FAS-only committed change")
+    modes = [entry.split(b" ", 1)[0] for entry in fas]
+    if modes[0] not in {b"100644", b"100755"} or modes[0] != modes[1]:
+        raise ValueError("selected surface requires an unchanged regular FAS mode")
+    gitio.read_file(controller.repo, head, path)
+    before = _endpoint(controller, base, inventory)
+    after = _endpoint(controller, head, inventory)
+    old = {row["path"]: row for row in before["surfaces"]}
+    new = {row["path"]: row for row in after["surfaces"]}
+    if (before["requirements"] != after["requirements"] or before["claims"] != after["claims"]
+            or list(old) != list(new) or path not in old or new[path]["status"] != "mapped"
+            or [key for key in old if old[key] != new[key]] != [path]):
+        raise ValueError("selected surface must be the only changed mapped FAS record")
 
 
 

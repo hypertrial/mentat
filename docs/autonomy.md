@@ -46,6 +46,10 @@ uv run --locked mentat resume --repo /absolute/path/to/application
 
 Run from a clean committed tree. `run` and `resume` are headless by default and
 produce no rendered report. The independent AI Cockpit owns all presentation.
+For a committed FAS-only change to one mapped tracked surface, use
+`mentat run --repo PATH --spec-surface TRACKED_PATH` for a read-only
+qualification. Resume retains the selected scope. All configured checks and
+independent reviews still apply, and unrelated inventory gaps remain visible.
 For an optional local adapter, create an operator-owned mode-0700 directory outside
 the repository and pass `--integration-file /private/path/connection.json`.
 The new file is mode 0600 and contains the loopback URL and bearer capability;

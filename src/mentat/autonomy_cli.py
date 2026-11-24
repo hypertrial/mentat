@@ -51,7 +51,7 @@ def register(app: typer.Typer) -> None:
         except _ERRORS as exc:
             _failure(exc)
 
-    def execute(ctx: typer.Context, repo: Path, resume: str | None, integration_file: Path | None, allow_origin: list[str]) -> None:
+    def execute(ctx: typer.Context, repo: Path, resume: str | None, integration_file: Path | None, allow_origin: list[str], spec_surface: str | None = None) -> None:
         adapter = None
         try:
             store = _store(ctx, repo)
@@ -65,7 +65,7 @@ def register(app: typer.Typer) -> None:
                 adapter.start()
             elif allow_origin:
                 raise ValueError("--allow-origin requires --integration-file")
-            result = coordinator.run(resume=resume)
+            result = coordinator.run(resume=resume, **({"spec_surface": spec_surface} if spec_surface is not None else {}))
             _emit({"schema_version": 1, "status": result["session"]["status"],
                    "session_id": result["session"]["id"], "jobs": len(result["jobs"]),
                    "requirements": len(result["requirements"]), "claims": len(result["claims"]),
@@ -78,9 +78,10 @@ def register(app: typer.Typer) -> None:
 
     @app.command("run")
     def run_workspace(ctx: typer.Context, repo: Repo, integration_file: Path | None = None,
-                      allow_origin: Annotated[list[str] | None, typer.Option()] = None) -> None:
+                      allow_origin: Annotated[list[str] | None, typer.Option()] = None,
+                      spec_surface: Annotated[str | None, typer.Option(help="Review one committed FAS surface without agent file edits.")] = None) -> None:
         """Run autonomous SCL, IVL and IIL within one bounded coding session."""
-        execute(ctx, repo, None, integration_file, allow_origin or [])
+        execute(ctx, repo, None, integration_file, allow_origin or [], spec_surface)
 
     @app.command("resume")
     def resume_workspace(ctx: typer.Context, repo: Repo, session: str | None = None,
