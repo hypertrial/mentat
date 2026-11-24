@@ -18,7 +18,7 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
-from mentat.autonomy_state import Store
+from mentat.autonomy_state import IntegrationCapacityError, Store
 
 _RESOURCES = ("requirements", "claims", "jobs", "findings", "decisions", "evidence")
 _LIMITS = {"connections": 8, "header_bytes": 16384, "body_bytes": 16384,
@@ -426,10 +426,10 @@ class IntegrationAdapter:
                     self.snapshots[ident] = (now + 30, projection)
                 return 200, {**common, "snapshot_id": ident, "expires_at": now + 30, "observed_at": now, "refresh_seconds": 5,
                              "high_water": raw["revision"], "cursor": self._cursor(session, raw["revision"]), "session": projection["session"], "freshness": projection["freshness"], "counts": {k: len(projection[k]) for k in _RESOURCES}}
-            except ValueError as exc:
-                if str(exc) == "integration capacity":
-                    raise _Failure(413, "capacity", "Snapshot exceeds capacity.") from None
-                raise
+            except IntegrationCapacityError:
+                raise _Failure(413, "capacity", "Snapshot exceeds capacity.") from None
+            except (OSError, RuntimeError, TypeError, ValueError):
+                raise _Failure(503, "unavailable", "Snapshot is unavailable.", retryable=True) from None
             finally:
                 self.build_lock.release()
         parts = parsed.path.split("/")

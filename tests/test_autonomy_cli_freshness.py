@@ -142,6 +142,10 @@ def test_status_invalidates_when_saved_authority_drifts(saved_session, drift):
     policy_path = store.path.parent / "policy.json"
     policy_path.write_text(json.dumps(policy))
     current = status(session)
+    if current["freshness"]["status"] == "unknown":
+        # A bounded observation can miss its deadline while the checkouts are busy.
+        current = status(session)
+    assert current["freshness"]["status"] == "current", current
     assert current["session"]["status"] != "invalidated"
     assert current["claims"][0]["status"] == "established-within-scope"
     assert current["claims"][0].get("freshness") != "stale"
