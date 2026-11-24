@@ -13,7 +13,7 @@ from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
-from mentat import cli, evidence, evidence_html
+from mentat import cli, evidence
 from mentat.canonical import digest, json_bytes
 from mentat.evidence_report import decision_source
 
@@ -290,6 +290,6 @@ def test_acceptance_boundary_matches_the_frozen_hand_rule(tmp_path):
     for value in cases:
         checked += 1
         path.write_text(json.dumps(value))
-        real = evidence_html.acceptance_status(state, record, DIGEST)
+        real = evidence.acceptance_status(state, record, DIGEST)
         assert real == _frozen_receipt_status(value, record, DIGEST), value
     assert checked >= 100

@@ -416,7 +416,7 @@ def test_cli_approval_verification_acceptance_and_scope(project_repo, tmp_path, 
     rejected = runner.invoke(cli.app, prefix + ["accept", result["run_id"]] + wrong_base)
     assert rejected.exit_code != 0
     bundle = state / "runs" / result["run_id"]
-    (bundle / "report.md").write_text("tampered")
+    (bundle / "manifest.json").write_text("tampered")
     tampered = runner.invoke(cli.app, prefix + ["accept", result["run_id"]] + scope)
     assert tampered.exit_code != 0
 
@@ -752,8 +752,8 @@ def test_trusted_chat_relay_requires_valid_scope_and_records_source(project_repo
     verified = runner.invoke(cli.app, prefix + ["verify", "--rev", base, *scope, "--json"])
     assert verified.exit_code == 0, verified.output
     run_id = json.loads(verified.output)["run_id"]
-    report = (state / "runs" / run_id / "report.md").read_text()
-    assert "- Approval source · unverified agent relay\n" in report
+    saved = json.loads((state / "runs" / run_id / "manifest.json").read_text())
+    assert saved["approval"]["decision_source"] == "unverified_agent_relay"
     terminal = runner.invoke(cli.app, prefix + ["verify", "--rev", base, *scope])
     assert "Approval source  unverified agent relay" in terminal.output
     assert runner.invoke(cli.app, prefix + ["accept", run_id, *scope]).exit_code != 0
@@ -761,17 +761,10 @@ def test_trusted_chat_relay_requires_valid_scope_and_records_source(project_repo
     assert accepted.exit_code == 0, accepted.output
     receipt = json.loads((state / "acceptances" / f"{run_id}.json").read_text())
     assert receipt["decision_source"] == "unverified_agent_relay"
-    rendered = tmp_path / "relay.html"
-    assert runner.invoke(cli.app, prefix + ["evidence", "render", run_id, "--out", str(rendered)]).exit_code == 0
-    html = rendered.read_text()
-    assert "<dt>Approval source</dt><dd class=\"\">unverified agent relay</dd>" in html
-    assert "Recorded at " in html and " (unverified agent relay)</dd>" in html
-    compared = tmp_path / "relay-compare.html"
-    assert runner.invoke(cli.app, prefix + ["evidence", "compare", run_id, run_id, "--out", str(compared)]).exit_code == 0
-    assert "<dt>Approval source</dt><dd>unverified agent relay</dd>" in compared.read_text()
-    summary = runner.invoke(cli.app, prefix + ["evidence", "pr-summary", run_id, "--head", base, "--report-url", "https://example.test/report"])
-    assert "unverified agent relay" in summary.output
-    (state / "runs" / run_id / "report.md").write_text("tampered")
+    from mentat import evidence
+    _, saved, manifest_digest = evidence.read_run_snapshot(state, run_id)
+    assert "unverified agent relay" in evidence.acceptance_status(state, saved, manifest_digest)
+    (state / "runs" / run_id / "manifest.json").write_text("tampered")
     assert runner.invoke(cli.app, prefix + ["accept", run_id, *scope, "--trusted-chat-approval"]).exit_code != 0
 
 
@@ -803,13 +796,11 @@ def test_terminal_approval_shows_no_decision_source(project_repo, tmp_path, monk
     assert "Approval source" not in verified.output
     run_id = next(line.split("  ", 1)[1] for line in verified.output.splitlines() if line.startswith("run id  "))
     run = state / "runs" / run_id
-    assert "Approval source" not in (run / "report.md").read_text()
+    assert not (run / "report.md").exists()
     assert "decision_source" not in json.loads((run / "manifest.json").read_text())["approval"]
     assert runner.invoke(cli.app, prefix + ["accept", run_id, *scope]).exit_code == 0
     assert "decision_source" not in json.loads((state / "acceptances" / f"{run_id}.json").read_text())
-    rendered = tmp_path / "terminal.html"
-    assert runner.invoke(cli.app, prefix + ["evidence", "render", run_id, "--out", str(rendered)]).exit_code == 0
-    assert "Approval source" not in rendered.read_text()
+
 
 
 def test_unknown_decision_source_is_escaped_in_every_rendering(project_repo, tmp_path, monkeypatch):
@@ -838,25 +829,17 @@ def test_unknown_decision_source_is_escaped_in_every_rendering(project_repo, tmp
     verified = runner.invoke(cli.app, prefix + ["verify", "--rev", base, *scope, "--json"])
     assert verified.exit_code == 0, verified.output
     run_id = json.loads(verified.output)["run_id"]
-    escaped = r"\<img src=x\>\*\_\`"
-    report = (state / "runs" / run_id / "report.md").read_text()
-    assert f"- Approval source · {escaped}\n" in report
-    assert f"Approval source · {hostile}" not in report
+    saved = json.loads((state / "runs" / run_id / "manifest.json").read_text())
+    assert saved["approval"]["decision_source"] == hostile
     assert runner.invoke(cli.app, prefix + ["accept", run_id, *scope, "--trusted-chat-approval"]).exit_code == 0
     receipt_path = state / "acceptances" / f"{run_id}.json"
     receipt = json.loads(receipt_path.read_text())
     receipt["decision_source"] = hostile
     receipt_path.write_text(json.dumps(receipt))
-    rendered = tmp_path / "hostile.html"
-    assert runner.invoke(cli.app, prefix + ["evidence", "render", run_id, "--out", str(rendered)]).exit_code == 0
-    html = rendered.read_text()
-    assert "<img" not in html
-    assert "&lt;img src=x&gt;*_`" in html
-    assert "Approval source</dt><dd class=\"\">&lt;img src=x&gt;*_`</dd>" in html
-    summary = runner.invoke(cli.app, prefix + ["evidence", "pr-summary", run_id, "--head", base, "--report-url", "https://example.test/report"])
-    assert "Acceptance for this saved revision: **Recorded at " in summary.output
-    assert f"({escaped})**." in summary.output
-    assert hostile not in summary.output
+    from mentat import evidence
+    _, saved, manifest_digest = evidence.read_run_snapshot(state, run_id)
+    assert hostile in evidence.acceptance_status(state, saved, manifest_digest)
+
 
 
 def test_decision_source_labels_known_values_and_escapes_unknown_ones():

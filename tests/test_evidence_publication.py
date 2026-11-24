@@ -175,38 +175,36 @@ def _published_state(tmp_path, damage=None):
     return state, record["revision"]
 
 
-def _summary(state, head):
-    args = ["evidence", "pr-summary", PUBLISHED_RUN, "--head", head,
-            "--report-url", "https://example.com/report"]
-    return CliRunner().invoke(app, ["--state", str(state), *args])
-
-
 def _export(state):
-    return CliRunner().invoke(app, ["--state", str(state), "evidence", "export", PUBLISHED_RUN])
+    return CliRunner().invoke(app, ["--state", str(state), "evidence", "export", PUBLISHED_RUN, "--json"])
 
 
-def test_resealed_published_run_fixture_summarizes_and_exports(tmp_path):
-    state, head = _published_state(tmp_path)
-    assert _summary(state, head).exit_code == 0
-    assert _export(state).exit_code == 0
+def _compare(state):
+    return CliRunner().invoke(app, ["--state", str(state), "evidence", "compare",
+                                    PUBLISHED_RUN, PUBLISHED_RUN, "--json"])
 
 
-@pytest.mark.parametrize(
-    ("command", "damage"),
-    [
-        ("pr-summary", "run_id"),
-        ("pr-summary", "model_checks"),
-        ("export", "model_checks"),
-        ("export", "artifacts"),
-    ],
-)
-def test_resealed_run_missing_required_fields_is_refused_without_traceback(
-    tmp_path, command, damage
-):
-    state, head = _published_state(tmp_path, damage)
-    result = _summary(state, head) if command == "pr-summary" else _export(state)
+def test_resealed_published_run_fixture_exports_and_compares(tmp_path):
+    state, _ = _published_state(tmp_path)
+    exported = _export(state)
+    assert exported.exit_code == 0, exported.output
+    assert json.loads(exported.output)["manifest"] == str(state / "runs" / PUBLISHED_RUN / "manifest.json")
+    compared = _compare(state)
+    assert compared.exit_code in (0, 2), compared.output
+    result = json.loads(compared.output)
+    assert result["before"]["run_id"] == result["after"]["run_id"] == PUBLISHED_RUN
+
+
+@pytest.mark.parametrize("command", ["export", "compare"])
+@pytest.mark.parametrize("damage", ["run_id", "model_checks", "artifacts"])
+def test_resealed_run_missing_required_fields_is_refused_without_traceback(tmp_path, command, damage):
+    state, _ = _published_state(tmp_path, damage)
+    result = _export(state) if command == "export" else _compare(state)
     assert result.exit_code == 2, result.output
     assert isinstance(result.exception, SystemExit), repr(result.exception)
+    payload = json.loads(result.output)
+    assert payload["status"] == "incomplete"
+    assert "detail" in payload and payload["detail"]
 
 
 def test_export_of_missing_run_does_not_create_state(tmp_path):

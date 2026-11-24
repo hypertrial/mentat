@@ -419,15 +419,6 @@ class Generator:
         expected = 2 if "incomplete" in statuses else 0
         code, out, err = self.run(self.argv("evidence", "compare", before, after, "--json", *extra))
         expect(code == expected, f"compare {before} {after} exited {code}: {out}{err}")
-        if self.full:  # The HTML comparison is not part of the v0.1.2 CLI.
-            html = self.work / f"compare-{len(self.compare_pairs) + 1}.html"
-            code, out, err = self.run(
-                self.argv("evidence", "compare", before, after, "--out", html, *extra)
-            )
-            expect(
-                code == 0 and html.is_file() and html.stat().st_size > 0,
-                f"comparison report for {before} {after} failed: {out}{err}",
-            )
         self.compare_pairs.append(
             {
                 "across_contracts": across,

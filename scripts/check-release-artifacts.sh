@@ -35,7 +35,6 @@ PY
         "$venv/bin/python" -I - "$expected_version" <<'PY'
 from importlib.metadata import distribution
 from pathlib import Path
-import subprocess
 import sys
 import tempfile
 
@@ -91,16 +90,12 @@ with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:
         },
         {"result.txt": b"PRIVATE_ARTIFACT_CONTENTS"},
     )
-    output = root / "report.html"
-    subprocess.run(
-        [str(Path(sys.executable).with_name("mentat")), "--state", str(state),
-         "evidence", "render", run_id, "--out", str(output)],
-        check=True,
-    )
-    html = output.read_text()
-    assert "Wheel &lt;claim&gt;" in html and run_id in html
-    assert "PRIVATE_REPRODUCTION_COMMAND" not in html
-    assert "PRIVATE_ARTIFACT_CONTENTS" not in html
+    bundle, record = evidence.read_run(state, run_id)
+    assert record["bundle_format"] == 2
+    assert record["claims"][0]["statement"] == "Wheel <claim>"
+    assert (bundle / "manifest.json").is_file()
+    assert not (bundle / "report.md").exists()
+    assert (bundle / "result.txt").read_bytes() == b"PRIVATE_ARTIFACT_CONTENTS"
 PY
     )
 done

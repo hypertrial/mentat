@@ -173,7 +173,8 @@ def test_evidence_rejects_bundle_tampering(tmp_path, tamper):
         artifact.unlink()
     else:
         artifact.unlink()
-        artifact.symlink_to(bundle / "report.md")
+        artifact.symlink_to(bundle / "manifest.json")
+        assert artifact.exists() and artifact.is_symlink()
     with pytest.raises((ValueError, FileNotFoundError)):
         read_run(tmp_path, "a" * 32)
 

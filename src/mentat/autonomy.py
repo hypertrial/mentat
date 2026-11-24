@@ -421,7 +421,7 @@ def _allowed_path(kind: str, path: str) -> bool:
     return autonomy_source_corrections.allowed_path(kind, path)
 
 
-_OUTPUT_INSTRUCTIONS = """Return the structured result required by the output schema. You have no execution or filesystem tools. Return file changes as {path, operation, content}; use write or delete for ordinary changes (empty content for delete). Only generate_spec may use patch_fas, only at .mentat/fas.json, under the detailed specification instructions. Reviewers must return an empty changes list. Your agreement is not proof. Never modify an established requirement to hide an application defect. Never commit, push, merge, edit controller state, or use credentials. Execution of candidate or generated verification programs belongs in the configured isolated worker, not the host. Record ambiguity and missing capabilities explicitly and continue unrelated work."""
+_OUTPUT_INSTRUCTIONS = autonomy_final_review.OUTPUT_INSTRUCTIONS
 
 
 class Coordinator:
@@ -3030,7 +3030,7 @@ class Coordinator:
         scope = prompt_payload.pop("correction_scope", None)
         if scope is not None:
             prompt_payload["correction_scope_id"] = scope["id"]
-        common = f"Mentat {job['loop'].upper()} {kind}. Session head {session['head']}; session base {session['base']}; task input revision {input_revision}. {_OUTPUT_INSTRUCTIONS}\nTask: {json.dumps(prompt_payload)}\n"
+        common = f"Mentat {job['loop'].upper()} {kind}. Session head {session['head']}; session base {session['base']}; task input revision {input_revision}. {_OUTPUT_INSTRUCTIONS}\n{autonomy_final_review.prompt_task(prompt_payload)}"
         if scope is not None:
             common += "The correction_scope in SOURCE_CONTEXT_JSON is the editable envelope; all other context is read-only and outside dependencies must be deferred.\n"
         if kind in {"generate_spec", "generate_verification", "investigate_defect"}:

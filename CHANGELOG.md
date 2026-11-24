@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Breaking development interface: Mentat is a headless assurance engine. All
+  presentation moves to the independent AI Cockpit; this repository provides
+  the versioned, bounded local JSON integration described in `docs/integration-v1.md`.
+  Remove UI/HTML/report commands and new Markdown report generation. New evidence
+  manifests explicitly use bundle format 2; historical reports, receipts and
+  manifests remain intact and readable under their original integrity checks.
+  Integration/evidence identities change; renew approvals and use a fresh actual
+  self-run before Titanic readiness. Hosted CI remains syntax/whitespace only.
+
 - Verified Git reads start one `git cat-file --batch` process instead of two, and the object
   format is looked up once per repository per process instead of on every snapshot. Object size
   limits and the integrity check keep their messages. A batch header that does not name its

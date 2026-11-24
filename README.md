@@ -1,7 +1,8 @@
 # Mentat
 
 The development checkout is adding session-scoped, agent-operated specification,
-verification, and improvement loops with a local monitoring UI. See the
+verification, and improvement loops as a headless assurance engine. An independent
+AI Cockpit owns presentation; Mentat exposes a [versioned local JSON integration](docs/integration-v1.md). See the
 [autonomous workflow](docs/autonomy.md), [versioned product vision](docs/vision.md),
 and [implementation readiness gate](docs/implementation-plan.md). Formal results
 retain their stated assumptions and implementation boundaries; unsupported and
@@ -74,7 +75,7 @@ PASSING_RUN='paste the passing run ID'
 mentat --state "$STATE" accept "$PASSING_RUN" --repo "$DEMO" --base "$BASE" --runner host
 ```
 
-Development source checkouts also provide an [offline HTML report](docs/contracts.md#render-an-offline-report) for saved runs. This command is not included in the v0.1.2 tag used above.
+Development checkouts use machine-readable evidence and the [headless integration contract](docs/integration-v1.md). The former HTML/UI/report commands have been removed; historical evidence stays intact. These development interfaces are not part of the v0.1.2 tag used above.
 
 Development checkouts support [approved Lean proof campaigns](docs/proofs.md) on a
 dedicated Linux checker, plus explicit claim assurance and source-mutation

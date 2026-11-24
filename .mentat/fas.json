@@ -886,12 +886,6 @@
       "reason": "Awaiting independently reviewed source correspondence."
     },
     {
-      "path": "src/mentat/autonomy_ui.py",
-      "status": "gap",
-      "requirement_ids": [],
-      "reason": "Awaiting independently reviewed source correspondence."
-    },
-    {
       "path": "src/mentat/autonomy_worker.py",
       "status": "gap",
       "requirement_ids": []
@@ -934,12 +928,6 @@
     },
     {
       "path": "src/mentat/evidence.py",
-      "status": "gap",
-      "requirement_ids": [],
-      "reason": "Awaiting independently reviewed source correspondence."
-    },
-    {
-      "path": "src/mentat/evidence_html.py",
       "status": "gap",
       "requirement_ids": [],
       "reason": "Awaiting independently reviewed source correspondence."
@@ -1909,12 +1897,6 @@
       "requirement_ids": []
     },
     {
-      "path": "tests/test_autonomy_ui.py",
-      "status": "gap",
-      "requirement_ids": [],
-      "reason": "Awaiting independently reviewed source correspondence."
-    },
-    {
       "path": "tests/test_autonomy_worker.py",
       "status": "gap",
       "requirement_ids": []
@@ -2223,6 +2205,31 @@
     },
     {
       "path": "docs/integration-v1.md",
+      "status": "unexamined",
+      "requirement_ids": []
+    },
+    {
+      "path": "src/mentat/autonomy_integration.py",
+      "status": "unexamined",
+      "requirement_ids": []
+    },
+    {
+      "path": "src/mentat/autonomy_projection.py",
+      "status": "unexamined",
+      "requirement_ids": []
+    },
+    {
+      "path": "tests/test_autonomy_api.py",
+      "status": "unexamined",
+      "requirement_ids": []
+    },
+    {
+      "path": "tests/test_autonomy_projection.py",
+      "status": "unexamined",
+      "requirement_ids": []
+    },
+    {
+      "path": "tests/test_evidence_bundle_format.py",
       "status": "unexamined",
       "requirement_ids": []
     }

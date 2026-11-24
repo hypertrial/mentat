@@ -439,6 +439,7 @@ def export_evidence(
             "run_status": record["status"],
             "run_id": run_id,
             "bundle": str(bundle.resolve()),
+            "manifest": str((bundle / "manifest.json").resolve()),
         }
         if "source_qualification_status" in record:
             result["source_qualification_status"] = record["source_qualification_status"]
@@ -451,31 +452,12 @@ def export_evidence(
         _error(ValueError("Invalid saved verification record"), output_json)
 
 
-@evidence_app.command("render")
-def render_evidence(
-    ctx: typer.Context,
-    run_id: str,
-    output: Annotated[Path, typer.Option("--out", help="New HTML report path.")],
-) -> None:
-    """Render an intact saved project run as an offline HTML report."""
-    from .evidence_html import render_run
-
-    try:
-        render_run(evidence.state_directory(ctx.obj["state"], create=False), run_id, output)
-        typer.echo(f"Report written to {output}")
-    except _USER_ERRORS as exc:
-        _error(exc, False)
-
-
 @evidence_app.command("compare")
 def compare_evidence(
     ctx: typer.Context,
     before_run: str,
     after_run: str,
     output_json: JsonOutput = False,
-    output: Annotated[
-        Path | None, typer.Option("--out", help="New offline HTML comparison path.")
-    ] = None,
     across_contracts: Annotated[
         bool, typer.Option(help="Review saved runs across approved contract revisions.")
     ] = False,
@@ -489,21 +471,7 @@ def compare_evidence(
         result = evidence.compare_runs(
             state, before_run, after_run, across_contracts=across_contracts
         )
-        if output is not None:
-            from .evidence_html import render_comparison
-
-            render_comparison(
-                state, before_run, after_run, output, across_contracts=across_contracts
-            )
-            result = {
-                **result,
-                "comparison_status": result["status"],
-                "status": "pass",
-                "report": str(output),
-            }
         if not output_json:
-            if "report" in result:
-                typer.echo(f"Report written to {result['report']}")
             for side in ("before", "after"):
                 run = result[side]
                 typer.echo(
@@ -513,7 +481,7 @@ def compare_evidence(
                     typer.echo(f"  Source qualification  {run['source_qualification_status']}")
                 if across_contracts:
                     typer.echo(f"  Base {run['base']}  Approval {run['contract_digest']}")
-                typer.echo(f"  Report  {run['report']}")
+                typer.echo(f"  Manifest  {run['manifest']}")
                 if run["behavior_skipped"]:
                     typer.echo("  Behavior skipped because formal checks did not pass.")
             if result["environment_changed"]:
@@ -553,36 +521,6 @@ def compare_evidence(
         _error(ValueError("Invalid saved verification record"), output_json)
         return
     finish(result, output_json)
-
-
-@evidence_app.command("pr-summary")
-def summarize_pr(
-    ctx: typer.Context,
-    run_id: str,
-    head: Annotated[str, typer.Option(help="Exact PR head commit, matching the saved run.")],
-    report_url: Annotated[str, typer.Option(help="Operator-authorized HTTPS report URL.")],
-    ci_status: Annotated[
-        Literal["pass", "fail", "incomplete", "unavailable"],
-        typer.Option(help="Exact-head lightweight CI result supplied by the host."),
-    ] = "unavailable",
-) -> None:
-    """Print a Markdown PR summary; preserve existing artifact access controls."""
-    from .evidence_html import acceptance_status
-    from .evidence_report import claim_groups, pr_summary
-
-    try:
-        state = evidence.state_directory(ctx.obj["state"], create=False)
-        with _saved_record():
-            _, record, digest = evidence.read_run_snapshot(state, run_id)
-            evidence.validate_run_record(record)
-            claim_groups(record)
-        typer.echo(
-            pr_summary(
-                record, head, report_url, acceptance_status(state, record, digest), ci_status
-            )
-        )
-    except _USER_ERRORS as exc:
-        _error(exc, False)
 
 
 def _acceptable(project: Project, approved: dict, record: dict) -> bool:

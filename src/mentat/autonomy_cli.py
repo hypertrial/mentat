@@ -1,20 +1,19 @@
 """Additive CLI for session-scoped autonomous work and direct source evidence."""
 
-import copy
 import json
 import subprocess
-import threading
 from pathlib import Path
 from typing import Annotated, NoReturn
 
 import typer
 
-from .autonomy import Coordinator, digest, initialize, project_snapshot, state_path
-from .autonomy_policy import load_policy_path, pin_policy
-from .autonomy_runtime import CodexAgent, GitHub, LocalWorker, diagnostics, git
+from .autonomy import Coordinator, initialize, state_path
+from .autonomy_integration import create_adapter
+from .autonomy_policy import pin_policy
+from .autonomy_projection import project
+from .autonomy_runtime import CodexAgent, GitHub, LocalWorker, diagnostics
 from .autonomy_state import Store
-from .autonomy_ui import create_server, github_source_base, render_report
-from .source_verify import source_tool_identity, verify_source
+from .source_verify import verify_source
 
 Repo = Annotated[Path, typer.Option(exists=True, file_okay=False)]
 _ERRORS = (OSError, ValueError, RuntimeError, subprocess.SubprocessError)
@@ -33,53 +32,11 @@ def _store(ctx: typer.Context, repo: Path) -> Store:
     return Store(state_path(repo.resolve(), ctx.obj["state"]))
 
 
-def _source_base(repo: Path) -> str | None:
-    try:
-        return github_source_base(git(repo, "config", "--get", "remote.origin.url").removesuffix("\n"))
-    except _ERRORS:
-        return None
-
-
-def _project(snapshot: dict, *, store_path: Path | None = None) -> dict:
-    snapshot = copy.deepcopy(snapshot)
-    session = snapshot["session"]
-    try:
-        repo = Path(session["repo"])
-        current_head = git(repo, "rev-parse", "HEAD")
-        dirty = bool(git(repo, "status", "--porcelain=v1", "--untracked-files=all"))
-        changed = current_head != session["head"] or dirty
-    except (*_ERRORS, KeyError):
-        current_head = None
-        changed = True
-    authorities = [event["payload"].get("digest") for event in snapshot.get("events", [])
-                   if event.get("kind") == "authority_pinned"]
-    try:
-        changed |= store_path is None or authorities != [digest(load_policy_path(store_path))]
-    except (*_ERRORS, KeyError):
-        changed = True
-    if changed:
-        session["historical_status"] = session.get("status")
-        session["status"] = "invalidated"
-        for key in ("requirements", "claims", "evidence"):
-            for record in snapshot.get(key, []):
-                record["freshness"] = "stale"
-    try:
-        identity = source_tool_identity()
-    except _ERRORS:
-        identity = {}
-    projected = project_snapshot(snapshot, identity=identity)
-    # A proposal can be proved before it is adopted into the checked-out tree.
-    # Keep that evidence visible, but do not present it as current-tree assurance.
-    for claim in projected.get("claims", []):
-        scope = claim.get("proof_scope", {})
-        if scope.get("revision") and scope["revision"] != current_head:
-            claim["freshness"] = "stale"
-    return projected
-
-
 def register(app: typer.Typer) -> None:
     worker_app = typer.Typer(no_args_is_help=True, help="Manage the isolated local Linux worker.")
     app.add_typer(worker_app, name="worker")
+    integration_app = typer.Typer(no_args_is_help=True, help="Serve the local integration contract.")
+    app.add_typer(integration_app, name="integration")
 
     @app.command("init")
     def init_workspace(ctx: typer.Context, repo: Repo, merge_policy: Annotated[str, typer.Option(help="Trusted merge enforcement: github-protected or explicit controller-private.")] = "github-protected", trust_configured_checks: Annotated[bool, typer.Option(help="Trust the reviewed configured checks as mandatory gates.")] = False) -> None:
@@ -94,49 +51,47 @@ def register(app: typer.Typer) -> None:
         except _ERRORS as exc:
             _failure(exc)
 
-    def execute(ctx: typer.Context, repo: Path, resume: str | None, ui: bool) -> None:
-        server = None
+    def execute(ctx: typer.Context, repo: Path, resume: str | None, integration_file: Path | None, allow_origin: list[str]) -> None:
+        adapter = None
         try:
             store = _store(ctx, repo)
             coordinator = Coordinator(repo, store, CodexAgent(), LocalWorker(), GitHub())
-            source_base = _source_base(repo)
-
-            def snapshot() -> dict:
-                if coordinator.session_id is None:
-                    return {"schema_version": 1, "revision": 0, "session": {"status": "starting"}}
-                return _project(store.snapshot(coordinator.session_id), store_path=store.path)
-
-            if ui:
-                server = create_server(snapshot, coordinator.control, source_base=source_base)
-                threading.Thread(target=server.serve_forever, daemon=True).start()
-                typer.echo(f"Monitor this session: {server.url}", err=True)
+            if integration_file is not None:
+                adapter = create_adapter(repo=repo.resolve(), store=store, session_id=lambda: coordinator.session_id,
+                                         project=lambda raw, timeout: project(raw, store_path=store.path, timeout=timeout),
+                                         connection_file=integration_file, allowed_origins=allow_origin,
+                                         stop=lambda: coordinator.control("stop", {}),
+                                         is_active=lambda: coordinator.session_id is not None and not coordinator.stop.is_set())
+                adapter.start()
+            elif allow_origin:
+                raise ValueError("--allow-origin requires --integration-file")
             result = coordinator.run(resume=resume)
-            report = store.path.parent / f"{result['session']['id']}.html"
-            report.write_text(render_report(_project(store.snapshot(result['session']['id']), store_path=store.path), source_base=source_base), encoding="utf-8")
             _emit({"schema_version": 1, "status": result["session"]["status"],
-                   "session_id": result["session"]["id"], "report": str(report),
-                   "jobs": len(result["jobs"]), "requirements": len(result["requirements"]),
-                   "claims": len(result["claims"]), "formal_completion": "inspect individual evidence and gaps"})
+                   "session_id": result["session"]["id"], "jobs": len(result["jobs"]),
+                   "requirements": len(result["requirements"]), "claims": len(result["claims"]),
+                   "formal_completion": "inspect individual evidence and gaps"})
         except _ERRORS as exc:
             _failure(exc)
         finally:
-            if server is not None:
-                server.shutdown()
-                server.server_close()
+            if adapter is not None:
+                adapter.close()
 
     @app.command("run")
-    def run_workspace(ctx: typer.Context, repo: Repo, ui: bool = True) -> None:
+    def run_workspace(ctx: typer.Context, repo: Repo, integration_file: Path | None = None,
+                      allow_origin: Annotated[list[str] | None, typer.Option()] = None) -> None:
         """Run autonomous SCL, IVL and IIL within one bounded coding session."""
-        execute(ctx, repo, None, ui)
+        execute(ctx, repo, None, integration_file, allow_origin or [])
 
     @app.command("resume")
-    def resume_workspace(ctx: typer.Context, repo: Repo, session: str | None = None, ui: bool = True) -> None:
+    def resume_workspace(ctx: typer.Context, repo: Repo, session: str | None = None,
+                         integration_file: Path | None = None,
+                         allow_origin: Annotated[list[str] | None, typer.Option()] = None) -> None:
         """Resume durable work without discarding prior attempts or findings."""
         try:
             session_id = session or _store(ctx, repo).snapshot()["session"]["id"]
         except _ERRORS as exc:
             _failure(exc)
-        execute(ctx, repo, session_id, ui)
+        execute(ctx, repo, session_id, integration_file, allow_origin or [])
 
     @app.command("status")
     def workspace_status(ctx: typer.Context, repo: Repo, session: str | None = None,
@@ -144,7 +99,8 @@ def register(app: typer.Typer) -> None:
         """Inspect the exact revision and work retained by a session."""
         try:
             store = _store(ctx, repo)
-            value = _project(store.snapshot(session), store_path=store.path)
+            selected = session or store.integration_latest_session()
+            value = project(store.integration_snapshot(selected), store_path=store.path)
             if output_json:
                 _emit(value)
             else:
@@ -155,31 +111,27 @@ def register(app: typer.Typer) -> None:
         except _ERRORS as exc:
             _failure(exc)
 
-    @app.command("ui")
-    def workspace_ui(ctx: typer.Context, repo: Repo, session: str | None = None, port: int = 0) -> None:
-        """Browse saved activity; feedback is retained for subsequent iterations."""
-        server = None
+    @integration_app.command("serve")
+    def integration_serve(ctx: typer.Context, repo: Repo, session: Annotated[str, typer.Option()],
+                          connection_file: Annotated[Path, typer.Option()],
+                          allow_origin: Annotated[list[str] | None, typer.Option()] = None) -> None:
+        """Serve a saved session for inspection and optional feedback."""
+        adapter = None
         try:
             store = _store(ctx, repo)
-            selected = store.snapshot(session)["session"]["id"]
-            source_base = _source_base(repo)
-
-            def control(action: str, payload: dict) -> dict:
-                if action == "feedback":
-                    store.append_event(selected, "human_feedback", payload)
-                    return {"status": "recorded", "detail": "Feedback retained for the next active iteration."}
-                raise ValueError("saved-session viewer cannot control another process")
-
-            server = create_server(lambda: _project(store.snapshot(selected), store_path=store.path), control, port=port, source_base=source_base)
-            typer.echo(f"Monitor: {server.url}")
-            server.serve_forever()
+            selected = store.integration_snapshot(session)["session"]["id"]
+            adapter = create_adapter(repo=repo.resolve(), store=store, session_id=lambda: selected,
+                                     project=lambda raw, timeout: project(raw, store_path=store.path, timeout=timeout),
+                                     connection_file=connection_file, allowed_origins=allow_origin or ())
+            adapter.start()
+            adapter.wait()
         except KeyboardInterrupt:
             pass
         except _ERRORS as exc:
             _failure(exc)
         finally:
-            if server is not None:
-                server.server_close()
+            if adapter is not None:
+                adapter.close()
 
     @app.command("source-verify")
     def source_verification(repo: Repo, rev: str, path: str, function: str,

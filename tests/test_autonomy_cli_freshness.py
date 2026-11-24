@@ -6,10 +6,10 @@ import subprocess
 import pytest
 from typer.testing import CliRunner
 
-from mentat import autonomy_cli
-from mentat.autonomy import digest, state_path
+from mentat.autonomy import current_tool_identity, digest, state_path
 from mentat.autonomy_state import Store
 from mentat.cli import app
+from mentat.source_verify import source_tool_identity
 
 
 def git(repo, *args):
@@ -17,7 +17,7 @@ def git(repo, *args):
 
 
 @pytest.fixture
-def saved_session(tmp_path, monkeypatch):
+def saved_session(tmp_path):
     repo = tmp_path / "repo"
     subprocess.run(["git", "init", "-q", str(repo)], check=True)
     git(repo, "config", "user.email", "test@example.com")
@@ -26,16 +26,12 @@ def saved_session(tmp_path, monkeypatch):
     git(repo, "add", "src.py")
     git(repo, "commit", "-qm", "base")
     head = git(repo, "rev-parse", "HEAD")
-    identity = {
-        "frontend_sha256": "frontend", "python_version": "3", "python_implementation": "CPython",
-        "solver_version": "z3", "solver_binding_sha256": "binding", "solver_library_sha256": "solver",
-    }
-    monkeypatch.setattr(autonomy_cli, "source_tool_identity", lambda: identity)
+    identity = source_tool_identity()
     contract = {"path": "src.py", "function": "f", "inputs": {"x": "int"},
                 "requires": "True", "ensures": "result == x"}
     claim = {"id": "c", "formal_contract": contract, "status": "unattempted"}
     evidence = {
-        "id": "e", "claim_id": "c", "method": "source-proof", "status": "proved",
+        "id": "e", "claim_id": "c", "method": "source-proof", "status": "proved", "freshness": "current",
         "precondition": "sat", "violation": "unsat", "contract_sha256": "contract",
         "contract": {key: contract[key] for key in ("inputs", "requires", "ensures")},
         "source_identity": {"revision": head, "path": "src.py", "function": "f",
@@ -48,15 +44,22 @@ def saved_session(tmp_path, monkeypatch):
               "mandatory_worker_checks": [], "model": "test"}
     (store.path.parent / "policy.json").write_text(json.dumps(policy))
 
-    def create(*, proof_revision=head, session_repo=repo, pin_authority=True):
+    def create(*, proof_revision=head, session_repo=repo, pin_authority=True, tool_identity=None, evidence_changes=None):
         session = store.new_session(str(session_repo), head, head,
                                     {"source_checks": [{**contract, "claim_id": "c"}]}, 1, 1000)
+        store.append_event(session, "toolchain_pinned", {"identity": tool_identity or current_tool_identity()})
         if pin_authority:
             store.append_event(session, "authority_pinned", {"digest": digest(policy)})
         store.put_record(session, "requirement", {"id": "r", "area": "product", "text": "works"})
         store.put_record(session, "claim", claim)
-        store.put_record(session, "evidence", {**evidence, "source_identity": {
-            **evidence["source_identity"], "revision": proof_revision}})
+        proof = {**evidence, "source_identity": {**evidence["source_identity"], "revision": proof_revision}}
+        if evidence_changes:
+            for key, value in evidence_changes.items():
+                if value is None:
+                    proof.pop(key, None)
+                else:
+                    proof[key] = value
+        store.put_record(session, "evidence", proof)
         store.append_event(session, "fas_reviewed", {"head": "fas", "claims": {"c": digest(claim)}})
         store.append_event(session, "claim_source_scope", {"head": proof_revision, "fas_head": "fas", "evidence_id": "e"})
         return session
@@ -81,15 +84,15 @@ def test_status_changes_when_saved_tree_changes_without_mutating_store(saved_ses
 
     (repo / "src.py").write_text("def f(x):\n    return x + 1\n")
     dirty = status(session)
-    assert dirty["session"]["status"] == "invalidated"
-    assert dirty["session"]["historical_status"] == before["session"]["status"]
+    assert dirty["session"]["status"] == before["session"]["status"]
+    assert dirty["freshness"]["status"] in ("stale", "unknown")
     for group in ("requirements", "claims", "evidence"):
         assert dirty[group][0]["freshness"] == "stale"
     assert dirty["claims"][0]["status"] != "established-within-scope"
     git(repo, "add", "src.py")
     git(repo, "commit", "-qm", "changed")
     changed = status(session)
-    assert changed["session"]["status"] == "invalidated"
+    assert changed["session"]["status"] == before["session"]["status"]
     assert all(changed[group][0]["freshness"] == "stale" for group in ("requirements", "claims", "evidence"))
     assert changed["claims"][0]["status"] != "established-within-scope"
     assert store.snapshot(session) == before
@@ -100,7 +103,8 @@ def test_status_fails_closed_when_saved_repository_is_missing(saved_session, tmp
     session = create(session_repo=tmp_path / "missing")
     before = store.snapshot(session)
     view = status(session)
-    assert view["session"]["status"] == "invalidated"
+    assert view["session"]["status"] == before["session"]["status"]
+    assert view["freshness"]["status"] in ("stale", "unknown")
     assert all(view[group][0]["freshness"] == "stale" for group in ("requirements", "claims", "evidence"))
     assert view["claims"][0]["status"] != "established-within-scope"
     assert store.snapshot(session) == before
@@ -121,6 +125,11 @@ def test_candidate_proof_is_stale_for_unchanged_checkout(saved_session):
     assert view["claims"][0]["status"] == "established-within-scope"
     assert view["claims"][0]["proof_scope"]["revision"] == candidate
     assert view["claims"][0]["freshness"] == "stale"
+    # A candidate proof is historical evidence for that candidate, not current
+    # assurance for the checked-out revision. Preserve its identity and outcome.
+    assert view["evidence"][0]["freshness"] == "stale"
+    assert view["evidence"][0]["status"] == "proved"
+    assert view["evidence"][0]["source_identity"]["revision"] == candidate
     assert store.snapshot(session) == before
 
 
@@ -147,8 +156,8 @@ def test_status_invalidates_when_saved_authority_drifts(saved_session, drift):
         store.append_event(session, "authority_pinned", {"digest": digest(policy)})
     before = store.snapshot(session)
     view = status(session)
-    assert view["session"]["status"] == "invalidated"
-    assert view["session"]["historical_status"] == before["session"]["status"]
+    assert view["session"]["status"] == before["session"]["status"]
+    assert view["freshness"]["status"] in ("stale", "unknown")
     assert all(view[group][0]["freshness"] == "stale" for group in ("requirements", "claims", "evidence"))
     assert view["claims"][0]["status"] != "established-within-scope"
     assert store.snapshot(session) == before
@@ -160,8 +169,42 @@ def test_status_invalidates_without_an_authority_pin(saved_session):
     before = store.snapshot(session)
     assert not any(event["kind"] == "authority_pinned" for event in before["events"])
     view = status(session)
-    assert view["session"]["status"] == "invalidated"
-    assert view["session"]["historical_status"] == before["session"]["status"]
+    assert view["session"]["status"] == before["session"]["status"]
+    assert view["freshness"]["status"] in ("stale", "unknown")
     assert all(view[group][0]["freshness"] == "stale" for group in ("requirements", "claims", "evidence"))
     assert view["claims"][0]["status"] != "established-within-scope"
     assert store.snapshot(session) == before
+
+
+@pytest.mark.parametrize("field", ["frontend_sha256", "execution_sha256"])
+def test_changed_pinned_tool_identity_makes_evidence_stale(saved_session, field):
+    _, store, create, status = saved_session
+    changed = {**current_tool_identity(), field: "f" * 64}
+    session = create(tool_identity=changed)
+    before = store.snapshot(session)
+    view = status(session)
+    assert view["session"]["status"] == before["session"]["status"]
+    assert view["freshness"]["status"] in ("stale", "unknown")
+    assert view["evidence"][0]["freshness"] == "stale"
+    assert store.snapshot(session) == before
+
+
+def test_recorded_invalidation_remains_invalidated(saved_session):
+    _, store, create, status = saved_session
+    session = create()
+    store.invalidate(session, {"head": "changed"})
+    view = status(session)
+    assert view["session"]["status"] == "invalidated"
+    assert view["claims"][0]["freshness"] == "stale"
+
+
+@pytest.mark.parametrize("changes", [
+    {"contract": None}, {"precondition": None}, {"violation": None},
+    {"source_identity": None}, {"source_identity": {"path": "src.py"}},
+    {"solver_version": None}, {"assumptions": ["x" * 5000]},
+], ids=["contract", "precondition", "violation", "source-identity", "revision", "tool", "redacted-assumption"])
+def test_missing_proof_qualification_cannot_be_current_proved(saved_session, changes):
+    _, _, create, status = saved_session
+    result = status(create(evidence_changes=changes))["evidence"][0]
+    assert result["status"] != "proved" or result["freshness"] != "current"
+    assert result["unavailable_fields"] or result["status"] in ("incomplete", "inconclusive")

@@ -248,7 +248,7 @@ def acceptance(root):
     newer = f.commit("new base")
     f.approve(newer)
     assert f.accept(run_id, base=newer, confirm=True).exit_code == 2
-    (f.state / "runs" / run_id / "report.md").write_text("modified")
+    (f.state / "runs" / run_id / "manifest.json").write_text("modified")
     assert f.accept(run_id, confirm=True).exit_code == 2
     other = root / "failing"
     other.mkdir()
@@ -277,7 +277,7 @@ def integrity(root):
     exported = f.invoke("evidence", "export", run_id, "--out", str(destination), "--json")
     assert exported.exit_code == 0, exported.output
     manifest = json.loads((destination / "manifest.json").read_text())
-    report = (destination / "report.md").read_text()
+    assert manifest["bundle_format"] == 2 and not (destination / "report.md").exists()
     for key in (
         "base",
         "revision",
@@ -287,14 +287,11 @@ def integrity(root):
         "host_reproduce",
     ):
         assert manifest[key] == record[key], (key, manifest)
-    for key in ("base", "revision", "contract_digest", "host_reproduce"):
-        assert record[key] in report, (key, report)
     assert {p.name: p.read_bytes() for p in destination.iterdir()} == {
         p.name: p.read_bytes() for p in bundle.iterdir()
     }
     for name in (
         "manifest.json",
-        "report.md",
         record["cases"][0]["checks"][0]["artifacts"]["result0.txt"],
     ):
         path = bundle / name
@@ -307,7 +304,7 @@ def integrity(root):
     extra.write_text("extra")
     assert f.invoke("evidence", "export", run_id, "--json").exit_code == 2
     extra.unlink()
-    missing = bundle / "report.md"
+    missing = bundle / record["cases"][0]["checks"][0]["artifacts"]["result0.txt"]
     original = missing.read_bytes()
     missing.unlink()
     assert f.invoke("evidence", "export", run_id, "--json").exit_code == 2
@@ -355,7 +352,7 @@ def comparison(root):
     assert history["claims"][0]["definition"] == "changed"
     assert history["before"]["status"] == "violation" and history["after"]["status"] == "pass"
     assert history["after"]["base"] == evolved
-    Path(compared["before"]["report"]).write_text("tampered")
+    Path(compared["before"]["manifest"]).write_text("tampered")
     assert f.invoke(*args).exit_code == 2
 
 
@@ -374,40 +371,16 @@ def claim_results(root):
     f.approve(base)
     result, run = f.verify(base, base)
     assert result.exit_code == 2, result.output
-    report = (Path(run["bundle"]) / "report.md").read_text()
-    for expected in (
-        "## Counterexample",
-        "## Evidence gap",
-        "## Fixture",
-        "### Observe fixture · incomplete",
-        "Formal (z3)",
-        "Behavior `behavior1`",
-    ):
-        assert expected in report, report
+    from mentat.evidence_report import claim_groups
 
-    state_before = {p.relative_to(f.state): p.read_bytes() for p in f.state.rglob("*") if p.is_file()}
-    output = root / "report.html"
-    rendered = f.invoke("evidence", "render", run["run_id"], "--out", str(output))
-    assert rendered.exit_code == 0, rendered.output
-    html = output.read_text()
-    for expected in (
-        run["revision"],
-        run["contract_digest"],
-        "Observe fixture",
-        "behavior0",
-        "behavior1",
-        "violation",
-        "incomplete",
-    ):
-        assert expected in html, expected
-    assert state_before == {
-        p.relative_to(f.state): p.read_bytes() for p in f.state.rglob("*") if p.is_file()
-    }
-    assert f.invoke("evidence", "render", run["run_id"], "--out", str(output)).exit_code == 2
-    (Path(run["bundle"]) / "report.md").write_text("tampered")
-    rejected_output = root / "tampered.html"
-    rejected = f.invoke("evidence", "render", run["run_id"], "--out", str(rejected_output))
-    assert rejected.exit_code == 2 and not rejected_output.exists(), rejected.output
+    manifest = json.loads((Path(run["bundle"]) / "manifest.json").read_text())
+    groups = claim_groups(manifest)
+    assert groups[0][0] == "Fixture"
+    claim = groups[0][1][0]
+    assert manifest["claim_review"]["titles"]["fixture"] == "Observe fixture"
+    assert claim["status"] == "incomplete"
+    assert {check["id"] for check in claim["behavior"]} == {"behavior0", "behavior1"}
+    assert not (Path(run["bundle"]) / "report.md").exists()
 
 
 def case_evidence(root):

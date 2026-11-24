@@ -333,7 +333,7 @@ def test_verify_reproduces_operational_replay_violation_before_emitting_artifact
     if native_status != "pass":
         from mentat import evidence
 
-        assert "Candidate source copy failed" in (saved[0][2] / "report.md").read_text()
+        assert not (saved[0][2] / "report.md").exists()
         _, loaded = evidence.read_run(tmp_path / "state", saved[0][0]["run_id"])
         assert loaded["regressions"] == saved[0][0]["regressions"]
         monkeypatch.setattr(docker_runtime, "_docker", replay_docker("export", 1, False))
@@ -566,7 +566,7 @@ def test_polaris_trusted_chat_relay_validates_and_records_decisions(tmp_path, mo
     result = runner.invoke(app, prefix + ["accept", run_id, "--trusted-chat-approval"])
     assert result.exit_code == 0, result.output
     assert evidence.read_json(state_dir / "acceptances" / f"{run_id}.json")["decision_source"] == "unverified_agent_relay"
-    (state_dir / "runs" / run_id / "report.md").write_text("tampered")
+    (state_dir / "runs" / run_id / "manifest.json").write_text("tampered")
     assert runner.invoke(app, prefix + ["accept", run_id, "--trusted-chat-approval"]).exit_code != 0
 
 

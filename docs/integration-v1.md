@@ -75,7 +75,7 @@ of 8 concurrent connections, bounded header/body/response sizes, and a bounded
 snapshot builder/cache. Reject chunked/ambiguous framing, duplicate sensitive
 headers, unexpected Content-Type, extra JSON keys and nonfinite JSON. Limits are
 discoverable and enforced: request body 16 KiB, feedback UTF-8 8 KiB, key 128
-characters, page 1..100 items, response 256 KiB, materialized snapshot 8 MiB,
+characters matching `[A-Za-z0-9._~-]{1,128}`, page 1..100 items, response 256 KiB, materialized snapshot 8 MiB,
 at most 2 cached snapshots/16 MiB total, TTL 30 seconds, one concurrent build.
 Bound the raw SQLite capture before loading it (32 MiB total serialized data,
 20,000 events and 10,000 jobs/records); over-capacity returns an explicit error,
@@ -83,12 +83,18 @@ not a truncated or passing assurance result. Individual public strings and
 collections are bounded with explicit omission metadata; no silent loss of
 assurance qualifications. Identity/status/freshness, assumptions and proof scope
 cannot be silently shortened; a necessary qualification that cannot fit makes
-the record explicitly incomplete/omitted or fails capacity. A single record that cannot fit yields a deterministic
+the record explicitly incomplete/omitted or fails capacity. Encoded resource items and page arrays each have a further 240,000-byte ceiling.
+A single record that cannot fit yields a deterministic
 capacity error or an explicitly incomplete omitted record, never endless paging.
 Limit JSON nesting to 16, decoded collection items to 2,000, headers to 16 KiB,
 and admit at most 30 requests/second and 2 snapshot builds/second per server.
-Bound capture/projection to 10 seconds, use a 2-second SQLite busy/read deadline,
-and release read transactions before external freshness work. Admission failure
+Apply a 10-second operation budget, a killable trusted projection child with the
+remaining budget, and a 2-second SQLite busy/read deadline. Parent serialization
+and parsing are bounded to 32 MiB input/8 MiB output and checked against that
+budget; trusted parent Python CPU is not forcibly preemptible. An overdue result
+never returns as successful assurance. This is bounded operation/cleanup behavior,
+not a universal hard real-time theorem.
+Release read transactions before external freshness work. Admission failure
 must not hold a controller write lock. Further narrower implementation limits must be
 documented and exposed before acceptance. Slow/disconnected clients must not
 block engine work, exhaust threads, grow state without bound or transfer control.

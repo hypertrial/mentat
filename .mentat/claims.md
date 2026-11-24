@@ -91,13 +91,13 @@ Claim `evidence.provenance` · Behavior `check.evidence.provenance`
 
 ### 12. Review outcomes by claim
 
-The Markdown report and standalone HTML report group formal and behavior evidence by claim and identify known violations and gaps. HTML rendering uses saved evidence, displays historical operator acceptance separately, and references artifact filenames without embedding logs, artifact contents, environment values, or reproduction commands.
+Machine-readable saved evidence groups formal, behavior and source-qualification results by claim and preserves known violations, assumptions and gaps. Historical operator acceptance remains a separate exact-manifest decision; tests and review agreement never become formal proof.
 
 Claim `evidence.claim-results` · Behavior `check.evidence.claim-results`
 
 ### 13. Check the bundle before export
 
-Evidence export and HTML rendering validate the saved manifest against its local receipt and check the file set and artifact hashes. Rendering preserves saved state, publishes a complete report outside state without overwriting an existing destination, and rejects invalid evidence.
+Evidence export and comparison validate the saved manifest against its local receipt and check the exact file set and artifact hashes. New machine-only bundles explicitly declare bundle format 2; historical bundles retain their original required reports and integrity checks. Unknown formats and missing or altered evidence are rejected without rewriting saved state.
 
 Claim `evidence.integrity` · Behavior `check.integrity`
 

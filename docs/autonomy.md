@@ -37,10 +37,20 @@ initialization; an old session is not silently repinned or presented as resumed.
 uv run --locked mentat run --repo /absolute/path/to/application
 uv run --locked mentat status --repo /absolute/path/to/application --json
 uv run --locked mentat resume --repo /absolute/path/to/application
-uv run --locked mentat ui --repo /absolute/path/to/application
 ```
 
-Run from a clean committed tree. `run` starts a bounded controller and displays its local monitoring URL. `--no-ui` supports terminal-only operation. The UI reads a projection of durable records; it does not authorize changes. Its per-session capability is passed in the browser fragment and authenticated API headers, not query strings. Optional feedback is retained for subsequent iterations.
+Run from a clean committed tree. `run` and `resume` are headless by default and
+produce no rendered report. The independent AI Cockpit owns all presentation.
+For an optional local adapter, create an operator-owned mode-0700 directory outside
+the repository and pass `--integration-file /private/path/connection.json`.
+The new file is mode 0600 and contains the loopback URL and bearer capability;
+never put the capability in a URL or log. Closing a client does not stop work.
+`mentat integration serve --repo PATH --session ID --connection-file PRIVATE_FILE`
+inspects saved work and can queue optional feedback; it cannot stop another
+controller. See [integration v1](integration-v1.md) for exact schema, discovery,
+paging/cursors, freshness, lifecycle, authorization, bounds and migration.
+The former `ui` and `--ui/--no-ui` surfaces are removed. Optional feedback remains
+untrusted task data and never authorizes policy, proof or publication changes.
 
 SCL maintains all six CAS areas and records observed, intended, inferred, and uncertain requirements. IVL separately records formal obligations, models, implementation connections, executable checks, and unsupported scope. IIL handles evidenced violations of established requirements. Each generator is independently reviewed; consequential checker, CI, acceptance, and guarantee changes require two independent reviews. Application rewrites solely to ease verification are excluded.
 
