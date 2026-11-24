@@ -442,6 +442,28 @@ new policy; real Mentat publication and whole-workflow readiness remain pending.
 
 ## Current self-run acceptance gap
 
+PR #69 passed both independent reviews and exact-head completion: canonical native
+and Linux suites each passed 1,993 tests with 53 documented optional skips; the
+protected checker passed all 45 without skips; both packages, fast/static checks,
+296-path inventory and 233 unchanged source/script/test hashes passed. The hosted
+check passed in ten seconds. It merged as
+`f56a716e77e3f2c2c5cc465c15f765091da0441e` with strict/admin-enforced protection;
+the merged tree matched the verified feature tree.
+
+Fresh actual session `ef847e0daded45949f32bd9d91cfcefd` accepted five SCL cohorts,
+including real corrections, then blocked on a provenance deferral before current
+mandatory checks, final source batches or publication. A corrected Docker-runtime
+note stated supported current behavior but also asserted that a previous
+description was mistaken, citing two distinct task-input revisions. The
+correction generator had seen the earlier note and feedback; the later review
+diff started at the earlier gap baseline and did not supply that intermediate
+note. Both reviewers found the current classification supported, but one deferred
+the unsupported retrospective assertion. The controller correctly left the
+ambiguous citation unverified. No capacity failure occurred, and no readiness or
+publication is inferred. Current-source correction guidance, regression review
+and completion, then another genuine self-run remain pending. The blocked
+session and its attempt counts remain unchanged.
+
 Both independent reviews accepted frozen candidate
 `f8d5e616198bcd52434ee9619923731c496279e3`. Its full native and Linux gates each
 reported 1,983 passed, ten failed and 53 documented optional skips. All ten
