@@ -2170,6 +2170,12 @@
       "status": "gap",
       "requirement_ids": [],
       "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "docs/decisions/workflow-preflight-recovery.md",
+      "status": "unexamined",
+      "requirement_ids": [],
+      "reason": "New workflow preflight decision; source correspondence requires independent review."
     }
   ]
 }
