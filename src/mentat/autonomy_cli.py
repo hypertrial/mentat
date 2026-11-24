@@ -13,7 +13,7 @@ from .autonomy import Coordinator, digest, initialize, project_snapshot, state_p
 from .autonomy_policy import load_policy_path, pin_policy
 from .autonomy_runtime import CodexAgent, GitHub, LocalWorker, diagnostics, git
 from .autonomy_state import Store
-from .autonomy_ui import _github_source_base, create_server, render_report
+from .autonomy_ui import create_server, github_source_base, render_report
 from .source_verify import source_tool_identity, verify_source
 
 Repo = Annotated[Path, typer.Option(exists=True, file_okay=False)]
@@ -35,7 +35,7 @@ def _store(ctx: typer.Context, repo: Path) -> Store:
 
 def _source_base(repo: Path) -> str | None:
     try:
-        return _github_source_base(git(repo, "config", "--get", "remote.origin.url").removesuffix("\n"))
+        return github_source_base(git(repo, "config", "--get", "remote.origin.url").removesuffix("\n"))
     except _ERRORS:
         return None
 

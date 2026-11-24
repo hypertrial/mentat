@@ -76,7 +76,7 @@ def _value(value: Any, depth: int = 0) -> Any:
     return str(value)[:4000]
 
 
-def _github_source_base(remote: str) -> str | None:
+def github_source_base(remote: str) -> str | None:
     """Accept only canonical GitHub repository remotes, without credentials."""
     match = re.fullmatch(r"(?:git@github\.com:|ssh://git@github\.com/|https://github\.com/)([A-Za-z0-9][A-Za-z0-9-]{0,38})/([A-Za-z0-9_.-]+)", remote)
     if match is None:
@@ -109,7 +109,7 @@ def _citations(value: Any, source_base: str | None) -> Any:
 
 
 def _public_snapshot(raw: dict[str, Any], source_base: str | None = None) -> dict[str, Any]:
-    if not isinstance(source_base, str) or _github_source_base(source_base) != source_base:
+    if not isinstance(source_base, str) or github_source_base(source_base) != source_base:
         source_base = None
     result: dict[str, Any] = {"schema": raw.get("schema_version", raw.get("schema", 1)), "revision": raw.get("revision", 0)}
     for section, fields in _FIELDS.items():

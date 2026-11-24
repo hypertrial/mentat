@@ -436,12 +436,12 @@ def test_counterexample_requires_protected_reproduction(repo, tmp_path, protecte
         # checkpoint. All generator/reviewer jobs and their events remain real.
         enqueue = Coordinator._enqueue
 
-        def start_fix_at_reviewed_checkpoint(coordinator, loop, role, item, payload):
+        def start_fix_at_reviewed_checkpoint(coordinator, loop, role, item, payload, **kwargs):
             if payload.get("kind") == "investigate_defect":
                 events = coordinator.store.snapshot(coordinator.session_id)["events"]
                 checkpoint = [e["payload"]["head"] for e in events if e["kind"] == "fas_reviewed"][-1]
                 payload = {**payload, "target_head": checkpoint}
-            return enqueue(coordinator, loop, role, item, payload)
+            return enqueue(coordinator, loop, role, item, payload, **kwargs)
 
         monkeypatch.setattr(Coordinator, "_enqueue", start_fix_at_reviewed_checkpoint)
     snapshot, worker, github = run(
