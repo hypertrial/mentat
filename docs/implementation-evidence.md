@@ -442,6 +442,55 @@ new policy; real Mentat publication and whole-workflow readiness remain pending.
 
 ## Current self-run acceptance gap
 
+PR #70 passed both independent reviews and native/Linux completion (1,995 passed
+and 53 documented optional skips each), both packages, all 45 protected fixtures
+without skips, fast/static checks and the complete 296-path inventory. All 233
+recorded source/script/test hashes stayed unchanged. The hosted check passed in
+five seconds; the guarded merge became
+`971bc390423b4814298c93f0eed42a2927852ac5`, with the same tree as the verified
+candidate.
+
+Fresh actual session `38b9e5429c414c98a5f11b0a87e6b9b4` completed thirteen
+accepted SCL cohorts without the previous provenance deferral or a capacity
+failure. Candidate `d08d6c77339b4c8407e46c7224fb87616a69c521` passed its configured
+Linux suite (1,995 passed, 53 documented optional skips), package check and all
+45 protected fixtures. Its selected clamp had SAT preconditions and UNSAT
+violations; the faulty variant produced the real SAT witness value 1, lower -1,
+upper 0, whose protected CPython 3.12.13 replay had a true precondition and false
+postcondition. Both scoped IVL reviewers accepted.
+
+All eighteen real source reviewers across nine batches then deferred. Their
+persisted exact prompts confirm the source-review mode omitted the existing
+cited-source continuity descriptors, so they could not establish the historical
+revisions in otherwise supported current observations. One test batch also lacked
+`src/mentat/source_verify.py`, an explicit citation of its linked requirement.
+Its actual 321,901-character files subtotal and 428,817-character context had room
+for that file's 23,470-character JSON entry under both unchanged limits. No other
+distinct source defect was identified in those reviews. The session ended blocked
+without aggregate review or publication. Its scoped proof evidence remains
+historical; no deferral is treated as acceptance. Corrected bounded input, fresh
+independent reviews/completion and another real run remain required before Titanic.
+
+The scoped context correction passed 13 source-batch workflow, provenance,
+support and eviction tests, plus the existing 17-case citation suite and static
+checks. Representative cases fail against the prior controller. A read-only
+preflight of the actual v8 candidate retained 66 obligations in nine batches;
+maximum source JSON was 463,530 characters, with no affirmative descriptor for
+an absent file. The previously omitted source verifier is now included in the
+linked test batch: files subtotal 349,872, complete context 463,530. Aggregate
+JSON was 493,929 characters (494,464 including wrapper) with eighteen synthetic
+4,097-byte findings, one byte above each review's allowed maximum. These are
+capacity and regression results only; historical deferrals remain unchanged.
+
+Independent review additionally found that directly cited or formal-target
+obligations with unlinked inventory surfaces could miss their related record
+context. Selection now follows those explicit path relationships as well as
+surface requirement IDs, using complete verified baseline/current inventories.
+Three positive link regressions fail against the prior candidate, and the
+literal-`#L1` filename boundary remains isolated. The complete source-review test
+file passed all 68 cases; static checks and the repeated v8 capacity measurements
+passed. Fresh frozen-head review and completion remain pending.
+
 PR #69 passed both independent reviews and exact-head completion: canonical native
 and Linux suites each passed 1,993 tests with 53 documented optional skips; the
 protected checker passed all 45 without skips; both packages, fast/static checks,

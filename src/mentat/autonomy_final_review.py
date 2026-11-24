@@ -12,7 +12,7 @@ def identity(value: object) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, allow_nan=False).encode()).hexdigest()
 
 
-def _local_citation(value: object, source_entries: dict[str, dict]) -> str | None:
+def _local_citation(value: object, source_entries: dict[str, dict] | set[str]) -> str | None:
     if isinstance(value, dict):
         value = value.get("path", value.get("url"))
     if not isinstance(value, str) or not value:
@@ -156,3 +156,41 @@ def validate_findings(result: dict) -> dict:
     if result.get("decision") == "accept" and detail["unresolved_dependencies"]:
         raise ValueError("accepted final source review has unresolved dependencies")
     return detail
+
+
+def batch_linked_records(source_batch: dict, inventory_paths: set[str]) -> list[dict]:
+    """Select only records directly or transitively linked to batch obligations."""
+    obligations = source_batch["obligations"]
+    paths = {item["path"] for item in obligations}
+    linked = {key for item in obligations
+              for surface in (item.get("base_surface"), item.get("current_surface"))
+              if isinstance(surface, dict) for key in surface.get("requirement_ids", [])}
+    groups = [(collection, record) for version in ("base", "current")
+              for collection in ("requirements", "claims")
+              for record in source_batch["records"][version][collection]]
+    for collection, record in groups:
+        citations = record.get("citations", [])
+        revision = record.get("revision", {})
+        evidence = revision.get("evidence", []) if isinstance(revision, dict) else []
+        references = [*(citations if isinstance(citations, list) else []),
+                      *(evidence if isinstance(evidence, list) else [])]
+        direct = False
+        for citation in references:
+            try:
+                path = _local_citation(citation, inventory_paths)
+            except ValueError:
+                # Invalid unrelated citations cannot make their record linked.
+                continue
+            if path in paths:
+                direct = True
+        contract = record.get("formal_contract")
+        if (isinstance(contract, dict) and isinstance(contract.get("path"), str)
+                and contract["path"] in paths):
+            direct = True
+        if direct:
+            if collection == "requirements":
+                linked.add(record["id"])
+            else:
+                linked.update(record.get("requirement_ids", []))
+    return [record for _, record in groups if record.get("id") in linked
+            or linked.intersection(record.get("requirement_ids", []))]

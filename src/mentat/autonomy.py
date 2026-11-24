@@ -2420,6 +2420,20 @@ class Coordinator:
                     )
                 )
 
+        citation_inventory = inventory_paths
+        if source_mode:
+            # Verify both complete endpoint trees so literal filenames containing
+            # line-anchor syntax cannot be mistaken for citations to another file.
+            citation_inventory = set()
+            for endpoint in (source_base, revision):
+                if not isinstance(endpoint, str):
+                    raise ValueError("source batch lacks baseline")
+                top = list(gitio.ls_tree(self.repo, endpoint, "-z", [], time.monotonic() + 60))
+                rows = list(gitio.ls_tree(self.repo, endpoint, "-rzt", [], time.monotonic() + 60))
+                gitio.verify_listing(self.repo, endpoint, rows, {b""}, top=top)
+                citation_inventory.update(path.decode("utf-8", "strict") for row in rows
+                                          for meta, path in [row.split(b"\t", 1)]
+                                          if meta.split(b" ")[1] != b"tree")
         targets = job["payload"].get("targetfiles")
         if targets is not None:
             if not isinstance(targets, list) or any(not isinstance(p, str) for p in targets):
@@ -2582,7 +2596,8 @@ class Coordinator:
 
         missing_revision = object()
 
-        def cited_reference(path: str, value: object, explicit: object = missing_revision) -> None:
+        def cited_reference(path: str, value: object, explicit: object = missing_revision,
+                            *, reserve: bool = True) -> None:
             # Only this explicit phrase and a citation's revision field carry
             # revision authority. Other hashes in descriptive prose do not.
             revisions: list[str] = []
@@ -2606,19 +2621,21 @@ class Coordinator:
                 cited_references.add((path, None, "malformed or ambiguous citation revision"))
             elif unique:
                 cited_references.add((path, next(iter(unique)), None))
-                required_source.add(path)
+                if reserve:
+                    required_source.add(path)
             if len(cited_references) > 64:
                 raise ReviewContextCapacity("cited source continuity exceeds context capacity", required_source)
 
-        def cited_record(citation: object) -> None:
+        def cited_record(citation: object, *, reserve: bool = True) -> None:
             if not isinstance(citation, dict):
                 return
             path = citation.get("path")
             if not isinstance(path, str) or path.startswith(("http://", "https://")):
                 return
-            path = _citation_path(path, inventory_paths)
+            path = _citation_path(path, citation_inventory if source_mode else inventory_paths)
             safe_relative_path(path)
-            cited_reference(path, citation.get("source"), citation.get("revision", missing_revision))
+            cited_reference(path, citation.get("source"), citation.get("revision", missing_revision),
+                            reserve=reserve)
         if source_base is not None and (
             job["payload"].get("kind") == "review_spec"
             or job["payload"].get("kind") == "generate_spec"
@@ -2829,6 +2846,7 @@ class Coordinator:
                     raise
                 except (OSError, ValueError, UnicodeError) as exc:
                     raise ValueError(f"mandatory proof target unavailable: {path}: {exc}") from exc
+        optional_files: list[str] = []
         if source_mode:
             for obligation in source_batch["obligations"]:
                 if obligation["mode"] != "current-source":
@@ -2846,6 +2864,47 @@ class Coordinator:
                     raise ReviewContextCapacity("source batch exceeds context capacity", {path})
                 included[path] = contents
                 used += cost
+            support = set()
+            for obligation in source_batch["obligations"]:
+                surface = obligation.get("current_surface")
+                if (obligation["path"] in included and isinstance(surface, dict)
+                        and obligation["mode"] == "current-source"):
+                    cited_reference(obligation["path"], surface.get("note"), reserve=False)
+            for record in autonomy_final_review.batch_linked_records(source_batch, citation_inventory):
+                citations = record.get("citations", [])
+                if not isinstance(citations, list):
+                    raise ValueError("invalid source batch citations")
+                lineage = record.get("revision", {})
+                if isinstance(lineage, dict):
+                    citations = [*citations, *lineage.get("evidence", [])]
+                for citation in citations:
+                    path = _review_citation_path(citation, citation_inventory)
+                    if path is not None:
+                        support.add(path)
+                        cited_record(citation, reserve=False)
+                contract = record.get("formal_contract")
+                if isinstance(contract, dict) and isinstance(contract.get("path"), str):
+                    safe_relative_path(contract["path"])
+                    support.add(contract["path"])
+            support_omissions = {}
+            for path in sorted(support - set(included)):
+                try:
+                    _cited_source_entry(self.repo, revision, path)
+                    raw = gitio.read_file(self.repo, revision, path)
+                    if len(raw) > 240_000:
+                        raise ValueError("file exceeds supported 240000-byte limit")
+                    contents = raw.decode("utf-8")
+                    cost = len(json.dumps({path: contents}, ensure_ascii=True))
+                    if used + cost > 360_000 or used + cost + reserved > 490_000:
+                        raise ValueError("context budget exhausted")
+                    included[path] = contents
+                    used += cost
+                    optional_files.append(path)
+                except (OSError, ValueError, UnicodeError, subprocess.SubprocessError) as exc:
+                    support_omissions[path] = str(exc)[:200]
+            omitted = [item for item in omitted if item["path"] not in support]
+            omitted.extend({"path": path, "reason": reason}
+                           for path, reason in sorted(support_omissions.items()))
         cited_continuity = []
         for path, cited_revision, problem in sorted(cited_references, key=lambda item: (item[0], item[1] or "", item[2] or "")):
             item = {"path": path, "cited_revision": cited_revision, "candidate_revision": revision,
@@ -2877,10 +2936,24 @@ class Coordinator:
                 except (OSError, ValueError, subprocess.SubprocessError) as exc:
                     item["reason"] = f"source continuity unavailable: {type(exc).__name__}"
             cited_continuity.append(item)
-        reserved += len(json.dumps(cited_continuity, ensure_ascii=True)) + 64
+        continuity_by_path: dict[str, list[dict]] = {}
+        for item in cited_continuity:
+            continuity_by_path.setdefault(item["path"], []).append(item)
+        continuity_size = len(json.dumps(cited_continuity, ensure_ascii=True))
+        while source_mode and optional_files and used + reserved + continuity_size + 64 > 490_000:
+            path = optional_files.pop()
+            used -= len(json.dumps({path: included[path]}, ensure_ascii=True))
+            del included[path]
+            omitted.append({"path": path, "reason": "context budget exhausted"})
+            for item in continuity_by_path.get(path, []):
+                if item["status"] in {"unchanged", "changed"}:
+                    before = len(json.dumps(item, ensure_ascii=True))
+                    item["status"] = "unverified"
+                    item["reason"] = "candidate source is not included"
+                    continuity_size += len(json.dumps(item, ensure_ascii=True)) - before
+        reserved += continuity_size + 64
         if used + reserved > 490_000:
             raise ReviewContextCapacity("cited source continuity exceeds context capacity", required_source)
-        optional_files: list[str] = []
         cited_paths = {path for path, _, _ in cited_references}
         for path in paths:
             if path == FAS_PATH or path in mandatory or path in required_source:
@@ -2902,7 +2975,7 @@ class Coordinator:
                     optional_files.append(path)
             except (OSError, ValueError, UnicodeError) as exc:
                 omitted.append({"path": path, "reason": str(exc)[:200]})
-        if source_mode and FAS_PATH in inventory_paths:
+        if source_mode and FAS_PATH in inventory_paths and FAS_PATH not in included:
             omitted.append({"path": FAS_PATH, "reason": "relevant FAS records supplied in source_batch"})
         context = {"revision": revision, "files": included, "omitted": omitted}
         if cited_continuity:
@@ -2971,6 +3044,12 @@ class Coordinator:
             del included[path]
             omitted.append(omission)
             encoded_size += addition - removal
+            for item in continuity_by_path.get(path, []):
+                if item["status"] in {"unchanged", "changed"}:
+                    before = len(json.dumps(item, ensure_ascii=True))
+                    item["status"] = "unverified"
+                    item["reason"] = "candidate source is not included"
+                    encoded_size += len(json.dumps(item, ensure_ascii=True)) - before
             if path in requested_targets:
                 included_targets -= 1
         # Check the actual serialization even if the incremental accounting is wrong.
