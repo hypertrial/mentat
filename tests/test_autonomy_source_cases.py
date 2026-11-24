@@ -555,7 +555,18 @@ def test_case_evidence_is_complete_beyond_twelve(checked_case_repo, tmp_path):
     config['source_checks'] = [first, second]
     worker = ReplayWorker()
     coordinator, evidence = execute_check(repo, head, config, tmp_path, worker)
-    assert evidence['status'] == 'passed'
+    assert evidence['status'] == 'passed', {
+        'source': [
+            {key: str(row.get(key))[:1024] for key in ('status', 'reason', 'detail')}
+            for row in evidence.get('source', [])
+        ],
+        'source_cases': [
+            {'function': row.get('case', {}).get('function'), 'status': row.get('status'),
+             'reason': str(row.get('evidence', {}).get('reason'))[:1024],
+             'replay_reason': str(row.get('reproduction', {}).get('reason'))[:1024]}
+            for row in evidence.get('source_cases', [])
+        ],
+    }
     assert len(evidence['source_cases']) == len(worker.replays) == 13
     summary = coordinator._check_summary({'id': 'check', 'head': head, 'base': head,
                                            'check_key': 'key', **evidence})

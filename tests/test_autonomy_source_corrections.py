@@ -49,7 +49,8 @@ def test_source_revision_routes_to_current_head_specification_correction(
     spec_code_returned = threading.Event()
     state = {'source_revised': False, 'corrected': False, 'drain': None, 'code_job': None,
              'correction_deferred': False, 'source_head': None, 'stale_descendant_seen': False,
-             'scl_revised': False, 'spec_code_job': None, 'scl_first_head': None}
+             'scl_revised': False, 'spec_code_job': None, 'scl_first_head': None,
+             'first_scl_terminal': None}
     calls = []
     original_run = autonomy_runtime._run
     features = ('shell_tool', 'unified_exec', 'apps', 'browser_use', 'computer_use',
@@ -71,7 +72,15 @@ def test_source_revision_routes_to_current_head_specification_correction(
         assert 'summary' in schema['required']
         if payload['kind'] == 'review_spec':
             first_slot = job['item_id'].endswith('.1')
-            if not first_slot and state['scl_first_head'] is None:
+            proposal_head = payload['proposal']['head']
+            with lock:
+                if first_slot and state['scl_first_head'] is None:
+                    state['scl_first_head'] = proposal_head
+                first_cohort = state['scl_first_head'] in {None, proposal_head}
+                if first_slot and first_cohort:
+                    state['spec_code_job'] = job['id']
+                    spec_code_returned.set()
+            if not first_slot and first_cohort:
                 assert spec_code_returned.wait(timeout=15)
                 import time
 
@@ -81,16 +90,16 @@ def test_source_revision_routes_to_current_head_specification_correction(
                 deadline = time.monotonic() + 15
                 while time.monotonic() < deadline:
                     review_jobs = review_store.snapshot()['jobs']
-                    if any(row['id'] == state['spec_code_job'] and row['status'] == 'succeeded'
-                           for row in review_jobs):
+                    first = next((row for row in review_jobs if row['id'] == state['spec_code_job']), None)
+                    if first and (first['status'] == 'failed' or
+                                  (first['status'] == 'succeeded' and first.get('outcome'))):
+                        state['first_scl_terminal'] = deepcopy(first)
                         break
                     time.sleep(0.01)
                 else:
-                    raise AssertionError('first SCL reviewer did not persist its outcome')
+                    raise AssertionError('first SCL reviewer did not persist its terminal outcome')
             with lock:
-                if state['scl_first_head'] is None:
-                    state['scl_first_head'] = payload['proposal']['head']
-                initial = state['scl_first_head'] == payload['proposal']['head']
+                initial = state['scl_first_head'] == proposal_head
                 selected = first_slot == (review_order == 'first')
                 revise_scl = initial and (selected or scl_peer == 'revise')
                 if revise_scl and selected:
@@ -106,9 +115,6 @@ def test_source_revision_routes_to_current_head_specification_correction(
                                                     'requirement_ids': [requirement], 'severity': 'medium'}]
                       if revise_scl else []}
             Path(argv[argv.index('--output-last-message') + 1]).write_text(json.dumps(answer))
-            if first_slot:
-                state['spec_code_job'] = job['id']
-                spec_code_returned.set()
             return json.dumps({'type': 'thread.started', 'thread_id': job['id']}) + '\n'
         source_scope = payload['source_batch']
         has_source = any(row['path'] == 'src.py' for row in source_scope['obligations'])
@@ -251,6 +257,11 @@ def test_source_revision_routes_to_current_head_specification_correction(
                          and job['payload'].get('proposal', {}).get('round', 0) == 0
                          and job['payload'].get('proposal', {}).get('head') == state['scl_first_head']]
         assert len(first_reviews) == 2
+        first_terminal = state['first_scl_terminal']
+        assert first_terminal is not None and first_terminal['item_id'].endswith('.1')
+        if scl_peer == 'failed' and review_order == 'last':
+            assert first_terminal['attempt'] == 3
+            assert first_terminal['status'] == 'failed' or first_terminal['outcome'].get('exhausted') is True
         assert len({review['payload']['review_cohort'] for review in first_reviews}) == 1
         expected_slot = '.1' if review_order == 'first' else '.2'
         for review in first_reviews:

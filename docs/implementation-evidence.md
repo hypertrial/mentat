@@ -192,6 +192,28 @@ passed. Production module hashes are unchanged. These targeted results do not
 replace new exact-head review, full completion and protected gates, or the
 required actual self-run.
 
+The next candidate, `5e57a5349eeed583247a701852d800211b2ade6d`, received
+both independent review acceptances. Its native run was interrupted with one
+signal to the verified pytest coordinator after a new failure: 1,202 passed,
+28 skipped and one failure in 237.98 seconds. This was a partial diagnostic,
+not a completed gate; all owned processes were confirmed terminated. Independent
+diagnosis found a fixture dependency race: a failing first SCL reviewer never
+signaled the event awaited by its peer, while another interleaving skipped the
+intended ordering. The fixture now waits for the first reviewer's persisted
+terminal outcome, including its third-attempt exhaustion. Eight focused cases
+passed in 176.79 seconds with the original deadlines and retry limits.
+
+The Linux suite at that head completed with 2,116 passes, 53 skips and one failure
+in 383.87 seconds: the thirteen-case evidence test returned `incomplete` without
+reporting the nested reason. Serial diagnostics passed on macOS (5.37 seconds)
+and the existing isolated Linux worker (3.97 seconds), including both positive
+proofs and all thirteen counterexample replays. Those passes do not establish the
+original cause or classify it as a transient failure. The assertion now reports
+bounded per-source and per-case reasons, retaining every existing completeness
+and replay assertion. Solver and session timeouts remain unchanged. Both package
+checks, static checks, FAS accounting and the 235-file frozen hash comparison
+passed; the protected checker remained held. Fresh complete gates are required.
+
 The paused v12 checkpoint was archived as recoverable trusted-local evidence at
 `/Users/mattfaltyn/.local/state/mentat-self-assurance/controller-history/20261124T060800Z-v12-paused-checkpoint`;
 its manifest SHA-256 is `46e1c0a77466cef246eef90b87b82f1b9c6d2b2db82c80840ec149edac2a2d72`.
