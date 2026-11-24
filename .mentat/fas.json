@@ -2194,6 +2194,12 @@
       "status": "unexamined",
       "requirement_ids": [],
       "reason": "New workflow preflight regression tests; source correspondence requires independent review."
+    },
+    {
+      "path": "tests/test_autonomy_configured_gates.py",
+      "status": "unexamined",
+      "requirement_ids": [],
+      "reason": "New explicit configured-gate enrollment regressions; source correspondence requires independent review."
     }
   ]
 }
