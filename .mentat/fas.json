@@ -530,9 +530,10 @@
       "path": "docs/vision.md",
       "status": "mapped",
       "requirement_ids": [
-        "b4085f53-5591-5dbf-8718-d21877944bf5"
+        "b4085f53-5591-5dbf-8718-d21877944bf5",
+        "f6d43cfc-273d-5487-b265-310f1e5b2619"
       ],
-      "note": "At task input revision 8b3f2b97aee07a691b02f3d05bda879d87ea5763, this product vision states the intended autonomous SCL, IVL, and IIL workflow with optional human feedback; it describes intent rather than demonstrating implementation behavior."
+      "note": "At task input revision b47e35c65b18d2745088f3da14442291a7c412d6, the vision describes the autonomous SCL, IVL, and IIL workflow, optional human feedback, and a versioned headless integration whose presentation belongs to the independent AI Cockpit. This records the stated product intent."
     },
     {
       "path": "examples/iceberg-go/LICENSE",
