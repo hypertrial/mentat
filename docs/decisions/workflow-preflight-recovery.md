@@ -24,6 +24,16 @@ The first two findings concern missed work and lost context, not a demonstrated
 unsafe merge or false proof. Citation reproduction establishes lost path text,
 not every hyperlink behavior. These observations are not an exhaustive bug claim.
 
+Static inspection also confirms the vision's source-link behavior is absent:
+both renderers currently emit citation text only. Restore path text and provide
+safe links for canonical GitHub source citations with a valid immutable revision
+and repository-relative path. Resolve trusted repository metadata once per CLI
+session, with text fallback when unavailable; do not add network polling or local
+filesystem-serving routes. Never derive an executable URL from arbitrary model
+text, expose credential-bearing remotes, or weaken host-path redaction. Live and
+exported views must share the same safe behavior. This is a separate product gap
+from the reproduced path-loss defect and requires its own positive/negative tests.
+
 ## Invariants and implementation ownership
 
 - Preserve policy/tool/revision pinning, records, job identities, leases, source
