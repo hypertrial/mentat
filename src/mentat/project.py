@@ -36,6 +36,7 @@ VERIFIER_MODULES = (
     "autonomy",
     "autonomy_final_review",
     "autonomy_review_inputs",
+    "autonomy_source_corrections",
     "autonomy_cli",
     "autonomy_policy",
     "autonomy_runtime",

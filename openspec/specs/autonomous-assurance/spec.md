@@ -77,7 +77,7 @@ The independent discriminator inspects the relevant source, revision-bound evide
 ### Requirement: budgets
 <!-- mentat:requirement-id=ce55ac49-b6d5-5469-833f-b5262a895ea1; area=nonfunctional -->
 
-Sessions run at most two hours, three agents concurrently, and three unsuccessful rounds per unchanged item, preserving durable limits across resume.
+Each invocation runs at most two hours with at most three agents concurrently; jobs, attempts and the limit of three unsuccessful rounds per unchanged item remain durable across resume.
 
 #### Scenario: budgets acceptance
 

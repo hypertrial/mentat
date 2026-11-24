@@ -19,10 +19,22 @@ from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 from typing import Any
 
-from . import autonomy_final_review, autonomy_review_inputs, gitio, process
+from . import (
+    autonomy_final_review,
+    autonomy_review_inputs,
+    autonomy_source_corrections,
+    gitio,
+    process,
+)
 from .autonomy_policy import check_policy, load_policy_path, minimum_gates, minimum_source_checks
 from .autonomy_runtime import git
-from .autonomy_state import Store, record_digest
+from .autonomy_state import (
+    SourceBarrierHeld,
+    SourceEpochStale,
+    SourceRemotePending,
+    Store,
+    record_digest,
+)
 from .project import safe_relative_path
 
 AREAS = ("product", "functional", "nonfunctional", "architecture", "data-api", "acceptance")
@@ -46,44 +58,15 @@ class ReviewContextCapacity(ValueError):
 
 
 def _citation_path(citation: str, paths: set[str]) -> str:
-    return citation if citation in paths else re.sub(
-        r"(?:#L\d+(?:-L?\d+)?|:\d+(?::\d+)?)$", "", citation
-    )
+    return autonomy_final_review.citation_path(citation, paths)
 
 
 def _review_citation_path(citation: object, paths: set[str]) -> str | None:
-    """Normalize a local review citation; external citations remain metadata."""
-    if isinstance(citation, dict):
-        citation = citation.get("path", citation.get("url"))
-    if not isinstance(citation, str) or not citation:
-        raise ValueError("invalid review citation; revise the specification proposal")
-    if citation.startswith(("https://", "http://")):
-        if not re.match(r"^https?://[^/\s?#]+(?:[/?#]|$)", citation) or any(
-            char.isspace() for char in citation
-        ):
-            raise ValueError("invalid external review citation; revise the specification proposal")
-        return None
-    path = _citation_path(citation, paths)
-    try:
-        safe_relative_path(path)
-    except ValueError as exc:
-        raise ValueError("unsafe review citation; revise the specification proposal") from exc
-    return path
+    return autonomy_final_review.review_citation_path(citation, paths)
 
 
 def _cited_source_entry(repo: Path, revision: str, path: str) -> tuple[str, str]:
-    """Read a regular file through verified Git objects and return its mode and blob ID."""
-    safe_relative_path(path)
-    records = list(gitio.ls_tree(repo, revision, "-z", [b":(literal)" + path.encode()], time.monotonic() + 60))
-    gitio.verify_listing(repo, revision, records, set())
-    if len(records) != 1:
-        raise ValueError("missing or non-regular file")
-    meta, listed_path = records[0].split(b"\t", 1)
-    mode, kind, oid = meta.split(b" ")
-    if listed_path != path.encode() or mode not in (b"100644", b"100755") or kind != b"blob":
-        raise ValueError("missing or non-regular file")
-    gitio.read_file(repo, revision, path)
-    return mode.decode(), oid.decode()
+    return autonomy_review_inputs.source_entry(repo, revision, path)
 
 
 def digest(value: Any) -> str:
@@ -136,9 +119,7 @@ def default_config(repo: Path) -> dict:
 
 
 def _source_timeout(configured: object, remaining: float) -> int:
-    if type(configured) is not int or not 1 <= configured <= 30000:
-        raise ValueError("invalid source timeout")
-    return max(1, min(configured, int(remaining * 1000)))
+    return autonomy_final_review.source_timeout(configured, remaining)
 
 
 def validate_source_checks(checks: object) -> None:
@@ -614,32 +595,7 @@ def _changed_paths(repo: Path) -> set[str]:
 
 
 def _allowed_path(kind: str, path: str) -> bool:
-    safe_relative_path(path)
-    if kind == "generate_spec":
-        return path == FAS_PATH or path.startswith("openspec/specs/")
-    if kind == "generate_verification":
-        return path.startswith((".mentat/verification/", "verification/"))
-    return not (
-        path.startswith(("openspec/", ".mentat/", "verification/", "scripts/", ".github/"))
-        or path
-        in {
-            "AGENTS.md",
-            "CONTRIBUTING.md",
-            "pyproject.toml",
-            "uv.lock",
-            "Makefile",
-            "package.json",
-            "package-lock.json",
-            "pnpm-lock.yaml",
-            "yarn.lock",
-            "tox.ini",
-            "pytest.ini",
-            "setup.cfg",
-            "setup.py",
-            "verify.py",
-        }
-        or Path(path).name.startswith(("requirements", "conftest"))
-    )
+    return autonomy_source_corrections.allowed_path(kind, path)
 
 
 _OUTPUT_INSTRUCTIONS = """Return the structured result required by the output schema. You have no execution or filesystem tools. Return file changes as {path, operation, content}; use write or delete for ordinary changes (empty content for delete). Only generate_spec may use patch_fas, only at .mentat/fas.json, under the detailed specification instructions. Reviewers must return an empty changes list. Your agreement is not proof. Never modify an established requirement to hide an application defect. Never commit, push, merge, edit controller state, or use credentials. Execution of candidate or generated verification programs belongs in the configured isolated worker, not the host. Record ambiguity and missing capabilities explicitly and continue unrelated work."""
@@ -696,8 +652,17 @@ class Coordinator:
             )
             self._event("feedback_consumed", {"seq": event["seq"]})
 
-    def _enqueue(self, loop: str, role: str, item: str, payload: dict) -> str:
+    def _enqueue(self, loop: str, role: str, item: str, payload: dict, *, predecessor: dict | None = None) -> str:
         assert self.session_id
+        if predecessor and payload.get("source_cycle_id") and payload.get("kind") == "generate_spec":
+            cycle_id = payload["source_cycle_id"]
+            original = self.store.source_correction_feedback(self.session_id, cycle_id)
+            cycle = next(c for c in self.store.source_cycles(self.session_id) if c["id"] == cycle_id)
+            payload = dict(payload)
+            if "feedback" in payload and payload["feedback"] != original:
+                payload["capacity_feedback"] = payload["feedback"]
+            payload.setdefault("scl_review_feedback", self.store.source_correction_scl_feedback(self.session_id, cycle_id))
+            payload.update(feedback=original, review_base=cycle["origin_base"])
         snapshot = self.store.snapshot(self.session_id)
         session = snapshot["session"]
         if (
@@ -718,6 +683,8 @@ class Coordinator:
             "item": item,
             "payload": payload,
         }
+        if predecessor and payload.get("source_cycle_id") and payload.get("kind") == "generate_spec":
+            return self.store.handoff_source_correction(self.session_id, payload["source_cycle_id"], predecessor["id"], item, digest(inputs), payload)
         return self.store.enqueue_job(self.session_id, loop, role, item, digest(inputs), payload)
 
     def _has_ancestral_spec_review(self, target: str, snapshot: dict) -> bool:
@@ -747,16 +714,18 @@ class Coordinator:
                 continue
             if self.stop.is_set():
                 return
+            if not self.store.source_transition_ready(self.session_id, job):
+                continue
             outcome = job["outcome"]
             if not outcome.get("exhausted"):
                 try:
                     self._advance(job, outcome)
-                except RemoteOutcomeUnknown as exc:
-                    self._event(
-                        "remote_reconciliation_pending", {"job_id": job["id"], "reason": str(exc)}
-                    )
+                except (RemoteOutcomeUnknown, SourceRemotePending) as exc:
+                    self._event("remote_reconciliation_pending", {"job_id": job["id"], "reason": str(exc)})
                     self.stop.set()
                     return
+                except (SourceBarrierHeld, SourceEpochStale):
+                    continue
                 except (
                     ValueError,
                     OSError,
@@ -776,6 +745,91 @@ class Coordinator:
                         },
                     )
             self.store.finish_transition(job["id"])
+        self._drain_source_cycles()
+
+    def _drain_source_cycles(self) -> None:
+        """Drain completed source passes."""
+        assert self.session_id
+        self.store.checkpoint_source_scl_failures(self.session_id)
+        snapshot = self.store.snapshot(self.session_id)
+        for cycle in self.store.source_cycles(self.session_id):
+            if cycle["status"] not in {"reviewing", "draining", "resolved"}:
+                continue
+            head, cycle_id = cycle["active_head"], cycle["id"]
+            if self.store.source_finalization_disposition(self.session_id, {"payload": {"kind": "review_final", "target_head": head, "source_cycle_id": cycle_id}}) == "held":
+                continue
+            current = self.store.source_pass(cycle_id, head)
+            if not current or current["status"] not in {"reviewing", "resolved"}:
+                continue
+            expected = json.loads(current["batch_ids"])["batch_ids"]
+            jobs = self.store.source_pass_jobs(self.session_id, cycle_id, head)
+            if jobs and self.store.source_finalization_disposition(self.session_id, jobs[0]) == "stale":
+                self.store.supersede_source_cycle(self.session_id, cycle_id, jobs[0])
+                continue
+            if len(jobs) != len(expected) * 2 or any(
+                job["status"] in {"queued", "running"}
+                or (job["status"] == "succeeded" and job["transition_status"] != "done") for job in jobs
+            ):
+                continue
+            decisions = {d["job_id"]: d for d in snapshot["decisions"] if d.get("review_kind") == "review_final_source"}
+            if any(job["status"] != "succeeded" or job["id"] not in decisions for job in jobs):
+                self.store.block_source_cycle(self.session_id, cycle_id, head, "invalid source pass")
+                continue
+            feedback = []
+            roles: dict[str, set[str]] = {}
+            reviewers: dict[str, set[str]] = {}
+            try:
+                for job in jobs:
+                    decision = decisions[job["id"]]
+                    scope = job["payload"]["source_batch"]
+                    self._validate_source_input(job, decision, scope)
+                    if decision["reviewer_id"] in [decision["author_id"], *job["payload"]["proposal"].get("prior_authors", [])]:
+                        raise ValueError("source reviewer is an author")
+                    roles.setdefault(scope["id"], set()).add(job["role"])
+                    reviewers.setdefault(scope["id"], set()).add(decision["reviewer_id"])
+                    feedback.append({"job_id": job["id"], "decision_id": decision["id"],
+                        "reviewer_id": decision["reviewer_id"], "result": job["outcome"]["result"],
+                        "input_manifest_sha256": decision["input_manifest_sha256"]})
+                if set(roles) != set(expected) or any(roles[key] != {"code-reviewer", "data-reviewer"}
+                        or len(reviewers[key]) != 2 for key in expected):
+                    raise ValueError("reviewers not independent")
+                proposal = jobs[0]["payload"]["proposal"]
+                check_id = jobs[0]["payload"]["check_evidence_id"]
+                evidence = next(e for e in snapshot["evidence"] if e.get("id") == check_id
+                        and e.get("check_key") == current["check_key"] and e.get("status") == "passed"
+                        and e.get("freshness") != "stale" and e.get("head") == head)
+                outcomes = [item["result"]["decision"] for item in feedback]
+                if all(value == "accept" for value in outcomes):
+                    coverage = self._final_source_coverage(proposal, evidence)
+                    self.store.resolve_source_pass(self.session_id, cycle_id, head)
+                    final = {**proposal, "source_coverage": coverage}
+                    final_job = {**jobs[0], "payload": {**jobs[0]["payload"], "source_coverage": coverage}}
+                    self._enqueue_reviewers(final_job, final, "review_final", evidence)
+                    self.store.mark_source_aggregate_scheduled(self.session_id, cycle_id, head)
+                elif "revise" in outcomes:
+                    payload = {"kind": "generate_spec", "target_head": head, "accepted_spec_base": head,
+                        "review_base": cycle["origin_base"], "root_item": cycle["root_item"],
+                        "source_cycle_id": cycle_id, "source_cycle_round": cycle["failed_passes"] + 1,
+                        "feedback": feedback, "surfaces": inventory(self.repo, head),
+                        "prior_authors": [*proposal.get("prior_authors", []), proposal["author_id"]],
+                        "source_checks": proposal.get("source_checks", []), "repair": proposal.get("repair")}
+                    inputs = {"head": snapshot["session"]["head"], "policy": self.config,
+                        "authority_digest": self.authority_digest, "tool_identity": self.tool_identity,
+                        "item": cycle["root_item"], "payload": payload}
+                    self.store.finalize_source_correction(self.session_id, cycle_id, head, feedback,
+                        cycle["root_item"], digest(inputs), payload,
+                        actionable=all(value in {"accept", "revise"} for value in outcomes),
+                        max_attempts=self.config["max_attempts"])
+                else:
+                    self.store.block_source_cycle(self.session_id, cycle_id, head, "review deferred")
+            except SourceRemotePending as exc:
+                self._event("remote_reconciliation_pending", {"reason": str(exc)})
+                self.stop.set()
+                return
+            except SourceBarrierHeld:
+                continue
+            except (ValueError, RuntimeError, KeyError, TypeError, StopIteration, OSError, subprocess.SubprocessError) as exc:
+                self.store.block_source_cycle(self.session_id, cycle_id, head, str(exc))
 
     @contextlib.contextmanager
     def _exclusive(self):
@@ -1089,7 +1143,7 @@ class Coordinator:
         checks = [*self.config["source_checks"], *proposal.get("source_checks", [])]
         required_paths = sorted({path for check in checks
                                  for path in [check["path"], *(case["path"] for case in check.get("counterexample_cases", []))]})
-        bindings = {"base": base, "head": head, "diff_digest": proposal["diff_digest"],
+        bindings = {"source_summary_schema": 2, "base": base, "head": head, "diff_digest": proposal["diff_digest"],
                     "policy_digest": self.authority_digest, "tool_identity": self.tool_identity,
                     "check_key": evidence["check_key"], "check_evidence_id": evidence["id"],
                     "required_paths": required_paths,
@@ -1131,40 +1185,53 @@ class Coordinator:
         return batches
 
     def _start_final_sources(self, job: dict, proposal: dict, evidence: dict) -> None:
+        assert self.session_id
         plan = self._final_source_plan(proposal, evidence)
         batches = self._final_source_batches(job, proposal, evidence, plan)
         if not batches:
             self._enqueue_reviewers(job, proposal, "review_final", evidence)
             return
+        continuing = "source_cycle_id" in job["payload"]
+        cycles = self.store.source_cycles(self.session_id)
+        if continuing:
+            prior = next((c for c in cycles if c["id"] == job["payload"]["source_cycle_id"]), None)
+            if not prior or git(self.repo, "merge-base", prior["active_head"], proposal["head"]) != prior["active_head"]:
+                raise ValueError("non-descendant source head")
+        else:
+            for existing in cycles:
+                if (existing["root_item"] == proposal.get("root_item", job["item_id"])
+                        and existing["origin_head"] != proposal["head"]
+                        and existing["status"] not in {"resolved", "aggregating"}
+                        and git(self.repo, "merge-base", existing["origin_head"], proposal["head"]) == existing["origin_head"]):
+                    raise ValueError("missing correction lineage")
+        cycle_id = job["payload"].get("source_cycle_id") or digest({
+            "session": self.session_id, "origin_head": proposal["head"],
+            "root_item": proposal.get("root_item", job["item_id"]),
+            "epoch": self.store.source_finalization_epoch(self.session_id, job["payload"]),
+        })
+        cycle = self.store.register_source_pass(
+            self.session_id, cycle_id, proposal.get("root_item", job["item_id"]),
+            proposal["head"], proposal["parent"], plan["id"], evidence["check_key"],
+            [scope["id"] for scope in batches], continuing=continuing,
+            initiator_job_id=job.get("id"), expected_active_head=prior["active_head"] if continuing else None,
+        )
         for scope in batches:
-            payload = {**job["payload"], "source_batch": scope,
+            payload = {**job["payload"], "source_cycle_id": cycle_id,
+                       "source_cycle_round": cycle["failed_passes"], "source_batch": scope,
                        "source_batch_ids": [batch["id"] for batch in batches],
                        "targetfiles": [item["path"] for item in scope["obligations"]
                                        if item["mode"] == "current-source"]}
             self._enqueue_reviewers({**job, "payload": payload}, proposal, "review_final_source", evidence)
 
     def _source_input_bindings(self, job: dict) -> dict:
-        payload = job["payload"]
-        proposal = payload["proposal"]
-        return {"schema_version": 1, "job_id": job["id"], "attempt": job["attempt"],
-                "session_id": self.session_id, "head": proposal["head"], "base": proposal["parent"],
-                "diff_digest": proposal["diff_digest"], "source_batch": payload["source_batch"],
-                "policy_digest": self.authority_digest, "tool_identity": self.tool_identity,
-                "check_key": payload["check_key"], "check_evidence_id": payload["check_evidence_id"]}
+        assert self.session_id
+        return autonomy_source_corrections.input_bindings(job, self.session_id, self.authority_digest, self.tool_identity)
 
     def _validate_source_input(self, job: dict, decision: dict, scope: dict) -> None:
-        outcome = job.get("outcome") or {}
-        if (job.get("status") != "succeeded" or outcome.get("status") != "succeeded"
-                or outcome.get("input_manifest_sha256") != decision.get("input_manifest_sha256")
-                or outcome.get("input_manifest") != decision.get("input_manifest")
-                or outcome.get("author_id") != decision.get("reviewer_id")
-                or outcome.get("head") != decision.get("head")
-                or outcome.get("diff_digest") != decision.get("diff_digest")
-                or outcome.get("result", {}).get("decision") != decision.get("decision")
-                or outcome.get("result", {}).get("summary") != decision.get("summary")
-                or outcome.get("result", {}).get("findings") != decision.get("findings")):
-            raise ValueError("source decision lacks matching fenced outcome")
-        autonomy_final_review.validate_findings(outcome["result"])
+        outcome = autonomy_source_corrections.source_decision_outcome(job, decision)
+        paths = {item["path"] for endpoint in (job["payload"]["proposal"]["parent"], job["payload"]["proposal"]["head"])
+                 for item in inventory(self.repo, endpoint)}
+        autonomy_source_corrections.validate_result(outcome["result"], scope, paths)
         context, _, _, _ = self._source_context(job["payload"]["proposal"]["head"], job)
         session = self.store.snapshot(self.session_id)["session"]
         autonomy_review_inputs.validate(self.repo, self.store.path.parent, job, decision,
@@ -1227,10 +1294,7 @@ class Coordinator:
     def _source_input_artifacts(self, job: dict, prompt: str, context: str) -> dict:
         assert self.session_id
         snapshot = self.store.snapshot(self.session_id)
-        live = next((item for item in snapshot["jobs"] if item["id"] == job["id"]), None)
-        if (not live or live["status"] != "running" or live["attempt"] != job["attempt"]
-                or live["lease_until"] <= self.clock()):
-            raise ValueError("source review input requires a live job lease")
+        autonomy_source_corrections.validate_live_source_job(snapshot, job, self.clock())
         return autonomy_review_inputs.persist(self.repo, self.store.path.parent, job, prompt,
                                               context, self._source_input_bindings(job))
 
@@ -1270,6 +1334,7 @@ class Coordinator:
                 seen.add(key)
                 plan.append(argv)
         return plan
+
 
     def _source_cases(self, head: str, deadline: float) -> list[dict]:
         from .source_verify import verify_source
@@ -1573,8 +1638,6 @@ class Coordinator:
             raise ValueError("agent cannot produce controller capacity outcomes")
         if result.get("status") != "succeeded":
             return result
-        if kind == "review_final_source":
-            autonomy_final_review.validate_findings(result["result"])
         # File contents are committed in Git; do not duplicate them or the raw
         # provider event stream into every durable job and review payload.
         if not isinstance(result.get("session_id"), str) or not result["session_id"]:
@@ -1584,7 +1647,7 @@ class Coordinator:
         if git(worktree, "rev-parse", "HEAD") != parent:
             raise ValueError("agent changed committed source")
         proposed_changes = result["result"].get("changes", [])
-        if proposed_changes:
+        if proposed_changes and not (kind == "review_final_source" and result["result"].get("decision") != "accept"):
             if kind.startswith("review_") or kind in {"adjudicate_defect", "adjudicate_domain"}:
                 raise ValueError("reviewers cannot propose file changes")
             if result["result"].get("decision") == "defer":
@@ -1606,7 +1669,7 @@ class Coordinator:
                 raise ValueError("proposal changed files outside its permitted scope")
             apply_changes(worktree, proposed_changes, kind=kind, protected_paths=protected)
         structured = dict(result["result"])
-        if "changes" in structured:
+        if "changes" in structured and kind != "review_final_source":
             structured["changes"] = [
                 {"path": item.get("path"), "operation": item.get("operation")}
                 for item in structured["changes"]
@@ -3108,11 +3171,13 @@ class Coordinator:
         if kind == "review_final_source":
             return (common + "Inspect only the specified source batch contribution against its records and relevant full diff. "
                     "Do not claim to review omitted files. Return summary as a JSON object encoded in the summary string "
-                    "with exactly findings (nonempty string) and unresolved_dependencies (array of strings). "
-                    "Report all substantive findings in summary and findings. For accept, requirements, claims, "
+                    "with schema_version 2, findings (nonempty string), unresolved_dependencies (array of strings), "
+                    "and spec_corrections (array of {collection, key, reason}). For revise, identify existing "
+                    "batch-linked requirement, claim, or surface targets explicitly; use an empty array otherwise. "
+                    "Report all substantive findings in summary and findings. For accept or revise, requirements, claims, "
                     "verification_requests, defects and changes must each be empty arrays; do not hide defects or "
-                    "requests there. Accept only when no dependency remains unresolved; "
-                    "this establishes reviewed correspondence, not a theorem.")
+                    "requests there. Defer suspected application defects as unresolved; never weaken intent. Accept or revise only with no unresolved dependency; otherwise defer. "
+                    "Correspondence is not a theorem.")
         if kind == "review_final" and job["payload"].get("source_coverage"):
             return (common + "Aggregate the verified current source-batch inspections and their findings with the "
                     "complete cumulative diff, records, current checks, controls and proof evidence. Assess coverage, "
@@ -3148,6 +3213,7 @@ class Coordinator:
             common
             + "Independently inspect actual source and all changes against recorded requirements. For fix, verification, and final reviews the controller supplies actual protected completion-gate and source-contract evidence in check_summary before acceptance review. Do not request those same checks again; if a genuinely missing method is needed, request a concrete additional executable command or defer with the unsupported gap. Return accept only for defensible correspondence; identify source/model gaps, weakened requirements, unsupported assumptions, hidden failures, unintended changes, and incomplete cases. Do not edit anything. Agent acceptance does not establish a theorem."
         )
+
 
     def _advance(self, job: dict, outcome: dict) -> None:
         assert self.session_id
@@ -3485,6 +3551,12 @@ class Coordinator:
                 {**job["payload"], "kind": "investigate_defect"},
             )
             return
+        if (kind == "generate_spec" and job["payload"].get("source_cycle_id")
+                and outcome.get("head") == job["payload"].get("target_head")
+                and result.get("decision") != "defer"):
+            self.store.block_source_cycle(self.session_id, job["payload"]["source_cycle_id"],
+                                          job["payload"]["target_head"], "correction made no change")
+            return
         if kind.startswith("generate_") or kind == "investigate_defect":
             if result["decision"] == "defer":
                 pending = outcome.get("context_pending", []) if kind == "generate_spec" else []
@@ -3531,6 +3603,7 @@ class Coordinator:
                         job["payload"].get("root_item", job["item_id"]),
                         {
                             "kind": "generate_spec",
+                            **{key: job["payload"][key] for key in ("source_cycle_id", "source_cycle_round") if key in job["payload"]},
                             "root_item": job["payload"].get("root_item", job["item_id"]),
                             "round": job["payload"].get("round", 0),
                             "target_head": outcome["head"],
@@ -3556,6 +3629,7 @@ class Coordinator:
                                 else {}
                             ),
                         },
+                        predecessor=job,
                     )
                 else:
                     self.store.put_record(
@@ -3654,8 +3728,6 @@ class Coordinator:
             ]
             if check_key != expected_key or len(matching) != 1:
                 raise ValueError("review lacks matching current protected checks")
-        if kind == "review_final_source":
-            autonomy_final_review.validate_findings(result)
         decision = {
             "id": record_id("record.7"),
             "job_id": job["id"],
@@ -3676,7 +3748,27 @@ class Coordinator:
                 "input_manifest": outcome["input_manifest"],
                 "input_manifest_sha256": outcome["input_manifest_sha256"]} if kind == "review_final_source" else {}),
         }
+        if kind == "review_final_source":
+            scope = job["payload"]["source_batch"]
+            if autonomy_final_review.identity({k: v for k, v in scope.items() if k != "id"}) != scope["id"]:
+                raise ValueError("source batch identity changed")
+            self._validate_source_input(job, decision, scope)
+            self.store.record_source_decision(self.session_id, job["payload"]["source_cycle_id"], decision)
+            return
         self.store.put_record(self.session_id, "decision", decision)
+        if kind == "review_spec" and job["payload"].get("source_cycle_id"):
+            cycle_id = job["payload"]["source_cycle_id"]
+            pair = self.store.source_scl_pair(self.session_id, cycle_id, cohort)
+            if not pair:
+                return
+            if any(r["result"].get("decision") != "accept" for r in pair):
+                if (any(r["result"].get("decision") not in {"accept", "revise"} for r in pair)
+                        or proposal.get("round", 0) + 1 >= self.config["max_attempts"]):
+                    self.store.block_source_cycle(self.session_id, cycle_id, self.store.source_cycle_head(self.session_id, cycle_id), "SCL review unresolved")
+                    return
+                payload = autonomy_source_corrections.scl_revision_payload(job, pair, inventory(self.repo, proposal["head"]))
+                self._enqueue("scl", "implementer", proposal["root_item"], payload, predecessor={"id": pair[0]["job_id"]})
+                return
         if result["decision"] != "accept":
             next_round = proposal.get("round", 0) + 1
             retry = result["decision"] == "revise" and next_round < self.config["max_attempts"]
@@ -3713,6 +3805,7 @@ class Coordinator:
                     root_item,
                     {
                         "kind": original_kind,
+                        **{key: job["payload"][key] for key in ("source_cycle_id", "source_cycle_round") if key in job["payload"]},
                         "target_head": proposal["head"],
                         "review_base": proposal["parent"],
                         "root_item": root_item,
@@ -3877,6 +3970,7 @@ class Coordinator:
                     "cas.inventory",
                     {
                         "kind": "generate_spec",
+                        **{key: job["payload"][key] for key in ("source_cycle_id", "source_cycle_round") if key in job["payload"]},
                         "target_head": proposal["head"],
                         "accepted_spec_base": proposal["head"],
                         "targetfiles": pending_paths,
@@ -3895,6 +3989,7 @@ class Coordinator:
                             | set(proposal.get("context_unavailable", []))
                         ),
                     },
+                    predecessor=job,
                 )
                 return
             self._enqueue(
@@ -3903,6 +3998,7 @@ class Coordinator:
                 "verification.inventory",
                 {
                     "kind": "generate_verification",
+                    **{key: job["payload"][key] for key in ("source_cycle_id", "source_cycle_round") if key in job["payload"]},
                     "target_head": proposal["head"],
                     "specification": fas,
                     "prior_authors": [*proposal.get("prior_authors", []), proposal["author_id"]],
@@ -3950,24 +4046,6 @@ class Coordinator:
                 ).hexdigest(),
             }
             self._request_reviews(job, final, "review_final")
-        elif kind == "review_final_source":
-            snapshot = self.store.snapshot(self.session_id)
-            evidence = next((item for item in snapshot["evidence"]
-                             if item.get("id") == check_id and item.get("check_key") == check_key
-                             and item.get("status") == "passed" and item.get("freshness") != "stale"), None)
-            if evidence is None:
-                raise ValueError("source review lacks current checks")
-            batch_ids = job["payload"].get("source_batch_ids", [])
-            if not batch_ids or any(len({d.get("reviewer_id") for d in snapshot["decisions"]
-                                         if d.get("source_batch_id") == batch_id
-                                         and d.get("decision") == "accept" and d.get("status") == "passed"}) < 2
-                                    for batch_id in batch_ids):
-                return
-            coverage = self._final_source_coverage(proposal, evidence, incomplete_ok=True)
-            if coverage is not None:
-                final_proposal = {**proposal, "source_coverage": coverage}
-                final_job = {**job, "payload": {**job["payload"], "source_coverage": coverage}}
-                self._enqueue_reviewers(final_job, final_proposal, "review_final", evidence)
         elif kind == "review_final":
             check_id = job["payload"].get("check_evidence_id")
             key = self._check_key(
@@ -3991,7 +4069,8 @@ class Coordinator:
             )
             if checked is None:
                 raise ValueError("final review lacks matching current protected checks")
-            self._publish({"payload": {"proposal": proposal, "reviews": decisions}}, checked)
+            self._publish({"payload": {"proposal": proposal, "reviews": decisions,
+                "source_cycle_id": job["payload"].get("source_cycle_id"), "source_job_id": job["id"]}}, checked)
 
     def _check_key(
         self, head: str, commands: list, source_checks: list, repair: dict | None
@@ -4015,43 +4094,7 @@ class Coordinator:
 
     @staticmethod
     def _check_summary(evidence: dict) -> dict:
-        checks = evidence.get("checks", [])
-        checks = sorted(checks, key=lambda item: item.get("status") == "passed")
-        sources = evidence.get("source", [])
-        sources = sorted(sources, key=lambda item: item.get("status") == "proved")
-        return {
-            "evidence_id": evidence["id"],
-            "head": evidence["head"],
-            "base": evidence["base"],
-            "status": evidence["status"],
-            "reason": str(evidence.get("reason", ""))[:500],
-            "check_key": evidence["check_key"],
-            "checks": [
-                {
-                    "command": c.get("command", []),
-                    "command_digest": digest(c.get("command", [])),
-                    "command_truncated": False,
-                    "status": c.get("status"),
-                    "returncode": c.get("returncode"),
-                    "tools": c.get("tools"),
-                    "stdout_excerpt": str(c.get("worker_result", {}).get("stdout", ""))[-500:],
-                    "stderr_excerpt": str(c.get("worker_result", {}).get("stderr", ""))[-500:],
-                    "reason": str(c.get("worker_result", {}).get("reason", ""))[:500],
-                }
-                for c in checks
-            ],
-            "checks_omitted": 0,
-            "source": sources,
-            "source_cases": evidence.get("source_cases", []),
-            "source_omitted": 0,
-            "repair_check": {
-                "status": (evidence.get("repair_check") or {}).get("status"),
-                "method": (evidence.get("repair_check") or {}).get("method"),
-                "reason": str((evidence.get("repair_check") or {}).get("reason", ""))[:500],
-            }
-            if evidence.get("repair_check") is not None
-            else None,
-        }
+        return autonomy_final_review.check_summary(evidence)
 
     def _handle_spec_capacity(
         self, job: dict, proposal: dict, exc: ReviewContextCapacity
@@ -4134,6 +4177,7 @@ class Coordinator:
                         if key in job["payload"]
                     },
                     "kind": "generate_spec",
+                    **{key: job["payload"][key] for key in ("source_cycle_id", "source_cycle_round") if key in job["payload"]},
                     "target_head": accepted_base,
                     "review_base": recovery_review_base,
                     "accepted_spec_base": accepted_base,
@@ -4149,6 +4193,7 @@ class Coordinator:
                         *([proposal["author_id"]] if "author_id" in proposal else []),
                     ],
                 },
+                predecessor=job,
             )
         return
 
@@ -4254,6 +4299,7 @@ class Coordinator:
                 "authority_digest": self.authority_digest,
                 "tool_identity": self.tool_identity,
                 **({"source_batch": payload["source_batch"]} if payload.get("source_batch") is not None else {}),
+                **{key: payload[key] for key in ("source_cycle_id", "source_cycle_round", "source_epoch") if key in payload},
                 **({"source_coverage": payload["source_coverage"]} if payload.get("source_coverage") is not None else {}),
             }
         )
@@ -4261,6 +4307,7 @@ class Coordinator:
     def _enqueue_reviewers(
         self, job: dict, proposal: dict, kind: str, evidence: dict | None = None
     ) -> None:
+        assert self.session_id
         # Each reviewer gets a separate detached source snapshot, never a shared worktree.
         proposal = {
             **proposal,
@@ -4269,6 +4316,9 @@ class Coordinator:
         check_id = evidence.get("id") if evidence else None
         check_key = evidence.get("check_key") if evidence else None
         review_payload = dict(job["payload"])
+        epoch = self.store.source_finalization_epoch(self.session_id, {**review_payload, "kind": kind})
+        if epoch:
+            review_payload["source_epoch"] = epoch
         if kind == "review_spec":
             review_payload["correspondence_refresh"] = self._spec_correspondence_refresh(proposal)
         cohort = self._review_cohort(kind, proposal, review_payload, check_id, check_key)
@@ -4296,6 +4346,7 @@ class Coordinator:
                     "check_summary": self._check_summary(evidence) if evidence else None,
                     **({"source_batch": job["payload"]["source_batch"], "source_batch_ids": job["payload"]["source_batch_ids"]} if job["payload"].get("source_batch") is not None else {}),
                     **({"source_coverage": job["payload"]["source_coverage"]} if job["payload"].get("source_coverage") is not None else {}),
+                    **{key: review_payload[key] for key in ("source_cycle_id", "source_cycle_round", "source_epoch") if key in review_payload},
                 },
             )
 
@@ -4311,6 +4362,8 @@ class Coordinator:
             raise ValueError("local authority changed before publication")
         proposal = job["payload"]["proposal"]
         head = proposal["head"]
+        if self.store.source_head_fenced(self.session_id, head):
+            raise ValueError("source head fenced before publication")
         branch = "mentat/" + self.session_id[:12] + "/" + head[:12]
         try:
             current_tools = current_tool_identity()
@@ -4381,6 +4434,7 @@ class Coordinator:
             )
             if any(path == FAS_PATH or path.startswith("openspec/specs/") for path in changed):
                 raise ValueError("changed specification lacks correspondence review")
+        self.store.qualify_source_aggregate(self.session_id, job["payload"].get("source_cycle_id"), head, reviews)
         merge_started = any(
             e["kind"] == "merge_started" and e["payload"].get("head") == head for e in prior_events
         )
@@ -4465,7 +4519,7 @@ class Coordinator:
                 )
                 return
         else:
-            self._event("publication_started", {"head": head, "base": session["base"]})
+            self.store.begin_remote_effect(self.session_id, "publication_started", {"head": head, "base": session["base"]}, job_id=job["payload"].get("source_job_id", job.get("id")))
             published = self.github.publish(
                 worktree, branch, "Add reviewed assurance artifacts", body
             )
@@ -4494,7 +4548,7 @@ class Coordinator:
                 e["kind"] == "merge_started" and e["payload"].get("head") == head for e in events
             ):
                 raise RemoteOutcomeUnknown("merge outcome unknown; inspect remote before retry")
-            self._event("merge_started", {"head": head, "base": session["base"]})
+            self.store.begin_remote_effect(self.session_id, "merge_started", {"head": head, "base": session["base"]}, job_id=job["payload"].get("source_job_id", job.get("id")))
         merged = self.github.merge(
             worktree,
             int(match.group(1)),

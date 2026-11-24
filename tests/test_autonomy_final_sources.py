@@ -38,8 +38,9 @@ def test_current_source_batches_precede_aggregate_and_publication(tmp_path, monk
                         'verification_requests': []}}
             if kind == 'review_final_source':
                 result['result']['summary'] = json.dumps({
+                    'schema_version': 2,
                     'findings': 'Inspected the supplied source and its mapped requirements.',
-                    'unresolved_dependencies': []})
+                    'unresolved_dependencies': [], 'spec_corrections': []})
             return result
 
     snapshot, _, github = run(repo, tmp_path, agent=SourceReviewAgent())
@@ -163,6 +164,9 @@ def test_current_source_batches_precede_aggregate_and_publication(tmp_path, monk
         def snapshot(self, session_id):
             assert session_id == coordinator.session_id
             return self.value
+
+        def source_head_fenced(self, session_id, head):
+            return store.source_head_fenced(session_id, head)
 
     coordinator.store = SnapshotStore(durable)
     assert coordinator._final_source_coverage(proposal, evidence)['batches']

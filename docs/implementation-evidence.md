@@ -102,6 +102,126 @@ removed sources explicit in the complete diff. It does not alter the old
 session, promote its deferrals or establish correctness by hash. Fresh review,
 complete native/Linux and protected gates, and a new real run remain required.
 
+## Source correction cycle after v12
+
+Actual v12 session `35e6ae7e5df842e89371451e98a5872e` reached candidate
+`f83523f63dd117f2f23b63908259823b1a89557b` with 13 accepted SCL cohorts,
+2,020 passing Linux tests and 53 documented skips, packaging and all 45
+protected fixtures, positive clamp and real faulty SAT/protected replay, and
+two accepting IVL reviewers. All 20 source reviewers received required vision
+support: 16 accepted and four requested revisions to generated specification
+claims. The generic path incorrectly routed those revisions to IVL, whose four
+retry reviewers deferred. No aggregate or publication followed. The old session
+and its actual decisions and input manifests remain historical.
+
+The proposed correction introduces version 2 source findings, scoped typed
+specification targets, a durable per-item correction cycle, and an atomic
+old-head fence and correction checkpoint. The approved vision clarifies the
+existing budget requirement as two hours per invocation with durable job,
+attempt and round limits on resume; no general deadline theorem is claimed.
+The existing complete check-evidence summary and citation-path normalization
+moved to pure final-review helpers without changing returned fields or path
+semantics. Bounded raw reviewer results rejected for proposing changes are
+privately retained for audit; they remain failed results and cannot become
+approvals or materialized edits.
+
+On the frozen development source, the targeted correction, ancestry and selected
+workflow/receipt checks passed 38 tests in 98.23 seconds. Two further direct
+missing-lineage and sibling tests passed; these prevent a descendant from
+silently starting a new cycle while allowing an unrelated work item. A broader
+four-module compatibility run passed 145 tests and had one nested offline build
+failure; that test passed separately with `UV_CACHE_DIR=/private/tmp/mentat-uv-cache`
+and `UV_OFFLINE=1`. Scoped Ruff, candidate-interpreter Pyright, whitespace,
+FAS lineage and the 298-surface inventory checks passed. These development
+checks do not replace independent review, complete native/Linux/package and
+45-fixture protected gates, or a fresh real self-run before readiness.
+
+Independent review of the first cycle candidate found that foreign heads could
+bypass its exact-head fence and that an authorized correction could not hand off
+a smaller frontier. The revised candidate uses a durable session-wide
+finalization barrier and atomic correction-successor handoffs. Independent
+investigation remains available while foreign canonical transitions and remote
+effects wait; unresolved remote effects require reconciliation. Policy and
+citation-entry helpers moved without changing their existing interfaces.
+
+The original candidate failed 13 targeted barrier and handoff regressions. On
+the revised frozen source, a focused run passed 57 cases; three fixture failures
+were subsequently corrected. The aggregate budget case then passed, and both
+real 14-file, multi-chunk correction workflows passed in 62.85 seconds,
+including stale predecessor rejection, fresh reviewer cohorts and publication.
+These are development tests with disposable state, not a real self-run or an
+independent acceptance of this candidate. New exact-commit reviews, complete
+native/Linux and package gates, all 45 protected fixtures, and a fresh real
+self-run remain pending.
+
+Both independent reviews rejected candidate `985b440417debd036d5ab7f7ac7af673464fd7a9`:
+an SCL reviewer revision during source correction created an unauthorized stale
+retry and discarded the original source feedback. The revised implementation
+waits for the complete authenticated reviewer pair and atomically hands off one
+retry with both reviewer results and the original source feedback. An exhausted
+reviewer checkpoints the correction, leaving the barrier in place. Existing
+source-pass and SCL retry limits remain separate. Source input outcome and lease
+checks moved to pure helpers with unchanged coordinator interfaces.
+
+The independent Git/Codex-adapter regression failed on the rejected candidate. On the
+revised frozen source, nine focused cases passed, including both reviewer arrival
+orders, revising and deferring peers, exhausted peers, lease expiry, resume,
+replay, and preserving critique through a later frontier handoff. The broader
+correction/runtime run passed 89 cases; four large-context fixture failures were
+corrected and those four passed separately on the same production hashes.
+Candidate-interpreter Pyright and scoped Ruff passed. New independent exact-head
+reviews, full native/Linux/package gates, protected fixtures and a fresh real
+self-run remain pending.
+
+Both independent reviewers accepted
+`6dd40d58b790c1fb82f63a03bda1adac153dc79e`. Its canonical native suite finished
+with 2,112 passes, 53 documented skips and three failures in 1,196.37 seconds;
+Linux finished with 2,113 passes, 53 skips and two failures in 417.13 seconds.
+Both package checks, fast checks, Ruff, Pyright and the 298-path FAS inventory
+passed, and all 235 recorded source/script/test hashes matched before and after.
+The protected checker was held because the completion suites failed.
+
+Independent diagnosis traced all failures to two fixtures: a synthetic snapshot
+proxy lacked the new real Store guard, and the atomic race expected an old
+head-fence message where the session-wide barrier correctly rejected the effect.
+The proxy now delegates actual Store operations while retaining its injected
+snapshot. The race asserts `SourceBarrierHeld`, exactly one winner and no
+unauthorized remote-start event. The three original failures and two additional
+deterministic barrier cases passed in 51.72 seconds; Ruff and whitespace checks
+passed. Production module hashes are unchanged. These targeted results do not
+replace new exact-head review, full completion and protected gates, or the
+required actual self-run.
+
+The next candidate, `5e57a5349eeed583247a701852d800211b2ade6d`, received
+both independent review acceptances. Its native run was interrupted with one
+signal to the verified pytest coordinator after a new failure: 1,202 passed,
+28 skipped and one failure in 237.98 seconds. This was a partial diagnostic,
+not a completed gate; all owned processes were confirmed terminated. Independent
+diagnosis found a fixture dependency race: a failing first SCL reviewer never
+signaled the event awaited by its peer, while another interleaving skipped the
+intended ordering. The fixture now waits for the first reviewer's persisted
+terminal outcome, including its third-attempt exhaustion. Eight focused cases
+passed in 176.79 seconds with the original deadlines and retry limits.
+
+The Linux suite at that head completed with 2,116 passes, 53 skips and one failure
+in 383.87 seconds: the thirteen-case evidence test returned `incomplete` without
+reporting the nested reason. Serial diagnostics passed on macOS (5.37 seconds)
+and the existing isolated Linux worker (3.97 seconds), including both positive
+proofs and all thirteen counterexample replays. Those passes do not establish the
+original cause or classify it as a transient failure. The assertion now reports
+bounded per-source and per-case reasons, retaining every existing completeness
+and replay assertion. Solver and session timeouts remain unchanged. Both package
+checks, static checks, FAS accounting and the 235-file frozen hash comparison
+passed; the protected checker remained held. Fresh complete gates are required.
+
+The paused v12 checkpoint was archived as recoverable trusted-local evidence at
+`/Users/mattfaltyn/.local/state/mentat-self-assurance/controller-history/20261124T060800Z-v12-paused-checkpoint`;
+its manifest SHA-256 is `46e1c0a77466cef246eef90b87b82f1b9c6d2b2db82c80840ec149edac2a2d72`.
+An independent completion audit reported 71 retired worktrees and refs removed
+and the canonical paused database logical dump unchanged. Restore the archived
+checkpoint before resuming that historical session; the archive is not a remote
+or OS-immutable attestation.
+
 ## Local workflow foundation
 
 PR [47](https://github.com/hypertrial/mentat/pull/47) merged as

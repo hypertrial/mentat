@@ -116,7 +116,7 @@
     {
       "id": "ce55ac49-b6d5-5469-833f-b5262a895ea1",
       "area": "nonfunctional",
-      "statement": "Sessions run at most two hours, three agents concurrently, and three unsuccessful rounds per unchanged item, preserving durable limits across resume.",
+      "statement": "Each invocation runs at most two hours with at most three agents concurrently; jobs, attempts and the limit of three unsuccessful rounds per unchanged item remain durable across resume.",
       "origin": "intended",
       "spec_path": "openspec/specs/autonomous-assurance/spec.md",
       "citations": [
@@ -125,6 +125,15 @@
           "source": "approved product baseline, 2026-11-23"
         }
       ],
+      "revision": {
+        "version": 2,
+        "previous_digest": "5dce14074b117f57219e79a8accf1931eed26127f4a43740460e602b775c7564",
+        "reason": "Clarify the per-invocation time limit while retaining durable work limits on resume.",
+        "evidence": [
+          {"path": "docs/vision.md", "revision": "924e4f417328bcea67b3aa899ba1d8ea85126f0a", "source": "Approved vision specifies two-hour invocations, three concurrent agents, three unsuccessful rounds per unchanged item and durable resume."},
+          {"path": "docs/implementation-plan.md", "revision": "924e4f417328bcea67b3aa899ba1d8ea85126f0a", "source": "Versioned implementation decisions preserve invocation limits and durable attempts across resume."}
+        ]
+      },
       "status": "unattempted"
     },
     {
@@ -791,6 +800,12 @@
     },
     {
       "path": "src/mentat/autonomy_runtime.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
+    },
+    {
+      "path": "src/mentat/autonomy_source_corrections.py",
       "status": "gap",
       "requirement_ids": [],
       "reason": "Awaiting independently reviewed source correspondence."
@@ -1788,6 +1803,12 @@
         "2bcfa241-162e-5b32-8b37-79deae3acd37"
       ],
       "note": "Regression specification for candidate-bound solver counterexamples, protected replay, policy minima and review context; test execution is separate exact-revision evidence."
+    },
+    {
+      "path": "tests/test_autonomy_source_corrections.py",
+      "status": "gap",
+      "requirement_ids": [],
+      "reason": "Awaiting independently reviewed source correspondence."
     },
     {
       "path": "tests/test_autonomy_state.py",

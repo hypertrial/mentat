@@ -78,8 +78,9 @@ class Agent:
             "result": {
                 "decision": "accept",
                 "summary": json.dumps({
+                    "schema_version": 2,
                     "findings": "Inspected the supplied source and its mapped requirements.",
-                    "unresolved_dependencies": [],
+                    "unresolved_dependencies": [], "spec_corrections": [],
                 }) if kind == "review_final_source" else "accepted",
                 "findings": [],
                 "verification_requests": [],
@@ -3605,6 +3606,8 @@ def test_chained_spec_reviews_reach_noop_verification_and_full_final_review(repo
             path = store.path
             def snapshot(self, session_id):
                 return late_ancestor
+            def __getattr__(self, name):
+                return getattr(store, name)
         coordinator.store = LateSnapshot()
         git(repo, 'checkout', '-q', '--detach', candidate['head'])
         candidate_proposal = {'head': candidate['head'], 'parent': snapshot['session']['base'],
