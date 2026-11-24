@@ -4,12 +4,44 @@ This is an ordinary trusted local file, not a signed attestation or identity sys
 """
 
 import copy
+import hashlib
 import json
 import os
 import tempfile
 from pathlib import Path
 
 from . import autonomy_private_merge
+
+
+def workspace_state_path(repo: Path, state_root: Path) -> Path:
+    root = state_root.expanduser().resolve()
+    if root.is_relative_to(repo.resolve()):
+        raise ValueError("autonomy state must be outside the application repository")
+    root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    return (
+        root / "workspaces" / hashlib.sha256(str(repo.resolve()).encode()).hexdigest() / "state.db"
+    )
+
+
+def workspace_config(repo: Path, model: str) -> dict:
+    local, worker = minimum_gates(repo)
+    return {
+        "schema_version": 1,
+        "model": model,
+        "reasoning_effort": "high",
+        "session_seconds": 7200,
+        "concurrency": 3,
+        "max_attempts": 3,
+        "auto_merge": bool(local or worker),
+        "base_branch": "main",
+        "remote": "origin",
+        "local_checks": local,
+        "worker_checks": worker,
+        "source_checks": minimum_source_checks(repo),
+        "worker": "mentat-autonomy",
+        "scope": "all first-party application surfaces; trust boundaries and gaps remain explicit",
+    }
+
 
 
 def _commands(value: object) -> list[list[str]]:

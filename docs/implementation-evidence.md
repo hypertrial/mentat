@@ -992,3 +992,9 @@ composition. Session `cd44c20820d94478a6a0614044afdd4a` ended blocked after
 A controller-owned, candidate-bound counterexample case with trusted isolated
 replay and complete reviewer evidence is required. Prior fixture results remain
 historical; no application-wide or translator-correctness theorem is claimed.
+
+## Draft free/private merge policy
+
+The user authorized isolated preparation of a private, zero-cost controller merge policy on 2026-11-24. The versioned decision in docs/decisions/private-repository-merging.md records its intended controls and tradeoffs. The protected mode remains the default. No paid plan, visibility change, Titanic activation or remote merge was performed.
+
+Hardened development checks passed 67 focused private-policy/runtime cases (28.38s) and 9 existing publication/resume/tool-identity cases (71.08s). The real GitHub server advertised atomic support in a successful no-write dry run with identical remote refs before and after; actual PR merged-state behavior remains to be demonstrated after acceptance. These checks do not replace independent code/security/state review or full native/Linux/package/protected gates.

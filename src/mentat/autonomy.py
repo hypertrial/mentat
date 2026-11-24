@@ -21,12 +21,13 @@ from typing import Any
 
 from . import (
     autonomy_final_review,
+    autonomy_private_merge,
     autonomy_review_inputs,
     autonomy_source_corrections,
     gitio,
     process,
 )
-from .autonomy_policy import check_policy, load_policy_path, minimum_gates, minimum_source_checks
+from .autonomy_policy import check_policy, load_policy_path, workspace_config, workspace_state_path
 from .autonomy_runtime import git
 from .autonomy_state import (
     SourceBarrierHeld,
@@ -89,33 +90,11 @@ def current_tool_identity() -> dict:
 
 
 def state_path(repo: Path, state_root: Path) -> Path:
-    root = state_root.expanduser().resolve()
-    if root.is_relative_to(repo.resolve()):
-        raise ValueError("autonomy state must be outside the application repository")
-    root.mkdir(parents=True, exist_ok=True, mode=0o700)
-    return (
-        root / "workspaces" / hashlib.sha256(str(repo.resolve()).encode()).hexdigest() / "state.db"
-    )
+    return workspace_state_path(repo, state_root)
 
 
 def default_config(repo: Path) -> dict:
-    local, worker = minimum_gates(repo)
-    return {
-        "schema_version": 1,
-        "model": MODEL,
-        "reasoning_effort": "high",
-        "session_seconds": 7200,
-        "concurrency": 3,
-        "max_attempts": 3,
-        "auto_merge": bool(local or worker),
-        "base_branch": "main",
-        "remote": "origin",
-        "local_checks": local,
-        "worker_checks": worker,
-        "source_checks": minimum_source_checks(repo),
-        "worker": "mentat-autonomy",
-        "scope": "all first-party application surfaces; trust boundaries and gaps remain explicit",
-    }
+    return workspace_config(repo, MODEL)
 
 
 def _source_timeout(configured: object, remaining: float) -> int:
@@ -4351,11 +4330,11 @@ class Coordinator:
                 },
             )
 
-    def _publish(self, job: dict, evidence: dict) -> None:
+    def _publication_guard(self, job: dict, evidence: dict) -> bool:
         assert self.session_id
         session = self.store.snapshot(self.session_id)["session"]
         if self.stop.is_set() or self.clock() >= session["deadline"]:
-            return
+            return False
         if (
             self.authority_digest
             and digest(load_policy_path(self.store.path)) != self.authority_digest
@@ -4365,7 +4344,6 @@ class Coordinator:
         head = proposal["head"]
         if self.store.source_head_fenced(self.session_id, head):
             raise ValueError("source head fenced before publication")
-        branch = "mentat/" + self.session_id[:12] + "/" + head[:12]
         try:
             current_tools = current_tool_identity()
         except (OSError, ValueError, RuntimeError, TimeoutError) as exc:
@@ -4436,6 +4414,19 @@ class Coordinator:
             if any(path == FAS_PATH or path.startswith("openspec/specs/") for path in changed):
                 raise ValueError("changed specification lacks correspondence review")
         self.store.qualify_source_aggregate(self.session_id, job["payload"].get("source_cycle_id"), head, reviews)
+        return True
+
+    def _publish(self, job: dict, evidence: dict) -> None:
+        if not self._publication_guard(job, evidence):
+            return
+        assert self.session_id
+        session = self.store.snapshot(self.session_id)["session"]
+        proposal = job["payload"]["proposal"]
+        head, reviews = proposal["head"], job["payload"]["reviews"]
+        worktree = Path(proposal["worktree"])
+        branch = "mentat/" + self.session_id[:12] + "/" + head[:12]
+        prior_events = self.store.snapshot(self.session_id)["events"]
+        autonomy_private_merge.bind_gateway(self, job, evidence)
         merge_started = any(
             e["kind"] == "merge_started" and e["payload"].get("head") == head for e in prior_events
         )

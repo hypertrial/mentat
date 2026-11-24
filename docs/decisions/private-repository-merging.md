@@ -33,3 +33,29 @@ Retain the controller's existing durable remote-effect marker before any write. 
 ## Verification and handoff
 
 Run lightweight focused tests and static checks locally first. Independent adversarial review, full native/Linux/package/protected gates and exact-head acceptance are required before adoption. The main chat owns that integration and activation. Never change the controller identity in a running assurance session. The protected Mentat self-run remains protected; Titanic opt-in follows accepted integration and readiness.
+
+## Hardened operation identity and transport
+
+Pin the immutable repository ID/node ID and owner ID/node ID alongside its exact name and private visibility. Recheck those fields, write access and the same-repository PR at mutation and recovery boundaries. Reject repository-local URL rewrites, includes, SSH command/transport overrides and implicit push settings. The runtime Git adapter clears inherited Git environment variables and disables system/global Git configuration; explicit canonical SSH URLs are used for private reads and writes. Trusted user SSH configuration and its authentication agent remain part of the disclosed local trust boundary. No independent transport or account attestation is claimed.
+
+Before any push, persist the exact original head/base/tree, private policy identity, publication job, authority/tool/evidence/review bindings, derived merge OID and bounded raw commit bytes in the existing SQLite journal under its immediate transaction, source barrier and epoch checks. Revalidate the full publication guard and active authorization again at the write boundary. The persisted intent is immutable; a same-tree/same-parent commit with a different OID is never adopted. The bounded raw object permits exact recovery if an unreferenced local prepared object was pruned. Derived commits use the explicit local-controller service identity rather than requiring global Git author configuration.
+
+Only the exact recorded merge OID with its exact tested tree and ordered base/head parents can reconcile. GitHub PR metadata may retain the original approved head or report the authorized derived head; both are explicit allowed observations only when the actual merge OID equals that durable intent. A closed-unmerged, unrelated or unconfirmed PR remains incomplete.
+
+The atomic Git transaction fences only the two ref OIDs. PR open/closed state, private visibility, access permissions, local tools and session state are observations rechecked before dispatch, not values locked by GitHub together with the refs. A metadata change after the final observation may coexist with applied refs. Preserve and reconcile those refs; never claim that the metadata change was atomically rejected, roll back history, repeat an uncertain write or manufacture a successful PR merge.
+
+## Development evidence (not acceptance)
+
+The isolated branch is based on main 43b75826cc83835c7a070bb874c053bfaa2937fb. After initial fixture routing corrections, the hardened focused private-policy/runtime set passed 67 cases in 28.38s. Existing publication/resume/tool-identity cases passed 9 in 71.08s. These include real disposable Git receive-pack transactions, but GitHub API metadata in those tests is mocked. Initial development results are not substituted for the hardened results.
+
+A no-write GitHub capability check at 2026-11-24T08:05:29Z observed the real server advertising `atomic`, with successful `--atomic --dry-run` and unchanged before/after remote-ref digests (6b237ce8586ce5b65ca1f7d6a297ddaf9e2a46bcc12105c9513dacc98970b08c). Private evidence is `/private/tmp/mentat-private-atomic-capability.json`. This establishes advertised capability only; a live PR merge has not been attempted. Actual GitHub merged-state recognition remains for the accepted private workflow demonstration.
+
+Independent reviews and complete native/Linux/package/protected gates remain required before activation. No Titanic files, database, policy, hosted workflows, visibility or billing settings were changed during preparation.
+
+## Dispatch and original publication binding
+
+The durable intent also binds the original PR number, immutable PR ID/node ID and exact publication URL. Reconciliation uses that original identity rather than adopting a replacement PR on the same branch.
+
+Preparation and dispatch are distinct durable events. A capability dry run and all preflight checks occur before dispatch. With no dispatch marker, this implementation has not started a ref write and may proceed after fresh guards. Immediately before the real push, an SQLite transaction revalidates authority, source job, tools, evidence binding, source barrier/epoch and active deadline, and records dispatch exactly once. An unchanged/open remote snapshot after that marker remains unknown; it never authorizes another write, including after resume. Only positive confirmation of the exact recorded merge intent can complete a dispatched operation. The controller never mints a replacement intent to bypass this uncertainty.
+
+This first delivery deliberately provides no automatic retry after a genuinely unknown dispatched network outcome. It checkpoints honestly until the exact result can be observed. A bounded identical-CAS reissue design would be a separate contract and is not implemented. Healthy normal delivery remains automatic. GitHub PR creation/search is explicitly scoped to the pinned repository, independently of gh's default-repository selection.

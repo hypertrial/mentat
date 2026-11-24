@@ -4,6 +4,7 @@ import hashlib
 import json
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -11,6 +12,7 @@ from mentat import autonomy_private_merge as private
 from mentat import autonomy_runtime as runtime
 from mentat.autonomy import default_config, state_path, validate_config
 from mentat.autonomy_policy import check_policy, load_policy_path, pin_policy
+from mentat.autonomy_state import Store
 
 NAME = "org/private"
 URL = "git@github.com:org/private.git"
@@ -38,24 +40,65 @@ class Remote:
         run(self.repo, "commit", "-qam", "candidate")
         self.head = run(self.repo, "rev-parse", "HEAD")
         self.tree = run(self.repo, "rev-parse", "HEAD^{tree}")
-        self.branch = "mentat/012345abcdef/" + self.head[:12]
+        self.store = Store(root / "state" / "state.db")
+        self.sid = self.store.new_session(
+            str(self.repo), self.base, self.head, {}, now=0, deadline=7200
+        )
+        self.branch = "mentat/" + self.sid[:12] + "/" + self.head[:12]
         run(self.repo, "branch", "-m", self.branch)
         subprocess.run(["git", "init", "-q", "--bare", str(self.bare)], check=True)
         run(self.repo, "remote", "add", "origin", str(self.bare))
         run(self.repo, "push", "-q", "origin", "main", self.branch)
         self.policy = {
             "mode": "controller-private",
+            "repository_id": 101,
+            "repository_node_id": "R_fixture",
+            "owner_id": 42,
+            "owner_node_id": "O_fixture",
             "repository": NAME,
             "host": "github.com",
             "visibility": "private",
             "remote": "origin",
             "base_branch": "main",
         }
-        self.calls, self.pushes = [], []
+        self.authority = private._digest(self.policy)
+        self.tools = {"fixture": "trusted"}
+        self.store.append_event(self.sid, "authority_pinned", {"digest": self.authority})
+        self.store.append_event(self.sid, "toolchain_pinned", {"identity": self.tools})
+        self.job_id = self.store.enqueue_job(
+            self.sid,
+            "ivl",
+            "verifier",
+            "fixture",
+            "fixture",
+            {"kind": "final_checks", "target_head": self.head},
+        )
+        claimed = self.store.claim_job(self.sid, "fixture", now=1)
+        assert claimed is not None
+        self.store.finish_job(self.job_id, claimed["lease_token"], {"status": "succeeded"}, now=2)
+        self.store.append_event(
+            self.sid,
+            "publication",
+            {
+                "head": self.head,
+                "base": self.base,
+                "result": {"status": "succeeded", "url": f"https://github.com/{NAME}/pull/7"},
+            },
+        )
+        self.calls, self.pushes, self.preflights = [], [], []
         self.race = None
         self.cancel_on_prepare = False
+        self.late_metadata = None
+        self.closed_without_merge = False
+        self.push_permission = True
         self.active = True
+        self.guard_calls = 0
+        self.reject_guard_after = None
+        self.expire_guard_after = None
+        self.clock_now = 3
         self.unknown_after_push = False
+        self.lost_push_reply = False
+        self.lag_after_push = 0
         self.visibility = True
         self.api_override = None
         self.original_git = runtime.git
@@ -71,18 +114,25 @@ class Remote:
         # execute against the real disposable receive-pack, using file transport.
         if repo == self.repo and args == ("remote", "get-url", "origin"):
             return URL
-        if args[0] == "push":
+        if args[0] == "push" and "--dry-run" in args:
+            self.preflights.append(args)
+        if args[0] == "push" and "--dry-run" not in args:
             self.pushes.append(args)
+            if self.late_metadata:
+                self.late_metadata()
             if self.race:
                 target, oid = self.race
                 run(self.bare, "update-ref", "refs/heads/" + target, oid)
+        if args[0] in {"fetch", "ls-remote", "push"}:
             args = tuple(str(self.bare) if a == URL else a for a in args)
         value = (
             run(repo, *args)
             if repo == self.repo and args[0] in {"fetch", "ls-remote", "push"}
             else self.original_git(repo, *args)
         )
-        if args[0] == "commit-tree" and self.cancel_on_prepare:
+        if args[0] == "push" and "--dry-run" not in args and self.lost_push_reply:
+            raise RuntimeError("lost actual push acknowledgement")
+        if "commit-tree" in args and self.cancel_on_prepare:
             self.active = False
         return value
 
@@ -91,12 +141,22 @@ class Remote:
         merged = head == base and head != self.head
         return {
             "number": 7,
+            "id": 707,
+            "node_id": "PR_fixture",
             "html_url": f"https://github.com/{NAME}/pull/7",
-            "state": "closed" if merged else "open",
-            "merged": merged,
-            "head": {"sha": head, "ref": self.branch, "repo": {"full_name": NAME}},
-            "base": {"sha": base, "ref": "main", "repo": {"full_name": NAME}},
-            "merge_commit_sha": head if merged else None,
+            "state": "closed" if merged or self.closed_without_merge else "open",
+            "merged": merged and not self.closed_without_merge,
+            "head": {
+                "sha": head,
+                "ref": self.branch,
+                "repo": {"full_name": NAME, "id": 101, "node_id": "R_fixture"},
+            },
+            "base": {
+                "sha": base,
+                "ref": "main",
+                "repo": {"full_name": NAME, "id": 101, "node_id": "R_fixture"},
+            },
+            "merge_commit_sha": head if merged and not self.closed_without_merge else None,
         }
 
     def gh(self, repo, *args):
@@ -134,17 +194,25 @@ class Remote:
             return json.dumps(
                 {
                     "full_name": NAME,
+                    "id": 101,
+                    "node_id": "R_fixture",
+                    "owner": {"id": 42, "node_id": "O_fixture", "login": "org"},
                     "private": self.visibility,
                     "html_url": f"https://github.com/{NAME}",
                     "default_branch": "main",
                     "archived": False,
-                    "permissions": {"push": True},
+                    "permissions": {"push": self.push_permission},
                 }
             )
         if path.endswith("/files?per_page=100"):
             return '[{"filename":"app.py"}]'
         if path == f"repos/{NAME}/pulls/7":
-            return json.dumps(self.pr())
+            pr = self.pr()
+            if self.pushes and self.lag_after_push:
+                self.lag_after_push -= 1
+                pr.update(state="open", merged=False, merge_commit_sha=None)
+                pr["head"]["sha"], pr["base"]["sha"] = self.head, self.base
+            return json.dumps(pr)
         if "/commits/" in path:
             oid = path.rsplit("/", 1)[1]
             return json.dumps(
@@ -158,8 +226,34 @@ class Remote:
             )
         raise AssertionError(path)
 
-    def gateway(self):
-        return runtime.GitHub([["verify"]], merge_policy=self.policy)
+    def gateway(self, reviews=None):
+        gateway = runtime.GitHub([["verify"]], merge_policy=self.policy)
+        actual_reviews = self.evidence()[1] if reviews is None else reviews
+
+        def guard(job, evidence):
+            self.guard_calls += 1
+            if self.expire_guard_after is not None and self.guard_calls > self.expire_guard_after:
+                self.clock_now = 7200
+            return self.reject_guard_after is None or self.guard_calls <= self.reject_guard_after
+
+        controller = SimpleNamespace(
+            github=gateway,
+            store=self.store,
+            session_id=self.sid,
+            authority_digest=self.authority,
+            tool_identity=self.tools,
+            clock=lambda: self.clock_now,
+            _publication_guard=guard,
+        )
+        private.bind_gateway(
+            controller,
+            {
+                "id": self.job_id,
+                "payload": {"proposal": {"head": self.head}, "reviews": actual_reviews},
+            },
+            {"id": "fixture", "check_key": "fixture"},
+        )
+        return gateway
 
     def evidence(self):
         diff = runtime.gitio.run(
@@ -189,7 +283,14 @@ class Remote:
 
     def merge(self, checks=None, reviews=None):
         good_checks, good_reviews = self.evidence()
-        return self.gateway().merge(
+        if not any(e["kind"] == "merge_started" for e in self.store.snapshot(self.sid)["events"]):
+            self.store.begin_remote_effect(
+                self.sid,
+                "merge_started",
+                {"head": self.head, "base": self.base},
+                job_id=self.job_id,
+            )
+        return self.gateway(reviews).merge(
             self.repo,
             7,
             self.head,
@@ -246,7 +347,7 @@ def test_server_without_atomic_support_never_falls_back(remote):
     result = remote.merge()
     assert result["status"] == "incomplete"
     assert remote.ref("main") == remote.base and remote.ref(remote.branch) == remote.head
-    assert len(remote.pushes) == 1
+    assert len(remote.pushes) == 0 and len(remote.preflights) == 1
 
 
 @pytest.mark.parametrize(
@@ -294,12 +395,15 @@ def test_cancellation_after_preparation_prevents_dispatch(remote):
     assert remote.ref("main") == remote.base
 
 
-def test_lost_push_response_is_reconciled_without_repeating_write(remote):
-    remote.unknown_after_push = True
+@pytest.mark.parametrize("lost", ["push", "confirmation"])
+def test_lost_push_response_is_reconciled_without_repeating_write(remote, lost):
+    remote.unknown_after_push = lost == "confirmation"
+    remote.lost_push_reply = lost == "push"
     assert remote.merge()["status"] == "incomplete"
     oid = remote.ref("main")
     assert oid == remote.ref(remote.branch) and oid != remote.base
     remote.unknown_after_push = False
+    remote.lost_push_reply = False
     outcome = remote.gateway().reconcile(remote.repo, remote.branch, remote.head, remote.base)
     assert outcome["state"] == "merged" and outcome["merge_commit"] == oid
     assert len(remote.pushes) == 1
@@ -315,7 +419,7 @@ def test_reconciliation_refuses_changed_binding(remote, change):
         def override(path):
             if change == "head" and path.endswith("/pulls/7"):
                 pr = remote.pr()
-                pr["head"]["sha"] = remote.head
+                pr["head"]["sha"] = "f" * 40
                 return pr
             if "/commits/" in path:
                 oid = path.rsplit("/", 1)[1]
@@ -383,6 +487,10 @@ def test_private_policy_cannot_rewrite_existing_protected_policy(remote, tmp_pat
 def test_malformed_or_expanded_private_policy_rejected(key, value):
     value = {
         "mode": "controller-private",
+        "repository_id": 101,
+        "repository_node_id": "R_fixture",
+        "owner_id": 42,
+        "owner_node_id": "O_fixture",
         "repository": NAME,
         "host": "github.com",
         "visibility": "private",
@@ -392,3 +500,448 @@ def test_malformed_or_expanded_private_policy_rejected(key, value):
     }
     with pytest.raises(ValueError):
         runtime.GitHub([["verify"]], merge_policy=value)
+
+
+@pytest.mark.parametrize("lag", [2, 100])
+def test_lagging_github_state_is_bounded_and_never_repeats_push(remote, lag):
+    remote.lag_after_push = lag
+    result = remote.merge()
+    assert result["status"] == ("succeeded" if lag == 2 else "incomplete")
+    assert remote.ref("main") == remote.ref(remote.branch)
+    assert len(remote.pushes) == 1
+    remote.lag_after_push = 0
+    assert (
+        remote.gateway().reconcile(remote.repo, remote.branch, remote.head, remote.base)["state"]
+        == "merged"
+    )
+    assert len(remote.pushes) == 1
+
+
+def test_sensitive_changes_still_need_two_distinct_reviewers(remote):
+    remote.api_override = lambda path: (
+        [{"filename": ".github/workflows/check.yml"}]
+        if path.endswith("/files?per_page=100")
+        else None
+    )
+    checks, reviews = remote.evidence()
+    assert remote.merge(checks, reviews)["status"] == "incomplete"
+    assert not remote.pushes
+    reviews.append({**reviews[0], "reviewer_id": "second-independent"})
+    assert remote.merge(checks, reviews)["status"] == "succeeded"
+
+
+def test_default_mode_does_not_downgrade_on_protection_api_failure(remote, monkeypatch):
+    original = remote.gh
+
+    def gh(repo, *args):
+        if args[-1].endswith("/protection"):
+            raise RuntimeError("HTTP403 unavailable on this plan")
+        return original(repo, *args)
+
+    monkeypatch.setattr(runtime, "_gh", gh)
+    checks, reviews = remote.evidence()
+    result = runtime.GitHub([["verify"]]).merge(
+        remote.repo, 7, remote.head, remote.base, checks=checks, reviews=reviews, active=True
+    )
+    assert result["status"] == "incomplete" and not remote.pushes
+
+
+def test_cli_init_explicit_private_policy(remote, tmp_path):
+    from typer.testing import CliRunner
+
+    from mentat.cli import app
+
+    (remote.repo / "verify.py").touch()
+    (remote.repo / "titanic.csv").touch()
+    result = CliRunner().invoke(
+        app,
+        [
+            "--state",
+            str(tmp_path / "state"),
+            "init",
+            "--repo",
+            str(remote.repo),
+            "--merge-policy",
+            "controller-private",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    value = json.loads(result.output)
+    assert value["local_policy"]["merge_policy"] == remote.policy
+    assert value["local_policy"]["schema_version"] == 3
+    assert not remote.pushes
+
+
+@pytest.mark.parametrize("change", ["closed", "visibility", "permissions"])
+def test_late_metadata_change_is_not_claimed_atomic_or_successful(remote, change):
+    def late():
+        if change == "closed":
+            remote.closed_without_merge = True
+        elif change == "visibility":
+            remote.visibility = False
+        else:
+            remote.push_permission = False
+
+    remote.late_metadata = late
+    result = remote.merge()
+    assert result["status"] == "incomplete"
+    assert remote.ref("main") == remote.ref(remote.branch) != remote.base
+    assert len(remote.pushes) == 1
+    records = [
+        e
+        for e in remote.store.snapshot(remote.sid)["events"]
+        if e["kind"] == "private_merge_prepared"
+    ]
+    assert len(records) == 1 and records[0]["payload"]["intent"]["merge_commit"] == remote.ref(
+        "main"
+    )
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "url.https://elsewhere.test/.insteadOf",
+        "url.https://elsewhere.test/.pushInsteadOf",
+        "core.sshCommand",
+        "include.path",
+        "remote.origin.pushurl",
+        "remote.origin.receivepack",
+        "push.followTags",
+    ],
+)
+def test_local_transport_overrides_rejected_before_network_write(remote, key):
+    value = "true" if key == "push.followTags" else "/not-used"
+    run(remote.repo, "config", key, value)
+    assert remote.merge()["status"] == "incomplete"
+    assert not remote.pushes and remote.ref("main") == remote.base
+
+
+def test_immutable_repository_identity_change_blocks_same_name(remote):
+    def override(path):
+        if path == f"repos/{NAME}":
+            return {
+                "full_name": NAME,
+                "id": 999,
+                "node_id": "R_other",
+                "owner": {"id": 42, "node_id": "O_fixture", "login": "org"},
+                "private": True,
+                "html_url": f"https://github.com/{NAME}",
+                "default_branch": "main",
+                "archived": False,
+                "permissions": {"push": True},
+            }
+        return None
+
+    remote.api_override = override
+    assert remote.merge()["status"] == "incomplete" and not remote.pushes
+
+
+def test_exact_intent_rejects_same_shape_spoofed_commit(remote):
+    assert remote.merge()["status"] == "succeeded"
+    intended = remote.ref("main")
+    spoof = run(
+        remote.repo,
+        "commit-tree",
+        remote.tree,
+        "-p",
+        remote.base,
+        "-p",
+        remote.head,
+        "-m",
+        "other actor same tree and parents",
+    )
+    run(remote.repo, "push", "-q", "origin", spoof + ":refs/heads/spoof-object")
+    run(remote.bare, "update-ref", "refs/heads/main", spoof)
+    run(remote.bare, "update-ref", "refs/heads/" + remote.branch, spoof)
+    assert spoof != intended
+    assert (
+        remote.gateway().reconcile(remote.repo, remote.branch, remote.head, remote.base)["status"]
+        == "incomplete"
+    )
+    assert len(remote.pushes) == 1
+
+
+def test_prepared_intent_restores_exact_commit_after_local_object_loss(remote):
+    run(remote.bare, "config", "receive.advertiseAtomic", "false")
+    assert remote.merge()["status"] == "incomplete"
+    row = remote.store.private_merge_intent(
+        remote.sid, remote.head, remote.base, remote.branch, remote.authority
+    )
+    assert row is not None
+    oid = row["intent"]["merge_commit"]
+    (remote.repo / ".git" / "objects" / oid[:2] / oid[2:]).unlink()
+    run(remote.bare, "config", "receive.advertiseAtomic", "true")
+    assert remote.merge()["status"] == "succeeded"
+    assert remote.ref("main") == oid
+    assert (
+        len(
+            [
+                e
+                for e in remote.store.snapshot(remote.sid)["events"]
+                if e["kind"] == "private_merge_prepared"
+            ]
+        )
+        == 1
+    )
+
+
+def test_derived_commit_does_not_require_global_git_author_configuration(remote):
+    run(remote.repo, "config", "--unset", "user.name")
+    run(remote.repo, "config", "--unset", "user.email")
+    assert remote.merge()["status"] == "succeeded"
+    assert (
+        run(remote.bare, "show", "-s", "--format=%an <%ae>", remote.ref("main"))
+        == "Mentat local controller <mentat@localhost>"
+    )
+
+
+def test_reconciliation_accepts_original_approved_head_metadata(remote):
+    assert remote.merge()["status"] == "succeeded"
+
+    def override(path):
+        if path.endswith("/pulls/7"):
+            pr = remote.pr()
+            pr["head"]["sha"] = remote.head
+            return pr
+        return None
+
+    remote.api_override = override
+    assert (
+        remote.gateway().reconcile(remote.repo, remote.branch, remote.head, remote.base)["state"]
+        == "merged"
+    )
+
+
+def test_private_gateway_without_durable_authority_cannot_merge(remote):
+    checks, reviews = remote.evidence()
+    gateway = runtime.GitHub([["verify"]], merge_policy=remote.policy)
+    assert (
+        gateway.merge(
+            remote.repo, 7, remote.head, remote.base, checks=checks, reviews=reviews, active=True
+        )["status"]
+        == "incomplete"
+    )
+    assert not remote.pushes
+
+
+@pytest.mark.parametrize("lost", ["guard", "deadline"])
+def test_authorization_revalidated_after_intent_and_before_write(remote, lost):
+    if lost == "guard":
+        remote.reject_guard_after = 1
+    else:
+        remote.expire_guard_after = 1
+    assert remote.merge()["status"] == "incomplete"
+    assert not remote.pushes and remote.ref("main") == remote.base
+    assert remote.guard_calls == 2
+    assert (
+        len(
+            [
+                e
+                for e in remote.store.snapshot(remote.sid)["events"]
+                if e["kind"] == "private_merge_prepared"
+            ]
+        )
+        == 1
+    )
+
+
+def test_closed_unmerged_pr_is_never_dispatched(remote):
+    remote.closed_without_merge = True
+    assert remote.merge()["status"] == "incomplete"
+    assert not remote.pushes and remote.ref("main") == remote.base
+    assert (
+        remote.gateway().reconcile(remote.repo, remote.branch, remote.head, remote.base)["status"]
+        == "incomplete"
+    )
+
+
+def test_independently_merged_same_shape_without_intent_is_not_adopted(remote):
+    oid = run(
+        remote.repo,
+        "commit-tree",
+        remote.tree,
+        "-p",
+        remote.base,
+        "-p",
+        remote.head,
+        "-m",
+        "unrecorded same-shape merge",
+    )
+    run(
+        remote.repo,
+        "push",
+        "-q",
+        "origin",
+        oid + ":refs/heads/main",
+        oid + ":refs/heads/" + remote.branch,
+    )
+    assert (
+        remote.gateway().reconcile(remote.repo, remote.branch, remote.head, remote.base)["status"]
+        == "incomplete"
+    )
+    assert not remote.pushes
+
+
+@pytest.mark.parametrize("field", ["repository_node_id", "owner_id", "owner_node_id"])
+def test_other_immutable_identity_components_are_checked(remote, field):
+    if field == "owner_id":
+        remote.policy[field] = 999
+    else:
+        remote.policy[field] += "changed"
+    assert remote.merge()["status"] == "incomplete" and not remote.pushes
+
+
+def test_runtime_git_neutralizes_inherited_git_transport_environment(tmp_path, monkeypatch):
+    monkeypatch.setenv("GIT_SSH_COMMAND", "malicious-command")
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "url.attacker.insteadOf")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "git@github.com:")
+    captures = []
+
+    def fake(argv, **kwargs):
+        captures.append(kwargs["env"])
+        return (1, b"", b"") if "config" in argv else (0, b"", b"")
+
+    monkeypatch.setattr(runtime.process, "run", fake)
+    runtime.git(tmp_path, "ls-remote", URL)
+    assert len(captures) == 2
+    for env in captures:
+        assert not any(
+            k in env
+            for k in (
+                "GIT_SSH_COMMAND",
+                "GIT_CONFIG_COUNT",
+                "GIT_CONFIG_KEY_0",
+                "GIT_CONFIG_VALUE_0",
+            )
+        )
+        assert env["GIT_CONFIG_GLOBAL"] == "/dev/null"
+        assert env["GIT_ALLOW_PROTOCOL"] == "ssh"
+
+
+def test_worktree_local_transport_override_is_rejected(remote):
+    run(remote.repo, "config", "extensions.worktreeConfig", "true")
+    run(remote.repo, "config", "--worktree", "core.sshCommand", "not-executed")
+    assert remote.merge()["status"] == "incomplete"
+    assert not remote.pushes
+
+
+def test_dispatched_but_unchanged_remote_is_unknown_and_never_replayed(remote):
+    gateway = remote.gateway()
+    prepare_dispatch = gateway.private_dispatch
+
+    def stop_after_journal(intent):
+        prepare_dispatch(intent)
+        raise RuntimeError("interrupted after dispatch marker before client invocation")
+
+    gateway.private_dispatch = stop_after_journal
+    checks, reviews = remote.evidence()
+    remote.store.begin_remote_effect(
+        remote.sid,
+        "merge_started",
+        {"head": remote.head, "base": remote.base},
+        job_id=remote.job_id,
+    )
+    result = gateway.merge(
+        remote.repo, 7, remote.head, remote.base, checks=checks, reviews=reviews, active=True
+    )
+    assert result["status"] == "incomplete" and not remote.pushes
+    assert remote.ref("main") == remote.base and remote.ref(remote.branch) == remote.head
+    row = remote.store.private_merge_intent(
+        remote.sid, remote.head, remote.base, remote.branch, remote.authority
+    )
+    assert row is not None and row["dispatched"] is True
+    remote.store = Store(remote.store.path)
+    assert (
+        remote.gateway().reconcile(remote.repo, remote.branch, remote.head, remote.base)["status"]
+        == "incomplete"
+    )
+    assert remote.merge()["status"] == "incomplete" and not remote.pushes
+    assert len(remote.preflights) == 1
+
+
+def test_replacement_pr_cannot_inherit_original_publication_identity(remote, monkeypatch):
+    gateway = remote.gateway()
+    dispatch = gateway.private_dispatch
+
+    def interrupt(intent):
+        dispatch(intent)
+        raise RuntimeError("in-flight outcome unknown")
+
+    gateway.private_dispatch = interrupt
+    remote.store.begin_remote_effect(
+        remote.sid,
+        "merge_started",
+        {"head": remote.head, "base": remote.base},
+        job_id=remote.job_id,
+    )
+    checks, reviews = remote.evidence()
+    assert (
+        gateway.merge(
+            remote.repo, 7, remote.head, remote.base, checks=checks, reviews=reviews, active=True
+        )["status"]
+        == "incomplete"
+    )
+    original = remote.gh
+
+    def replaced(repo, *args):
+        if args[:2] == ("pr", "list"):
+            return json.dumps(
+                [
+                    {
+                        "number": 8,
+                        "url": f"https://github.com/{NAME}/pull/8",
+                        "headRefName": remote.branch,
+                        "headRefOid": remote.head,
+                        "baseRefName": "main",
+                        "baseRefOid": remote.base,
+                        "state": "OPEN",
+                        "isCrossRepository": False,
+                    }
+                ]
+            )
+        assert not args[-1].endswith("/pulls/8")
+        return original(repo, *args)
+
+    monkeypatch.setattr(runtime, "_gh", replaced)
+    assert (
+        remote.gateway().reconcile(remote.repo, remote.branch, remote.head, remote.base)["status"]
+        != "found"
+    )
+    assert not remote.pushes
+    row = remote.store.private_merge_intent(
+        remote.sid, remote.head, remote.base, remote.branch, remote.authority
+    )
+    assert row["intent"]["pr_number"] == 7 and row["intent"]["pr_id"] == 707
+
+
+def test_second_dispatch_authorization_is_rejected_by_sqlite_journal(remote):
+    assert remote.merge()["status"] == "succeeded"
+    row = remote.store.private_merge_intent(
+        remote.sid, remote.head, remote.base, remote.branch, remote.authority
+    )
+    payload = {k: v for k, v in row.items() if k != "dispatched"}
+    with pytest.raises(ValueError, match="never repeat"):
+        remote.store.begin_remote_effect(
+            remote.sid, "private_merge_dispatched", payload, job_id=remote.job_id, now=4
+        )
+    assert len(remote.pushes) == 1
+
+
+def test_private_publication_pins_github_repository_explicitly(remote, tmp_path, monkeypatch):
+    original = remote.gh
+    calls = []
+
+    def gh(repo, *args):
+        if args[:2] == ("pr", "create"):
+            calls.append(args)
+            assert args[args.index("--repo") + 1] == f"https://github.com/{NAME}"
+            return f"https://github.com/{NAME}/pull/7"
+        return original(repo, *args)
+
+    monkeypatch.setattr(runtime, "_gh", gh)
+    body = tmp_path / "body.md"
+    body.write_text("Reviewed fixture only")
+    result = remote.gateway().publish(remote.repo, remote.branch, "Reviewed fixture", body)
+    assert result["status"] == "succeeded" and len(calls) == 1
+    assert remote.ref("main") == remote.base

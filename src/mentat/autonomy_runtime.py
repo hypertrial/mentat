@@ -1102,6 +1102,9 @@ class GitHub:
     def __init__(self, required_checks: list[list[str]] | None = None, *, merge_policy: dict | None = None) -> None:
         self.required_checks = required_checks
         self.merge_policy = autonomy_private_merge.validate_policy(merge_policy)
+        self.private_prepare: Callable[[dict], None] | None = None
+        self.private_dispatch: Callable[[dict], None] | None = None
+        self.private_lookup: Callable[[str, str, str], dict | None] | None = None
 
     def reconcile(self, repo: Path, branch: str, expected_head: str, expected_base: str) -> dict:
         """Read remote PR state after an ambiguous publish or squash-merge response."""
@@ -1110,10 +1113,17 @@ class GitHub:
         try:
             policy = autonomy_private_merge.validate_policy(self.merge_policy)
             fields = "number,url,state,headRefName,headRefOid,baseRefName,baseRefOid,isCrossRepository,mergeCommit"
-            rows = json.loads(_gh(repo, "pr", "list", "--state", "all", "--head", branch, "--base", "main", "--limit", "100", "--json", fields))
+            rows = json.loads(_gh(repo, "pr", "list", *(("--repo", "https://github.com/" + policy["repository"]) if policy is not None else ()), "--state", "all", "--head", branch, "--base", "main", "--limit", "100", "--json", fields))
             if not isinstance(rows, list) or len(rows) >= 100:
                 return {"status": "incomplete", "reason": "pull request search is incomplete"}
-            matches = [row for row in rows if isinstance(row, dict) and row.get("headRefName") == branch and (row.get("headRefOid") == expected_head or policy is not None) and row.get("baseRefName") == "main" and row.get("isCrossRepository") is False]
+            expected_pr = None
+            if policy is not None:
+                if not callable(self.private_lookup):
+                    return {"status": "incomplete", "reason": "durable private merge authority unavailable"}
+                saved = self.private_lookup(expected_head, expected_base, branch)
+                if saved is not None:
+                    expected_pr = saved["intent"]["pr_number"] if saved.get("intent") else saved.get("publication_pr_number")
+            matches = [row for row in rows if isinstance(row, dict) and row.get("headRefName") == branch and (expected_pr is None or row.get("number") == expected_pr) and (row.get("headRefOid") == expected_head or policy is not None) and row.get("baseRefName") == "main" and row.get("isCrossRepository") is False]
             if not matches:
                 return {"status": "not_found", "reason": "no matching PR observed; absence is not proof of no prior publish"}
             if len(matches) != 1:
@@ -1124,7 +1134,9 @@ class GitHub:
             if policy is not None:
                 def api(path: str) -> Any:
                     return json.loads(_gh(repo, "api", "--hostname", policy["host"], path))
-                return autonomy_private_merge.reconcile(repo, policy, branch, pr["number"], expected_head, expected_base, git, api)
+                if not callable(self.private_lookup):
+                    return {"status": "incomplete", "reason": "durable private merge authority unavailable"}
+                return autonomy_private_merge.reconcile(repo, policy, branch, pr["number"], expected_head, expected_base, git, api, self.private_lookup)
             if pr.get("state") == "OPEN":
                 if pr.get("baseRefOid") != expected_base:
                     return {"status": "incomplete", "reason": "pull request base changed"}
@@ -1161,7 +1173,9 @@ class GitHub:
             if not (remote.startswith("git@") or remote.startswith("ssh://")):
                 raise ValueError("origin must use SSH")
             git(repo, "push", remote if policy is not None else "origin", f"HEAD:refs/heads/{branch}")
-            url = _gh(repo, "pr", "create", "--base", "main", "--head", branch, "--title", title, "--body-file", str(body_file.resolve())).strip()
+            url = _gh(repo, "pr", "create", *(("--repo", "https://github.com/" + policy["repository"]) if policy is not None else ()), "--base", "main", "--head", branch, "--title", title, "--body-file", str(body_file.resolve())).strip()
+            if policy is not None and not re.fullmatch(r"https://github\.com/" + re.escape(policy["repository"]) + r"/pull/[1-9][0-9]*", url):
+                return {"status": "failed", "error": "private publication identity is unconfirmed"}
             return {"status": "succeeded", "url": url}
         except (OSError, RuntimeError, TimeoutError, ValueError) as exc:
             return {"status": "failed", "error": str(exc)}
@@ -1178,10 +1192,8 @@ class GitHub:
         if len(set(required_commands)) != len(required_commands):
             return {"status": "incomplete", "reason": "duplicate required check"}
         try:
-            name = json.loads(_gh(repo, "repo", "view", "--json", "nameWithOwner"))["nameWithOwner"]
             policy = autonomy_private_merge.validate_policy(self.merge_policy)
-            if policy is not None and name != policy["repository"]:
-                return {"status": "incomplete", "reason": "pinned private repository changed"}
+            name = policy["repository"] if policy is not None else json.loads(_gh(repo, "repo", "view", "--json", "nameWithOwner"))["nameWithOwner"]
             def api(path: str) -> Any:
                 args = ("--hostname", policy["host"]) if policy is not None else ()
                 return json.loads(_gh(repo, "api", *args, path))
@@ -1194,7 +1206,7 @@ class GitHub:
                 bypass = ((protection.get("required_pull_request_reviews") or {}).get("bypass_pull_request_allowances") or {})
                 if required.get("strict") is not True or (protection.get("enforce_admins") or {}).get("enabled") is not True or any(bypass.get(key) for key in ("users", "teams", "apps")):
                     return {"status": "incomplete", "reason": "branch protection is not strict or permits bypass"}
-            git(repo, "fetch", "origin", "+refs/heads/main:refs/remotes/origin/main")
+            git(repo, "fetch", autonomy_private_merge.remote_url(policy) if policy is not None else "origin", "+refs/heads/main:refs/remotes/origin/main")
             if git(repo, "rev-parse", "--verify", "refs/remotes/origin/main^{commit}") != expected_base:
                 return {"status": "incomplete", "reason": "base changed"}
             pr = api(f"repos/{name}/pulls/{pr_number}")
@@ -1220,7 +1232,9 @@ class GitHub:
             if len(reviewers) < (2 if sensitive else 1):
                 return {"status": "incomplete", "reason": "not enough independent reviews"}
             if policy is not None:
-                return autonomy_private_merge.merge(repo, policy, pr_number, expected_head, expected_base, git, api, is_active)
+                if not callable(self.private_prepare) or not callable(self.private_lookup) or not callable(self.private_dispatch):
+                    return {"status": "incomplete", "reason": "durable private merge authority unavailable"}
+                return autonomy_private_merge.merge(repo, policy, pr_number, expected_head, expected_base, git, api, is_active, self.private_prepare, self.private_lookup, self.private_dispatch)
             rulesets = api(f"repos/{name}/rulesets?includes_parents=true&per_page=100")
             if not isinstance(rulesets, list) or len(rulesets) >= 100:
                 return {"status": "incomplete", "reason": "repository rulesets are not fully visible"}

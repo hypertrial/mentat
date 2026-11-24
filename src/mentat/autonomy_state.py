@@ -871,9 +871,9 @@ class Store:
             db.commit()
             return job_id
 
-    def begin_remote_effect(self, session_id: str, kind: str, payload: dict, *, job_id: str | None = None) -> None:
+    def begin_remote_effect(self, session_id: str, kind: str, payload: dict, *, job_id: str | None = None, now: float | None = None) -> None:
         """Atomically fence remote writes against the first source revision."""
-        if kind not in {"publication_started", "merge_started"}:
+        if kind not in {"publication_started", "merge_started", "private_merge_prepared", "private_merge_dispatched"}:
             raise ValueError("invalid remote effect")
         with self._connect() as db:
             db.execute("BEGIN IMMEDIATE")
@@ -886,8 +886,59 @@ class Store:
                     raise SourceEpochStale("remote effect lacks current epoch authority")
             if db.execute("SELECT 1 FROM source_correction_fences WHERE session_id=? AND head=?", (session_id, payload["head"])).fetchone():
                 raise ValueError("source head fenced before remote effect")
+            if kind in {"private_merge_prepared", "private_merge_dispatched"}:
+                session = self._session(db, session_id)
+                intent = payload.get("intent")
+                if (not isinstance(intent, dict) or intent.get("head") != payload["head"]
+                        or intent.get("base") != payload["base"] or payload.get("source_job_id") != job_id):
+                    raise ValueError("private merge intent lost its source binding")
+                if (payload["base"] != session["base"] or not isinstance(payload.get("authority_digest"), str)
+                        or not payload["authority_digest"] or not isinstance(payload.get("tool_identity"), dict)
+                        or not payload["tool_identity"] or not payload.get("evidence_id") or not payload.get("check_key")):
+                    raise ValueError("private merge authority or evidence binding is incomplete")
+                if now is None or session["status"] != "running" or _time(now) >= session["deadline"]:
+                    raise ValueError("private merge session is not active")
+                job = db.execute("SELECT status,payload,outcome FROM jobs WHERE id=? AND session_id=?", (job_id, session_id)).fetchone()
+                if not job or job["status"] != "succeeded":
+                    raise ValueError("private merge lacks a durable source job")
+                source, outcome = json.loads(job["payload"]), json.loads(job["outcome"])
+                if (source.get("kind") not in {"review_final", "final_checks"} or source.get("target_head") != payload["head"]
+                        or outcome.get("exhausted") or (source.get("kind") == "review_final" and outcome.get("result", {}).get("decision") != "accept")):
+                    raise ValueError("private merge source job is not qualified")
+                pins = [json.loads(row[0]).get("digest") for row in db.execute("SELECT payload FROM events WHERE session_id=? AND kind='authority_pinned'", (session_id,))]
+                tools = [json.loads(row[0]).get("identity") for row in db.execute("SELECT payload FROM events WHERE session_id=? AND kind='toolchain_pinned'", (session_id,))]
+                if pins != [payload.get("authority_digest")] or tools != [payload.get("tool_identity")]:
+                    raise ValueError("private merge authority or tool identity changed")
+                if not db.execute("SELECT 1 FROM events WHERE session_id=? AND kind='merge_started' AND json_extract(payload,'$.head')=? AND json_extract(payload,'$.base')=?", (session_id, payload["head"], payload["base"])).fetchone():
+                    raise ValueError("private merge lacks a durable remote-effect marker")
+                prior = [json.loads(row[0]) for row in db.execute("SELECT payload FROM events WHERE session_id=? AND kind='private_merge_prepared' AND json_extract(payload,'$.head')=? AND json_extract(payload,'$.base')=?", (session_id, payload["head"], payload["base"]))]
+                if kind == "private_merge_dispatched":
+                    if prior != [payload]:
+                        raise ValueError("private merge dispatch lacks its exact prepared intent")
+                    if db.execute("SELECT 1 FROM events WHERE session_id=? AND kind='private_merge_dispatched' AND json_extract(payload,'$.head')=? AND json_extract(payload,'$.base')=?", (session_id, payload["head"], payload["base"])).fetchone():
+                        raise ValueError("private merge dispatch outcome is unknown; never repeat the write")
+                elif prior:
+                    if prior != [payload]:
+                        raise ValueError("private merge intent conflicts with the pinned operation")
+                    db.commit()
+                    return
             self._event(db, session_id, kind, payload)
             db.commit()
+
+    def private_merge_intent(self, session_id: str, head: str, base: str, branch: str, authority_digest: str) -> dict | None:
+        with self._connect() as db:
+            rows = [json.loads(row[0]) for row in db.execute("SELECT payload FROM events WHERE session_id=? AND kind='private_merge_prepared' AND json_extract(payload,'$.head')=? AND json_extract(payload,'$.base')=?", (session_id, head, base))]
+            dispatches = [json.loads(row[0]) for row in db.execute("SELECT payload FROM events WHERE session_id=? AND kind='private_merge_dispatched' AND json_extract(payload,'$.head')=? AND json_extract(payload,'$.base')=?", (session_id, head, base))]
+        if not rows:
+            if dispatches:
+                raise ValueError("private merge dispatch lost its prepared intent")
+            return None
+        if dispatches and dispatches != rows:
+            raise ValueError("private merge dispatch identity is ambiguous")
+        if (len(rows) != 1 or rows[0].get("authority_digest") != authority_digest
+                or rows[0].get("intent", {}).get("branch") != branch):
+            raise ValueError("private merge intent authority is ambiguous or changed")
+        return {**rows[0], "dispatched": bool(dispatches)}
 
     @staticmethod
     def _source_fenced(db: sqlite3.Connection, session_id: str, payload: dict, job_id: str | None = None) -> bool:
