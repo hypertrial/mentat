@@ -71,5 +71,3 @@ def acceptable(project: Project, approved: dict, record: dict) -> bool:
         and not any(record.get(key) != value for key, value in scope(project).items())
         and record.get("approval") == approved
     )
-
-
