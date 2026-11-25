@@ -1,6 +1,11 @@
 # Autonomous Mentat implementation
 
-Status: implementation in progress. Baseline: `f4486141fd257cbb6c205552606e6bee572081f3`.
+The agreed pre-Titanic readiness scope passed on 2026-11-25. The protected
+self-run qualified and merged the current headless observation. See the
+[readiness handoff](implementation-evidence.md#mentat-readiness-handoff) for
+the tested revisions, local artifacts, and remaining assurance gaps.
+
+The implementation baseline was `f4486141fd257cbb6c205552606e6bee572081f3`.
 
 This is the ready implementation specification approved on 2026-11-23. Product authority is the versioned [vision](vision.md), derived from the [Notion page](https://app.notion.com/p/Hypertrial-Mentat-419fbf156f898000ae6cf59282e35137). Do not begin Titanic onboarding until the Mentat readiness checks pass.
 

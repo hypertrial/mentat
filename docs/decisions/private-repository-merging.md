@@ -1,6 +1,9 @@
 # Private repository merges without paid GitHub features
 
-Status: implementation proposal authorized for preparation and independent review on 2026-11-24. Not activated or accepted yet.
+The private merge policy passed independent verification and real disposable
+GitHub qualification on 2026-11-25. Each target still requires an explicitly
+pinned private policy and all configured gates.
+[Rehearsal evidence](../implementation-evidence.md#real-private-repair-and-reconciliation)
 
 ## User decision and current evidence
 
@@ -64,12 +67,12 @@ This first delivery deliberately provides no automatic retry after a genuinely u
 
 An unresolved dispatched write fences all new sessions and other dispatches in the same workspace state database, transactionally. The fence clears only after positive confirmation of the exact recorded merge intent, including both remote refs at the derived commit. A new state directory is a separate local authority and cannot inspect another state's journal; operators must preserve and reuse the authoritative state, and separate state directories are not coordinated. Reconciliation fails closed if either ref is unavailable or has moved. Controller-side binary diffs disable text conversion as well as external diff drivers.
 
-## Receive-pack transaction revision — implementation awaiting acceptance
+## Receive-pack transaction revision
 
 Independent real-Git probing established that ordinary `git push --atomic` can omit a ref already at the target OID, even with an explicit lease for its former value. It therefore cannot establish the approved two-old-value contract. Do not activate the existing b39 candidate. This decision replaces its proposed Git push transport with one bounded, single-shot SSH receive-pack transaction sending both explicit `(old, new, ref)` commands, including when either ref may already be at the target. Require server-advertised `atomic` and `report-status` and compatible object format; no sequential fallback. The server advertisement is an early diagnostic, not the compare-and-swap itself.
 
 Prepare a bounded Git-generated pack before dispatch; do not construct Git objects manually. In the same SSH process, strictly parse the bounded receive-pack advertisement, revalidate publication authority and durable intent, then journal dispatch immediately before sending both commands and the pack. Bound every read/write, pack size, subprocess lifetime and cleanup. Parse the full status response, not just process exit: the receive-pack may exit zero when it reports `ng`. Any malformed, incomplete or ambiguous post-dispatch response remains unknown and cannot authorize a replay. A missing capability or pre-dispatch preparation failure never marks a dispatch.
 
-Regress baseline success, main already at target, PR already at target, concurrent distinct OIDs on either ref, missing atomic support, `ng` with exit zero, malformed/truncated advertisement/status, timeout/cancellation, and lost acknowledgement. A traditional bidirectional receive-pack fixture is required in addition to the independent local `--stateless-rpc` probe. GitHub's advertised capability is evidence of availability only; actual PR merged-state behavior remains unverified until the accepted workflow demonstration. PR metadata and visibility remain outside the ref transaction.
+Regress baseline success, main already at target, PR already at target, concurrent distinct OIDs on either ref, missing atomic support, `ng` with exit zero, malformed/truncated advertisement/status, timeout/cancellation, and lost acknowledgement. A traditional bidirectional receive-pack fixture is required in addition to the independent local `--stateless-rpc` probe. The disposable workflow observed the merged GitHub PR and both refs at the controller's recorded commit. PR metadata and visibility remain outside the ref transaction.
 
 The implementation uses a dedicated receive-pack module and fingerprints it with the loaded controller execution sources. Cleanup signals the owned process group and bounds child reaping; if the operating system denies group signaling, direct-child fallback cannot guarantee descendant termination and is reported as failure, never transport success. A post-dispatch cleanup failure retains the unknown-outcome journal and strict no-replay fence. Normal cleanup and the permission-error path have separate regressions. These controls are tested implementation properties, not a formal proof of Git, SSH, the operating system or the whole application.
