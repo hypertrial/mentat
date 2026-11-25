@@ -889,16 +889,15 @@ def compare_runs(
     return result
 
 
-def acceptance_status(state, record, digest):
-    from .evidence_report import decision_source
-
+def acceptance_receipt(state, record, digest):
+    """Return a validated receipt and whether a receipt file exists."""
     path = state / "acceptances" / (record["run_id"] + ".json")
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except FileNotFoundError:
-        return "Not recorded"
+        return None, False
     except OSError:
-        return "Invalid or mismatched receipt"
+        return None, True
     try:
         with os.fdopen(fd, "rb") as stream:
             if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
@@ -921,7 +920,18 @@ def acceptance_status(state, record, digest):
         accepted = datetime.fromisoformat(receipt["accepted_at"])
         if accepted.tzinfo is None:
             raise ValueError
-        source = decision_source(receipt)
-        return "Recorded at " + receipt["accepted_at"] + (f" ({source})" if source else "")
+        return receipt, True
     except (OSError, ValueError, TypeError, KeyError):
+        return None, True
+
+
+def acceptance_status(state, record, digest):
+    from .evidence_report import decision_source
+
+    receipt, present = acceptance_receipt(state, record, digest)
+    if not present:
+        return "Not recorded"
+    if receipt is None:
         return "Invalid or mismatched receipt"
+    source = decision_source(receipt)
+    return "Recorded at " + receipt["accepted_at"] + (f" ({source})" if source else "")

@@ -167,7 +167,7 @@ def _retain_artifacts(observation, produced, check, prefix, remaining):
 
 
 def run_source_mutations(
-    project, snapshot, context, info, run_id, baseline_results, *, output_budget=None
+    project, snapshot, context, info, run_id, baseline_results, *, output_budget=None, checkpoint=None
 ):
     mutations = approved_mutations(project.contract, project.files)
     if not mutations:
@@ -180,6 +180,8 @@ def run_source_mutations(
     if type(remaining) is not int or not 0 <= remaining <= runner.MAX_RUN_OUTPUT:
         raise ValueError("Invalid source qualification output budget")
     for number, mutation in enumerate(mutations, 1):
+        if checkpoint is not None:
+            checkpoint()
         check = checks[mutation["check"]]
         required = set(check.case_report.required_cases)
         result = {
@@ -251,6 +253,8 @@ def run_source_mutations(
                 update={"behavior": [check.model_copy(update={"negative_control": None})]}
             ),
         )
+        if checkpoint is not None:
+            checkpoint()
         try:
             observed, produced = runner.run_behavior(
                 isolated, candidate, context, deepcopy(info), run_id

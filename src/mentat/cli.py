@@ -4,20 +4,22 @@ import os
 import shutil
 import stat
 import subprocess
-from collections.abc import Iterator
-from contextlib import contextmanager
 from importlib.metadata import version
 from pathlib import Path
 from typing import Annotated, Literal
 
 import typer
-from pydantic import ValidationError
 
-from . import evidence, records, spec_review, verification
+from . import evidence, spec_review, verification
 from .autonomy_cli import register as register_autonomy
 from .claims import checked_claims, provenance_lines, write_claims
 from .claims_notion import notion_claims
 from .command import emit, finish, operator_confirm, visible_text
+from .decision import acceptable as _acceptable
+from .decision import approval as _approval
+from .decision import approval_path as _approval_path
+from .decision import saved_run as _saved_run
+from .decision import scope as _scope
 from .evidence_report import decision_source
 from .project import Project, load_project, snapshot
 from .project_formal import run_formal, tool_info
@@ -72,42 +74,12 @@ def configure(
         "state": state
         or (xdg_state if xdg_state.is_absolute() else Path.home() / ".local/state") / "mentat",
         "docker": docker_context,
-    }
-
-
-def _scope(project: Project) -> dict:
-    return {
-        "repo": str(project.root),
-        "base": project.base,
-        "runner": project.runner,
-        "contract_digest": project.fingerprint,
+        "state_explicit": state is not None,
     }
 
 
 def _state(ctx: typer.Context, project: Project) -> Path:
     return evidence.state_directory(ctx.obj["state"], candidate_root=project.root)
-
-
-def _approval_path(state: Path, project: Project) -> Path:
-    return state / "approvals" / f"{project.fingerprint}.json"
-
-
-def _approval(state: Path, project: Project) -> dict:
-    try:
-        record = evidence.read_json(_approval_path(state, project))
-    except FileNotFoundError as exc:
-        raise ValueError(
-            "Approve this repository, base commit, and runner with mentat spec approve"
-        ) from exc
-    try:
-        records.check(records.Approval, record)
-    except ValidationError as exc:
-        raise ValueError(
-            "Approval record is invalid. Check and approve the current contract"
-        ) from exc
-    if any(record[key] != value for key, value in _scope(project).items()):
-        raise ValueError("Approval record is invalid. Check and approve the current contract")
-    return record
 
 
 def _displayed_approval(ctx: typer.Context, project: Project) -> dict:
@@ -123,24 +95,6 @@ def _displayed_approval(ctx: typer.Context, project: Project) -> dict:
 
 def _error(exc: Exception, output_json: bool) -> None:
     finish({"schema_version": 2, "status": "incomplete", "detail": str(exc)}, output_json)
-
-
-@contextmanager
-def _saved_record() -> Iterator[None]:
-    """Refuse a saved record whose shape breaks a read or a field access, naming no field."""
-    try:
-        yield
-    except (KeyError, TypeError, AttributeError) as exc:
-        raise ValueError("Invalid saved verification record") from exc
-
-
-def _saved_run(state: Path, run_id: str) -> tuple[Path, dict]:
-    """Read a saved run; a project verification is validated before any field is used."""
-    with _saved_record():
-        bundle, record = evidence.read_run(state, run_id)
-        if record.get("kind") == "project-verification":
-            evidence.validate_run_record(record)
-    return bundle, record
 
 
 def _summary(project: Project, against: str | None = None) -> dict:
@@ -211,6 +165,16 @@ def publish_claims(
 ) -> None:
     """Publish a committed Claims Spec to the selected Notion page."""
     _review_claims(repo, base, notion, output_json, publish=True)
+
+
+@app.command("bridge")
+def bridge_command(ctx: typer.Context, stdio: bool = typer.Option(False, "--stdio")) -> None:
+    """Serve the local versioned JSONL protocol on standard input and output."""
+    if not stdio:
+        raise typer.BadParameter("--stdio is required")
+    from .bridge import serve
+
+    serve(ctx.obj["state"], fixed_state=ctx.obj["state_explicit"], docker_context=ctx.obj["docker"])
 
 
 @app.command()
@@ -521,20 +485,6 @@ def compare_evidence(
         _error(ValueError("Invalid saved verification record"), output_json)
         return
     finish(result, output_json)
-
-
-def _acceptable(project: Project, approved: dict, record: dict) -> bool:
-    # A contract with source mutations must carry its qualification evidence, not just a verdict.
-    return (
-        record.get("kind") == "project-verification"
-        and evidence.acceptable(record)
-        and not (
-            project.contract.source_mutations is not None
-            and "source_qualifications" not in record
-        )
-        and not any(record.get(key) != value for key, value in _scope(project).items())
-        and record.get("approval") == approved
-    )
 
 
 def _refusal(record: dict) -> ValueError:

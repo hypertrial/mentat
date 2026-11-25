@@ -101,6 +101,7 @@ def verify(
     run_formal: Callable[[Project, Any], list[dict]],
     runner_info: Callable[[Project, str | None], dict],
     run_behavior: Callable[..., tuple[list[dict], dict[str, bytes]]],
+    checkpoint: Callable[[], None] | None = None,
 ) -> dict:
     """Save the verification record for one candidate and return it with its bundle path.
 
@@ -154,6 +155,8 @@ def verify(
         runtime["invocation_path"] = os.environ.get("PATH", os.defpath)
         runtime["invocation_directory"] = str(Path.cwd())
     if project.contract.source_mutations and cases:
+        if checkpoint is not None:
+            checkpoint()
         from . import runner as behavior_runner
         from .qualification import run_source_mutations
 
@@ -164,6 +167,7 @@ def verify(
             runtime,
             run_id,
             behavior,
+            checkpoint=checkpoint,
             output_budget=max(
                 0, behavior_runner.MAX_RUN_OUTPUT - sum(map(len, artifacts.values()))
             ),

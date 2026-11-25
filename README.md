@@ -77,6 +77,8 @@ mentat --state "$STATE" accept "$PASSING_RUN" --repo "$DEMO" --base "$BASE" --ru
 
 Development checkouts use machine-readable evidence and the [headless integration contract](docs/integration-v1.md). The former HTML/UI/report commands have been removed; historical evidence stays intact. These development interfaces are not part of the v0.1.2 tag used above.
 
+Cockpit uses the separate [project verification bridge v1](docs/specifications/cockpit-bridge-v1.md) for approved contracts, Git candidate verification, evidence and operator acceptance. Install the compatible build listed in Cockpit's pairing record and run `mentat --state PATH bridge --stdio` over a private subprocess connection.
+
 Development checkouts support [approved Lean proof campaigns](docs/proofs.md) on a
 dedicated Linux checker, plus explicit claim assurance and source-mutation
 qualification. Proofs establish model properties; implementation checks remain

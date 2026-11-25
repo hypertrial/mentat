@@ -1,0 +1,15 @@
+{
+  "initializeRequest": {"id": 1, "method": "initialize", "params": {"version": 1}},
+  "methods": [
+    "initialize", "project.inspect", "specification.get", "approval.prepare",
+    "approval.commit", "verification.start", "verification.cancel", "operation.get",
+    "runs.list", "runs.get", "evidence.export", "evidence.compare",
+    "acceptance.prepare", "acceptance.commit"
+  ],
+  "examples": {
+    "startResponse": {"id": 17, "result": {"operationId": "stdio-job"}},
+    "completedPass": {"method": "operation.updated", "params": {"operationId": "stdio-job", "status": "completed", "assurance": {"status": "pass", "freshness": "current", "eligible": true, "accepted": false}}},
+    "completedFail": {"method": "operation.updated", "params": {"operationId": "violation-job", "status": "completed", "assurance": {"status": "fail", "freshness": "current", "eligible": false, "accepted": false}}},
+    "interrupted": {"operationId": "orphan-job", "status": "interrupted"}
+  }
+}
