@@ -1408,7 +1408,9 @@ passed before publication, and [Mentat checks](https://github.com/hypertrial/men
 passed on the published revision. The full native suite and dedicated Linux
 checker were still running at publication. The dedicated Linux
 `scripts/verify-worker` gate later passed all 45 fixtures with zero skips.
-GitHub continues to require **Mentat checks** for contributors.
+The macOS `scripts/verify` run started at `e027812` and finished with 2,311
+passed and 53 documented skips. The checkout acquired only documentation edits
+during that run. GitHub continues to require **Mentat checks** for contributors.
 
 ### Titanic handoff
 
