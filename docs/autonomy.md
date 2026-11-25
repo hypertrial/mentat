@@ -177,6 +177,12 @@ Run `scripts/verify` locally, with additional application, worker, proof, browse
 
 The controller records local command results and independent reviews against the exact PR head and base, publishes a compact PR summary through `gh`, and merges only while its session remains active. The default protected mode checks enforced branch protection and required checks again before a match-head squash merge. If strict freshness cannot be established, the PR remains unmerged. Raw logs and large artifacts stay local; review them before sharing.
 
+Protected auto-merge requires the target's `main` rules to apply to repository
+administrators. With administrator bypass enabled, Mentat reports
+`branch protection is not strict or permits bypass` and leaves the PR unmerged.
+Enable **Do not allow bypassing the above settings** in the target's classic
+branch protection before a protected merge.
+
 The controller, its local records, and the authenticated GitHub account are trusted. There is no separate signer, signed receipt, or independent remote attestation of a local run. Legacy evidence receipts continue to serve their existing integrity role.
 
 ## Explicit private repository enforcement

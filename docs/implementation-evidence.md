@@ -1402,6 +1402,14 @@ with zero skips, using protected support inputs from `0f3af1c`.
 checks with `scripts/check-release-artifacts.sh`. The `sha256.json` manifest
 records both artifact hashes, the build revision and tree, and the `main` merge.
 
+The documentation-only follow-up `e0278127e0a8f2d4779127d80ad216bbdd6bc5dc`
+was pushed using the approved GitHub administrator bypass. `scripts/verify-fast`
+passed before publication, and [Mentat checks](https://github.com/hypertrial/mentat/actions/runs/45550929181)
+passed on the published revision. The full native suite and dedicated Linux
+checker were still running at publication. The dedicated Linux
+`scripts/verify-worker` gate later passed all 45 fixtures with zero skips.
+GitHub continues to require **Mentat checks** for contributors.
+
 ### Titanic handoff
 
 Titanic is the next implementation stage. Start by establishing the exact

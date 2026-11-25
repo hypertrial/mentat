@@ -28,9 +28,11 @@ The gate also lints with ruff's bugbear (`B`) and pyupgrade (`UP`) groups and ty
 
 Expect the Lean tests and the opt-in Nano ID and Iceberg Go upstream replays to skip when their prerequisites are absent, and the real proof-checker fixtures to skip outside Linux.
 
-The required **Mentat checks** job parses tracked Python files and checks the
-changed commit's whitespace. It does not install dependencies or run tests. The
-local gate is the source of truth for verification; report its result in the PR.
+The **Mentat checks** job parses tracked Python files and checks the changed
+commit's whitespace. GitHub requires the job for contributors. Repository
+administrators can bypass it for a manual push to Mentat's `main`. The local
+gates provide the test results. Record their exact-revision outcomes in the PR
+or implementation evidence, including any gates still pending at publication.
 
 Before release, run `scripts/verify-release` on both Linux and Apple Silicon
 macOS. It checks the complete applicable suite without skips, builds both
