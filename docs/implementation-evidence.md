@@ -1274,3 +1274,120 @@ The invalid response never became an accepted decision. Its job had already
 been classified as successful, so the controller blocked the source pass
 without the normal bounded retry. There was no publication. The original
 session and independent outputs remain intact.
+
+## Mentat readiness handoff
+
+### Engine delivery and verification
+
+The headless v1 compatibility checkpoint exercised discovery, authentication,
+immutable snapshots and paging, reconnect and ordered changes, freshness, safe
+citations, optional feedback, and command bounds through the real loopback
+adapter. Installed artifacts exposed the headless CLI and rejected retired
+presentation commands. [PR 79](https://github.com/hypertrial/mentat/pull/79)
+
+Independently accepted repairs now retain their specification authority through
+concurrent review completion. [PR 80](https://github.com/hypertrial/mentat/pull/80)
+
+Source reviewers receive Git continuity for both surface observation spellings.
+[PR 81](https://github.com/hypertrial/mentat/pull/81)
+
+The read-only scoped option admits a committed change to one existing FAS
+surface and binds it to the durable session. The default inventory workflow
+continues to assess the full repository. [PR 82](https://github.com/hypertrial/mentat/pull/82)
+
+Malformed final-source responses now consume bounded review attempts before
+an approval can be recorded. [PR 83](https://github.com/hypertrial/mentat/pull/83)
+
+The final engine candidate was `98bd1e5c471b64987fd917ed2512e445c51e059c`,
+tree `64ccb69cb27e1f7034d4b986437c7f288d9426e7`. Its protected merge was
+`b47e35c65b18d2745088f3da14442291a7c412d6` with an identical tree and a
+passing hosted push check.
+
+| Gate | Exact-candidate result |
+| --- | --- |
+| macOS `scripts/verify` | 2,311 passed, 53 skipped |
+| Dedicated Ubuntu ARM64 `scripts/verify` | 2,311 passed, 53 skipped |
+| `scripts/check-autonomy-package` on both platforms | Passed |
+| Linux `scripts/verify-worker`, trusted inputs from `4c155d1` | 45 passed, zero skips |
+| Retained wheel and sdist installed headless and scoped CLI smoke | Passed |
+| Complete FAS inventory and immediate-parent lineage | 316 tracked paths |
+
+The 53 skips per normal suite were 26 optional Lean cases, two optional
+upstream mirrors, and 25 cases that require the separate protected checker
+environment. The installed wheel SHA-256 was
+`ff552bfa7b551a8c8b2a3a28dbf0051095f31982db21a4a30699928fa2a4de08`.
+The source distribution SHA-256 was
+`90a113a35ac598b24903271f42dee74b95c4574cdf87aea7ed7462b43a580bb8`.
+The tested files and hash manifest are retained locally under
+`dist/mentat-readiness/98bd1e5/`.
+
+### Real private repair and reconciliation
+
+The disposable repository used the pinned GPT-6.1 Terra high roles through
+Codex CLI 0.159.0, GitHub, SSH and the isolated Lima worker. The baseline
+`41fa5e67d16d` failed its behavior check. Z3 found `value=0` and protected
+CPython reproduced the violation. Two independent reviewers accepted the
+protected repair `24b9677ea638`. Its lineage reached `7b41c0eafc42` after
+fresh specification review, retaining the repaired implementation.
+
+A fresh qualification of that exact retained lineage obtained two independent
+accepts at each of specification, implementation verification, final source,
+and aggregate review. The controller published the private fixture's first PR
+and dispatched the guarded SSH transaction once. The actual PR and both refs
+advanced to `3b251d646fbf4944cd9638116ea4153c82fa5fa0`. The local process-group
+cleanup response was uncertain. Resuming the original durable session observed
+that exact merge and recorded one resolution without dispatching again.
+
+A separate operation deliberately withheld the local status after sending the
+real pack and independently observing both remote refs at
+`424e7af50e8d0e22cdfca87c483f0297f46ec0ad`. It recorded the same derived
+commit and `2ba7e29019a1140f47f7a694aec48e466ad64819` tested tree as the durable
+intent. GitHub confirmed the original PR merged. Resume matched the exact
+intent, recorded one successful resolution, and never invoked the retransmission
+guard. All jobs finished. The fixture retained two explicit inventory gaps
+for its new ignore rule and historical source snapshot. Earlier attempts and
+their reviewer deferrals remain in their original ledgers.
+
+### Protected Mentat self-qualification
+
+On 2026-11-25, a fresh protected session started from
+`b47e35c65b18d2745088f3da14442291a7c412d6` with the command
+`mentat run --repo PATH --spec-surface docs/vision.md`.
+
+The tested head was `2f4592f38548759302749de5ff7eb76f89ed4e22`, tree
+`a9a5665ef51263cb15953e4dce95ec50f149e4ab`. Its only change was one FAS
+surface record connecting the current product vision to the existing headless
+integration requirement. The controller verified the candidate in the dedicated
+Linux worker. `scripts/verify` passed 2,311 tests with 53 documented skips.
+`scripts/check-autonomy-package` passed, and `scripts/verify-worker` passed
+all 45 fixtures with zero skips.
+
+The exact-head clamp proof passed. The faulty clamp produced the solver
+witness `value=1`, `lower=-1`, `upper=0`. Protected CPython replay reproduced
+the violated postcondition. These establish the stated fixture obligations
+within their supported scope. The controller recorded two independent accepts
+at each of specification, verification, final source, and aggregate review.
+The single final source batch covered the vision and headless decision,
+historical identity fixture, clamp source, and faulty control. Both source
+reviewer inputs have retained exact manifests.
+
+Mentat opened PR 84 and paused while the required GitHub check was pending.
+After the check passed on the same head, resume reconciled the open PR and
+completed the normal protected squash merge. The session finished with
+12 successful jobs. The merged commit was
+`0f3af1cdb731ae383e3f7211ccee5eecad28fedd` with the same tested tree, and
+the hosted push check passed. [PR 84](https://github.com/hypertrial/mentat/pull/84)
+
+The broad self-run remains historical evidence of its deferred source
+reviews. Reviewing changed historical citations across the full inventory
+remains an open assurance gap. The scoped acceptance retains unrelated
+inventory gaps and current conditional proof boundaries.
+
+### Titanic handoff
+
+Titanic is the next implementation stage. Start by establishing the exact
+repository baseline, preserving its existing coverage gate, and recording
+complete CAS/FAS inventory and provenance. Use the approved private repository
+policy with fresh local authority when that stage is authorized. Follow with a
+scoped direct source proof and a complete workflow demonstration using the
+approved gates. [Delivery order](implementation-plan.md#delivery-order)
