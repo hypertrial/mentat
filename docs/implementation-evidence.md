@@ -1383,6 +1383,25 @@ reviews. Reviewing changed historical citations across the full inventory
 remains an open assurance gap. The scoped acceptance retains unrelated
 inventory gaps and current conditional proof boundaries.
 
+### Verified main and installable artifacts
+
+[PR 85](https://github.com/hypertrial/mentat/pull/85) added the readiness
+documentation. Its tested commit `782fd96f369b64cfd691b4e73ea5090950307285`
+and the `main` merge `528b4a3e05017fd385670355869ddacbb7af5a4e` have the same
+tree, `8c0bb576f1a0a9903f2d6d0724e6db9c85cca8fd`. The hosted syntax and whitespace
+checks passed for the [PR](https://github.com/hypertrial/mentat/actions/runs/45515309289)
+and the [main merge](https://github.com/hypertrial/mentat/actions/runs/45518298515).
+
+On that tree, `scripts/verify` passed 2,311 tests with the 53 documented skips
+on both macOS and the dedicated Linux worker. `scripts/check-autonomy-package`
+passed on both platforms. Linux `scripts/verify-worker` passed all 45 fixtures
+with zero skips, using protected support inputs from `0f3af1c`.
+
+`uv build --no-sources` produced the retained wheel and sdist in the local
+`dist/mentat-readiness/782fd96/` directory. Both passed installed CLI smoke
+checks with `scripts/check-release-artifacts.sh`. The `sha256.json` manifest
+records both artifact hashes, the build revision and tree, and the `main` merge.
+
 ### Titanic handoff
 
 Titanic is the next implementation stage. Start by establishing the exact
