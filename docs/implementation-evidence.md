@@ -1420,3 +1420,46 @@ complete CAS/FAS inventory and provenance. Use the approved private repository
 policy with fresh local authority when that stage is authorized. Follow with a
 scoped direct source proof and a complete workflow demonstration using the
 approved gates. [Delivery order](implementation-plan.md#delivery-order)
+
+## 2026-11-25 — internal Cockpit pair and Iceberg-Go advisory pilot
+
+Mentat producer `d7931bfa425163f78f3541dedb9430318799251d` and Cockpit
+`b76973438f3afe73e61fe037280c0a3c99f8b683` qualified as a source-installed
+internal pair. The bridge uses a separate versioned stdio interface for Git
+candidate verification and acceptance. Its independent review found stale
+operation eligibility and mixed-state listing failures; the fixed revision and
+focused regressions were independently re-reviewed. The sibling prototype
+worktree was left intact.
+
+At the frozen producer revision, `scripts/verify-fast` passed and
+`scripts/verify` passed 2,339 tests with the 53 documented macOS skips.
+The dedicated Linux `scripts/verify-worker` rerun passed 45 real checker
+fixtures with zero skips, using trusted inputs from
+`0f3af1cdb731ae383e3f7211ccee5eecad28fedd`. The first Linux attempt reached its
+900-second deadline. The rerun used the same candidate, inputs and fixture set
+with a 2,400-second allowance. The wheel and sdist reproduced byte for byte,
+and their installed artifact checks passed. The wheel SHA-256 is
+`3b57ab265bcf08f7956dae7237611ff511ed29577220eecf7b3a6f7044df749b`.
+Cockpit recorded exact pairing, clamp evidence and operator review coverage in
+`docs/mentat-pairing.md` at `fef3d0dd41f668b0921335df1be780d73a6dba30`.
+
+The advisory [Iceberg-Go replay](iceberg-go.md) used the qualified wheel with
+Python 3.12.14, Go 1.26.3 and the checksum-verified Lean 4.31.0 archive. Each
+checkout's generated base and host runner scope were reviewed and recorded
+through the `unverified_agent_relay` approval path. The pilot made no acceptance
+or publication decision. The paired before and fix runs exported valid bundles
+and the fresh checkout reproduced the canonical before witness.
+
+| Replay | Committed candidate | Run | Row-preservation cases |
+| --- | --- | --- | --- |
+| Historical | `410b789ed781852bbb4376e4f5cb57e76da12c56` | `0a849ce59c5843069273125dbd7f0b8e` | 4 pass, 4 fail |
+| Fix | `3fb910983b9674efc6092418af90a1c2b821dd42` | `b20c87eb5fe44981b7b73bbac71bb9fa` | 8 pass, 0 fail |
+| Fresh historical replay | `410b789ed781852bbb4376e4f5cb57e76da12c56` | `660fcd59abf040fcba4298e96b114051` | 4 pass, 4 fail |
+
+The historical and fresh witnesses had the same SHA-256
+`6fe9ebf3029c167cbcebda82d1be0b8c14770e2a82847e4893e2fa8dfd71cf10`.
+Lean and Z3 passed their conditional multiplicity models on both historical and
+fixed revisions. The native checker distinguished the Go behavior and the fixed
+run passed its negative control. Coverage is the eight reviewed split, partial
+progress and planner-residual cases. Logical deletes, concurrent writers, crash
+recovery and permanent physical data loss remain outside the claim.
