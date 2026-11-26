@@ -1,15 +1,184 @@
 {
-  "initializeRequest": {"id": 1, "method": "initialize", "params": {"version": 1}},
+  "initializeRequest": {
+    "id": 1,
+    "method": "initialize",
+    "params": {
+      "version": 1
+    }
+  },
   "methods": [
-    "initialize", "project.inspect", "specification.get", "approval.prepare",
-    "approval.commit", "verification.start", "verification.cancel", "operation.get",
-    "runs.list", "runs.get", "evidence.export", "evidence.compare",
-    "acceptance.prepare", "acceptance.commit"
+    "initialize",
+    "project.inspect",
+    "specification.get",
+    "approval.prepare",
+    "approval.commit",
+    "verification.start",
+    "verification.cancel",
+    "operation.get",
+    "runs.list",
+    "runs.get",
+    "evidence.export",
+    "evidence.compare",
+    "acceptance.prepare",
+    "acceptance.commit",
+    "evidence.inspect",
+    "evidence.compareScoped"
   ],
   "examples": {
-    "startResponse": {"id": 17, "result": {"operationId": "stdio-job"}},
-    "completedPass": {"method": "operation.updated", "params": {"operationId": "stdio-job", "status": "completed", "assurance": {"status": "pass", "freshness": "current", "eligible": true, "accepted": false}}},
-    "completedFail": {"method": "operation.updated", "params": {"operationId": "violation-job", "status": "completed", "assurance": {"status": "fail", "freshness": "current", "eligible": false, "accepted": false}}},
-    "interrupted": {"operationId": "orphan-job", "status": "interrupted"}
+    "startResponse": {
+      "id": 17,
+      "result": {
+        "operationId": "stdio-job"
+      }
+    },
+    "completedPass": {
+      "method": "operation.updated",
+      "params": {
+        "operationId": "stdio-job",
+        "status": "completed",
+        "assurance": {
+          "status": "pass",
+          "freshness": "current",
+          "eligible": true,
+          "accepted": false
+        }
+      }
+    },
+    "completedFail": {
+      "method": "operation.updated",
+      "params": {
+        "operationId": "violation-job",
+        "status": "completed",
+        "assurance": {
+          "status": "fail",
+          "freshness": "current",
+          "eligible": false,
+          "accepted": false
+        }
+      }
+    },
+    "interrupted": {
+      "operationId": "orphan-job",
+      "status": "interrupted"
+    },
+    "inspectRequest": {
+      "repo": "/project",
+      "base": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "revision": "cccccccccccccccccccccccccccccccccccccccc",
+      "runner": "host",
+      "runId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "contractDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    },
+    "inspectResponse": {
+      "run": {
+        "runId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "base": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "revision": "cccccccccccccccccccccccccccccccccccccccc",
+        "runner": "host",
+        "contractDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "manifestDigest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "status": "pass"
+      },
+      "claims": [
+        {
+          "id": "claim",
+          "statement": "Example",
+          "assumptions": [
+            "input is valid"
+          ],
+          "checks": [
+            {
+              "id": "check",
+              "method": "formal",
+              "status": "pass",
+              "artifacts": {
+                "proof": {
+                  "name": "proof.txt",
+                  "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+                }
+              },
+              "artifactOmissions": [],
+              "logOmissions": [],
+              "engine": "z3"
+            }
+          ]
+        }
+      ],
+      "environment": {
+        "runner": "host",
+        "tools": {}
+      },
+      "omissions": [
+        "local paths withheld",
+        "commands withheld",
+        "logs withheld",
+        "unrecorded information unavailable"
+      ]
+    },
+    "compareScopedRequest": {
+      "repo": "/project",
+      "before": {
+        "runId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "base": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "revision": "cccccccccccccccccccccccccccccccccccccccc",
+        "runner": "host",
+        "contractDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "after": {
+        "runId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "base": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "revision": "cccccccccccccccccccccccccccccccccccccccc",
+        "runner": "host",
+        "contractDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "acrossContracts": false
+    },
+    "compareScopedResponse": {
+      "mode": "same-scope",
+      "status": "pass",
+      "before": {
+        "runId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "base": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "revision": "cccccccccccccccccccccccccccccccccccccccc",
+        "runner": "host",
+        "contractDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "manifestDigest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "status": "pass"
+      },
+      "after": {
+        "runId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "base": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "revision": "cccccccccccccccccccccccccccccccccccccccc",
+        "runner": "host",
+        "contractDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "manifestDigest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "status": "pass"
+      },
+      "scopeDifferences": [],
+      "environmentChanged": false,
+      "claims": [
+        {
+          "id": "claim",
+          "checks": [
+            {
+              "id": "check",
+              "kind": "formal",
+              "before": {
+                "status": "pass"
+              },
+              "after": {
+                "status": "pass"
+              }
+            }
+          ]
+        }
+      ],
+      "omissions": [
+        "local paths withheld",
+        "commands withheld",
+        "logs withheld",
+        "unrecorded information unavailable"
+      ]
+    }
   }
 }

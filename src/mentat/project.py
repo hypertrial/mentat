@@ -55,6 +55,7 @@ VERIFIER_MODULES = (
     "command",
     "decision",
     "evidence",
+    "evidence_projection",
     "evidence_report",
     "gitio",
     "process",

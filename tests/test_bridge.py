@@ -105,6 +105,33 @@ def test_real_run_integrity_acceptance_export_and_compare(quickstart, tmp_path):
     assert result["assurance"]["accepted"]
     assert result["assurance"]["acceptanceSource"] == "cockpit_local_operator"
     assert bridge.call("evidence.compare", {"before": run_id, "after": run_id})["status"] == "pass"
+    record = loaded["record"]
+    ref = {"runId": run_id, "base": scope["base"], "revision": revision,
+           "runner": scope["runner"], "contractDigest": record["contract_digest"]}
+    projection = bridge.call("evidence.inspect", {"repo": str(repo), **ref})
+    assert projection["run"]["manifestDigest"] == (state / "receipts" / run_id).read_text()
+    assert projection["claims"][0]["assumptions"] == record["claims"][0].get("assumptions", [])
+    assert {check["id"] for check in projection["claims"][0]["checks"]} == {"clamp-model", "clamp-cli"}
+    assert str(state) not in json.dumps(projection)
+    for key, value in (("base", revision), ("revision", scope["base"]),
+                       ("runner", "docker"), ("contractDigest", "0" * 64)):
+        with pytest.raises(ValueError, match="pinned"):
+            bridge.call("evidence.inspect", {"repo": str(repo), **ref, key: value})
+    foreign = tmp_path / "foreign"
+    subprocess.run(["git", "init", str(foreign)], check=True, capture_output=True)
+    with pytest.raises(ValueError, match="pinned"):
+        bridge.call("evidence.inspect", {"repo": str(foreign), **ref})
+    comparison = bridge.call("evidence.compareScoped", {"repo": str(repo), "before": ref, "after": ref})
+    assert comparison["mode"] == "same-scope" and comparison["scopeDifferences"] == []
+    assert str(state) not in json.dumps(comparison)
+    assert "detail" not in json.dumps(comparison)
+    history = bridge.call("evidence.compareScoped", {"repo": str(repo), "before": ref,
+                          "after": ref, "acrossContracts": True})
+    assert history["mode"] == "across-contracts"
+    assert set(history["inputChanges"].values()) <= {"changed", "unchanged", "unavailable"}
+    with pytest.raises(ValueError, match="pinned"):
+        bridge.call("evidence.compareScoped", {"repo": str(repo), "before": ref,
+                    "after": {**ref, "revision": scope["base"]}})
     out = tmp_path / "export"
     assert bridge.call("evidence.export", {"runId": run_id, "out": str(out)})["path"] == str(out)
     assert (out / "manifest.json").exists()
@@ -112,6 +139,8 @@ def test_real_run_integrity_acceptance_export_and_compare(quickstart, tmp_path):
     assert json.loads(manifest.read_bytes())["bundle_format"] == 2
     assert not (manifest.parent / "report.md").exists()
     manifest.write_bytes(manifest.read_bytes() + b" ")
+    with pytest.raises(ValueError, match="integrity"):
+        bridge.call("evidence.inspect", {"repo": str(repo), **ref})
     with pytest.raises(ValueError, match="integrity"):
         bridge.call("runs.get", {"runId": run_id})
     assert evidence.read_json(state / "acceptances" / f"{run_id}.json")["decision_source"] == "cockpit_local_operator"
@@ -582,3 +611,55 @@ def test_runs_list_skips_non_project_records_in_shared_state(quickstart):
         runs = bridge.call("runs.list", params)["runs"]
         assert {run["runId"] for run in runs} == {project_run}
         assert runs[0]["revision"] == revision
+
+
+def test_evidence_projection_historical_scope_and_legacy_bundle(quickstart):
+    from test_evidence_comparison import save
+
+    repo, state, scope, revision = quickstart
+    state = evidence.state_directory(state)
+    first, second = "a" * 32, "b" * 32
+    old = save(state, first, repo=str(repo), revision=revision, base=scope["base"],
+               claims=[{"id": "claim", "statement": "Example behavior", "assumptions": ["flat condition"]}])
+    save(state, second, repo=str(repo), revision=revision, base="f" * 40, contract_digest="e" * 64)
+    # Legacy bundles retained a report artifact and lacked the format marker.
+    record = json.loads((old / "manifest.json").read_bytes())
+    record.pop("bundle_format")
+    record["claims"][0]["provenance"] = {"origin": "declared", "citations": [{
+        "commit": revision, "blob": "d" * 40, "path": "src/example.py", "start_line": 1, "end_line": 2}]}
+    record["claims"][0]["assurance"] = {"bounds": [{"id": "condition", "statement": "Input is valid",
+        "kind": "assumed", "assumption": "flat condition"}]}
+    record["model_checks"][0]["artifact_omissions"] = ["missing-proof.txt"]
+    record["model_checks"][0]["log_omissions"] = ["stderr"]
+    report = b"historical report"
+    (old / "report.md").write_bytes(report)
+    record["artifacts"]["report.md"] = evidence.digest(report)
+    raw = evidence.json_bytes(record)
+    (old / "manifest.json").write_bytes(raw)
+    (state / "receipts" / first).write_text(evidence.digest(raw))
+    before = {"runId": first, "base": scope["base"], "revision": revision,
+              "runner": "host", "contractDigest": "c" * 64}
+    after = {**before, "runId": second, "base": "f" * 40, "contractDigest": "e" * 64}
+    bridge = Bridge(state)
+    result = bridge.call("evidence.inspect", {"repo": str(repo), **before})
+    claim = result["claims"][0]
+    assert claim["assumptions"] == ["flat condition"]
+    assert claim["assurance"]["bounds"][0]["assumption"] == "flat condition"
+    assert claim["locations"][0]["path"] == "src/example.py"
+    formal = next(check for check in claim["checks"] if check["method"] == "formal")
+    assert formal["engine"] == "z3" and formal["artifactOmissions"] == ["missing-proof.txt"]
+    assert formal["logOmissions"] == ["stderr"]
+    behavior = next(check for check in claim["checks"] if check["method"] == "behavior")
+    assert behavior["artifacts"]["witness.json"] == {
+        "name": "example.witness.json", "sha256": evidence.digest(b"{}")}
+    old_claim = bridge.call("evidence.inspect", {"repo": str(repo), **after})["claims"][0]
+    assert old_claim["assumptions"] == [] and "locations" not in old_claim
+    assert "assurance" not in old_claim
+    params = {"repo": str(repo), "before": before, "after": after}
+    with pytest.raises(ValueError, match="matching scope"):
+        bridge.call("evidence.compareScoped", params)
+    result = bridge.call("evidence.compareScoped", {**params, "acrossContracts": True})
+    assert result["scopeDifferences"] == ["base", "contract_digest"]
+    assert result["claims"][0]["definition"] == "unavailable"
+    assert "unavailable" in result["inputChanges"].values()
+    assert str(state) not in json.dumps(result)

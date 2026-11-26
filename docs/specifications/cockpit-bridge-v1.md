@@ -4,7 +4,7 @@ Cockpit starts `mentat --state PATH bridge --stdio` as a private subprocess. The
 
 ## Wire contract
 
-Use bounded UTF-8 newline-delimited JSON. Requests are `{id,method,params}`; responses are `{id,result}` or `{id,error:{code,message}}`. `operation.updated` notifications have `{method,params}` and no request ID. Keep diagnostic output off stdout. `initialize` takes `{version:1}` and returns `{version:1,capabilities,instanceId}`. Capabilities are the 14 implemented v1 methods below. Reject unsupported versions and invalid frames without executing a method. Do not allow unbounded frames, pending decisions or operation results.
+Use bounded UTF-8 newline-delimited JSON. Requests are `{id,method,params}`; responses are `{id,result}` or `{id,error:{code,message}}`. `operation.updated` notifications have `{method,params}` and no request ID. Keep diagnostic output off stdout. `initialize` takes `{version:1}` and returns `{version:1,capabilities,instanceId}`. Capabilities include the methods below; additive optional methods are advertised when available. Reject unsupported versions and invalid frames without executing a method. Do not allow unbounded frames, pending decisions or operation results.
 
 A repository scope carries an absolute `repo`, a full committed `base`, a `runner` of `docker` or `host`, and optional `state` when no global state was configured. Candidate methods additionally carry the full committed `revision`. Reject ambiguous or conflicting identities and scope. A run ID is a saved Mentat run identity. A caller-chosen operation ID is scoped to its original verification inputs.
 
@@ -22,6 +22,8 @@ A repository scope carries an absolute `repo`, a full committed `base`, a `runne
 | `runs.get` | `runId`, optional full `revision` or scope | `assurance`, validated `record` |
 | `evidence.export` | `runId`, `out` in a new directory | `path`, `runId` |
 | `evidence.compare` | `before`, `after` run IDs | authoritative evidence comparison |
+| `evidence.inspect` | pinned run reference | validated safe evidence projection |
+| `evidence.compareScoped` | two pinned run references, optional `acrossContracts` | safe scoped comparison |
 | `acceptance.prepare` | candidate scope, `runId`, optional `hostConsent` | `DecisionReview` |
 | `acceptance.commit` | `token` only | `accepted`, `source`, `assurance` |
 

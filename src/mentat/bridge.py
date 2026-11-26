@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from . import evidence, spec_review, verification
+from . import evidence, evidence_projection, spec_review, verification
 from .canonical import decode_json, json_bytes
 from .decision import acceptable as _acceptable
 from .decision import approval as _approval
@@ -29,7 +29,8 @@ from .runner import run_behavior, runner_info
 MAX_MESSAGE = 1_000_000
 METHODS = (
     "initialize", "project.inspect", "specification.get", "approval.prepare", "approval.commit",
-    "runs.list", "runs.get", "evidence.export", "evidence.compare", "acceptance.prepare",
+    "runs.list", "runs.get", "evidence.export", "evidence.compare", "evidence.inspect",
+    "evidence.compareScoped", "acceptance.prepare",
     "acceptance.commit", "verification.start", "verification.cancel", "operation.get",
 )
 SOURCE = "cockpit_local_operator"
@@ -502,6 +503,8 @@ class Bridge:
             "runs.list": scope, "runs.get": scope | {"runId", "revision"},
             "evidence.export": scope | {"runId", "out"},
             "evidence.compare": scope | {"before", "after"},
+            "evidence.inspect": scope | {"runId", "revision", "contractDigest"},
+            "evidence.compareScoped": {"repo", "state", "before", "after", "acrossContracts"},
             "acceptance.prepare": scope | {"runId", "revision", "hostConsent"},
             "acceptance.commit": {"token"},
         }
@@ -575,6 +578,13 @@ class Bridge:
             out = _path(params, "out")
             _export(bundle, record, manifest, out)
             return {"path": str(out.resolve()), "runId": record["run_id"]}
+        if method == "evidence.inspect":
+            ref = {key: params.get(key) for key in evidence_projection.REF_KEYS}
+            return evidence_projection.inspect(self.state_for(params), _string(params, "repo"), ref)
+        if method == "evidence.compareScoped":
+            return evidence_projection.compare(self.state_for(params), _string(params, "repo"),
+                                               params.get("before"), params.get("after"),
+                                               params.get("acrossContracts", False))
         if method == "evidence.compare":
             before, after = _string(params, "before", maximum=32), _string(params, "after", maximum=32)
             state = self.state_for(params)
