@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from . import evidence, evidence_projection, spec_review, verification
+from . import evidence, evidence_projection, review_decisions, spec_review, verification
 from .canonical import decode_json, json_bytes
 from .decision import acceptable as _acceptable
 from .decision import approval as _approval
@@ -32,6 +32,7 @@ METHODS = (
     "runs.list", "runs.get", "evidence.export", "evidence.compare", "evidence.inspect",
     "evidence.compareScoped", "acceptance.prepare",
     "acceptance.commit", "verification.start", "verification.cancel", "operation.get",
+    "reviewDecision.prepare", "reviewDecision.commit", "reviewDecision.get",
 )
 SOURCE = "cockpit_local_operator"
 
@@ -79,6 +80,7 @@ def _assurance(state, record, manifest, revision=None):
     elif qualification in ("incomplete", "skipped") and status == "pass":
         status = "incomplete"
     eligible = False
+    review_decision = None
     freshness = "historical" if revision is not None and revision != record["revision"] else "unknown"
     try:
         project = load_project(Path(record["repo"]), record["base"], record["runner"])
@@ -97,8 +99,12 @@ def _assurance(state, record, manifest, revision=None):
                 eligible = revision == record["revision"] and _acceptable(project, approval, record)
                 if revision is not None:
                     freshness = "current" if revision == record["revision"] and same_approval else "historical"
+                if revision == record["revision"] and same_approval:
+                    evaluation = review_decisions.evaluation(project, approval, record, manifest)
+                    review_decision = review_decisions.summary(review_decisions.journal(state), evaluation)
+                    eligible = eligible and review_decision["status"] == "pending"
     except (OSError, ValueError, subprocess.SubprocessError):
-        pass
+        eligible = False
     result = {
         "status": status, "runId": record["run_id"], "revision": record["revision"],
         "base": record["base"], "contractDigest": record["contract_digest"],
@@ -124,6 +130,8 @@ def _assurance(state, record, manifest, revision=None):
             states = {check["status"] for check in claim_checks}
             claim["status"] = ("fail" if "violation" in states else
                                "incomplete" if states & {"incomplete", "skipped"} else "pass")
+    if review_decision is not None:
+        result["reviewDecision"] = review_decision
     if qualification is not None:
         result["qualification"] = qualification
     if accepted and isinstance(accepted.get("decision_source"), str):
@@ -218,6 +226,7 @@ class Bridge:
             approved = _approval(state, project)
             if saved[2]["revision"] != revision or not _acceptable(project, approved, saved[2]):
                 raise ValueError("Run is not eligible for acceptance under this scope")
+            review_decisions.check_acceptance(state, review_decisions.evaluation(project, approved, saved[2], saved[3]))
             saved = (saved[2]["run_id"], saved[3], approved)
         scope = {"repo": str(project.root), "base": project.base, "digest": project.fingerprint,
                  "runner": project.runner}
@@ -278,20 +287,129 @@ class Bridge:
             record = {**_scope(project), "approved_at": evidence.now(), "decision_source": SOURCE}
             evidence.write_record(_approval_path(state, project), json_bytes(record))
             return {"approved": True, "source": SOURCE}
-        run_id, manifest, approved = saved
-        verify_revision(project.root, scope["revision"])
-        _, record = _saved_run(state, run_id)
-        _, confirmed, current_manifest = evidence.read_run_snapshot(state, run_id)
-        if (confirmed != record or current_manifest != manifest or _approval(state, project) != approved
-                or record["revision"] != scope["revision"]
-                or not _acceptable(project, approved, record)):
-            raise ValueError("Reviewed evidence or approval changed")
-        receipt = {"run_id": run_id, "manifest_digest": manifest, "revision": record["revision"],
-                   "contract_digest": project.fingerprint, "accepted_at": evidence.now(),
-                   "decision_source": SOURCE}
-        evidence.write_record(state / "acceptances" / f"{run_id}.json", json_bytes(receipt))
-        return {"accepted": True, "source": SOURCE,
-                "assurance": _assurance(state, record, manifest, scope["revision"])}
+        with review_decisions.locked(state):
+            project = load_project(Path(scope["repo"]), scope["base"], scope["runner"])
+            if project.fingerprint != scope["digest"] or _head(project.root) != head:
+                raise ValueError("Reviewed scope changed")
+            run_id, manifest, approved = saved
+            verify_revision(project.root, scope["revision"])
+            _, record = _saved_run(state, run_id)
+            _, confirmed, current_manifest = evidence.read_run_snapshot(state, run_id)
+            if (confirmed != record or current_manifest != manifest or _approval(state, project) != approved
+                    or record["revision"] != scope["revision"]
+                    or not _acceptable(project, approved, record)):
+                raise ValueError("Reviewed evidence or approval changed")
+            review_decisions.check_acceptance(state, review_decisions.evaluation(project, approved, record, manifest))
+            existing, present = evidence.acceptance_receipt(state, record, manifest)
+            if present:
+                if not existing:
+                    raise ValueError("Existing acceptance receipt is invalid")
+                return {"accepted": True, "source": (existing.get("decision_source")
+                        if isinstance(existing.get("decision_source"), str)
+                        and 0 < len(existing["decision_source"]) <= 128 else "unreported"),
+                        "assurance": _assurance(state, record, manifest, scope["revision"])}
+            receipt = {"run_id": run_id, "manifest_digest": manifest, "revision": record["revision"],
+                       "contract_digest": project.fingerprint, "accepted_at": evidence.now(),
+                       "decision_source": SOURCE}
+            evidence.write_record(state / "acceptances" / f"{run_id}.json", json_bytes(receipt))
+            return {"accepted": True, "source": SOURCE,
+                    "assurance": _assurance(state, record, manifest, scope["revision"])}
+
+    def review_decision_prepare(self, params):
+        project = self.project(params)
+        state = self.state_for(params, project)
+        if project.runner == "host" and params.get("hostConsent") is not True:
+            raise ValueError("Host execution requires explicit consent")
+        request_id = _string(params, "requestId", maximum=128)
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", request_id):
+            raise ValueError("Invalid requestId")
+        action = _string(params, "action", maximum=16)
+        if action not in {"reject", "defer", "resume"}:
+            raise ValueError("Invalid review action")
+        reason = params.get("reason", "")
+        if not isinstance(reason, str) or len(reason) > 2000 or "\x00" in reason or (action != "resume" and not reason.strip()):
+            raise ValueError("Invalid review reason")
+        revision = verify_revision(project.root, _string(params, "revision", maximum=64))
+        _, _, record, manifest = self.saved(params)
+        approved = _approval(state, project)
+        if (record["revision"] != revision or record.get("approval") != approved
+                or any(record.get(k) != v for k, v in _scope(project).items())):
+            raise ValueError("Run does not match current approval and scope")
+        evaluation = review_decisions.evaluation(project, approved, record, manifest)
+        request = {"requestId": request_id, "action": action, "reason": reason,
+                   "actor": SOURCE, "evaluation": evaluation}
+        with review_decisions.locked(state):
+            entries = review_decisions.journal(state)
+            prior = next ( (e for e in entries if e["requestId"] == request_id), None)
+            if prior:
+                if any(prior[k] != v for k, v in request.items()):
+                    raise ValueError("Request ID already used for another decision")
+                return {"receipt": prior}
+            current = review_decisions.status(entries, evaluation)
+            if (action == "resume" and current != "defer") or (action != "resume" and current != "pending"):
+                raise ValueError("Review action is not valid for the current decision")
+            _, present = evidence.acceptance_receipt(state, record, manifest)
+            if present:
+                raise ValueError("Acceptance already recorded or invalid")
+        if len(self.tokens) >= 256:
+            self.tokens = {k: v for k, v in self.tokens.items() if v[0] > time.monotonic()}
+        if len(self.tokens) >= 256:
+            raise ValueError("Too many pending decisions")
+        token = secrets.token_urlsafe(32)
+        self.tokens[token] = (time.monotonic() + 300, "reviewDecision", str(state), _head(project.root), request)
+        return {"token": token, "kind": "reviewDecision", "scope": evaluation["scope"],
+                "evaluation": evaluation, "action": action, "reason": reason, "requestId": request_id,
+                "expiresAt": (datetime.now(UTC) + timedelta(minutes=5)).isoformat()}
+
+    def review_decision_commit(self, params):
+        if set(params) != {"token"}:
+            raise ValueError("Commit accepts only a decision token")
+        token = _string(params, "token", maximum=256)
+        decision = self.tokens.pop(token, None)
+        if decision is None or decision[0] <= time.monotonic() or decision[1] != "reviewDecision":
+            raise ValueError("Decision token is invalid, expired, or already used")
+        _, _, state_path, head, request = decision
+        evaluation = request["evaluation"]
+        scope = evaluation["scope"]
+        project = load_project(Path(scope["repo"]), scope["base"], scope["runner"])
+        state = evidence.state_directory(Path(state_path), candidate_root=project.root)
+        with review_decisions.locked(state):
+            project = load_project(Path(scope["repo"]), scope["base"], scope["runner"])
+            entries = review_decisions.journal(state)
+            prior = next((e for e in entries if e["requestId"] == request["requestId"]), None)
+            if prior:
+                if any(prior[k] != v for k, v in request.items()):
+                    raise ValueError("Request ID already used for another decision")
+                return {"receipt": prior}
+            verify_revision(project.root, evaluation["revision"])
+            _, record = _saved_run(state, evaluation["runId"])
+            _, confirmed, manifest = evidence.read_run_snapshot(state, evaluation["runId"])
+            approved = _approval(state, project)
+            if (_head(project.root) != head or confirmed != record
+                    or review_decisions.evaluation(project, approved, record, manifest) != evaluation
+                    or record.get("approval") != approved):
+                raise ValueError("Reviewed scope, evidence or approval changed")
+            current = review_decisions.status(entries, evaluation)
+            action = request["action"]
+            if (action == "resume" and current != "defer") or (action != "resume" and current != "pending"):
+                raise ValueError("Review action is not valid for the current decision")
+            _, present = evidence.acceptance_receipt(state, record, manifest)
+            if present:
+                raise ValueError("Acceptance already recorded or invalid")
+            receipt = {**request, "committedAt": evidence.now()}
+            review_decisions.save(state, [*entries, receipt])
+            return {"receipt": receipt}
+
+    def review_decision_get(self, params):
+        state = self.state_for(params)
+        request_id = _string(params, "requestId", maximum=128)
+        run_id = _string(params, "runId", maximum=32)
+        with review_decisions.locked(state):
+            receipt = next((e for e in review_decisions.journal(state)
+                            if e["requestId"] == request_id), None)
+            if receipt is None or receipt["evaluation"]["runId"] != run_id:
+                raise ValueError("Review decision receipt not found")
+            return {"receipt": receipt}
 
     def operation_path(self, params):
         operation_id = _string(params, "operationId", maximum=128)
@@ -507,6 +625,9 @@ class Bridge:
             "evidence.compareScoped": {"repo", "state", "before", "after", "acrossContracts"},
             "acceptance.prepare": scope | {"runId", "revision", "hostConsent"},
             "acceptance.commit": {"token"},
+            "reviewDecision.prepare": scope | {"runId", "revision", "hostConsent", "action", "reason", "requestId"},
+            "reviewDecision.commit": {"token"},
+            "reviewDecision.get": {"runId", "requestId", "state"},
         }
         if method not in allowed:
             raise NotImplementedError("Unsupported method")
@@ -518,6 +639,12 @@ class Bridge:
             if type(params.get("version")) is not int or params["version"] != 1:
                 raise ValueError("Unsupported protocol version")
             return {"version": 1, "capabilities": list(METHODS), "instanceId": self.instance}
+        if method == "reviewDecision.prepare":
+            return self.review_decision_prepare(params)
+        if method == "reviewDecision.commit":
+            return self.review_decision_commit(params)
+        if method == "reviewDecision.get":
+            return self.review_decision_get(params)
         if method == "verification.start":
             return self.operation_start(params)
         if method == "verification.cancel":

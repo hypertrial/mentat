@@ -54,6 +54,7 @@ VERIFIER_MODULES = (
     "colima",
     "command",
     "decision",
+    "review_decisions",
     "evidence",
     "evidence_projection",
     "evidence_report",

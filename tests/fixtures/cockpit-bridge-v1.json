@@ -22,7 +22,10 @@
     "acceptance.prepare",
     "acceptance.commit",
     "evidence.inspect",
-    "evidence.compareScoped"
+    "evidence.compareScoped",
+    "reviewDecision.prepare",
+    "reviewDecision.commit",
+    "reviewDecision.get"
   ],
   "examples": {
     "startResponse": {

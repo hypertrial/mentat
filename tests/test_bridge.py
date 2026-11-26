@@ -663,3 +663,143 @@ def test_evidence_projection_historical_scope_and_legacy_bundle(quickstart):
     assert result["claims"][0]["definition"] == "unavailable"
     assert "unavailable" in result["inputChanges"].values()
     assert str(state) not in json.dumps(result)
+
+
+def test_review_decisions_block_acceptance_and_recover(quickstart):
+    repo, state, scope, revision = quickstart
+    bridge = Bridge(state)
+    token = bridge.call("approval.prepare", {**scope, "hostConsent": True})["token"]
+    bridge.call("approval.commit", {"token": token})
+    result = CliRunner().invoke(cli.app, ["--state", str(state), "verify", "--repo", str(repo),
+        "--base", scope["base"], "--runner", "host", "--rev", revision, "--json"])
+    assert result.exit_code == 0, result.output
+    run_id = json.loads(result.output)["run_id"]
+    base = {**scope, "runId": run_id, "revision": revision, "hostConsent": True}
+    deferred = {**base, "requestId": "request-1", "action": "defer", "reason": "needs review"}
+    token = bridge.call("reviewDecision.prepare", deferred)["token"]
+    receipt = bridge.call("reviewDecision.commit", {"token": token})["receipt"]
+    assurance = bridge.call("runs.get", {"runId": run_id, "revision": revision})["assurance"]
+    assert assurance["freshness"] == "current" and not assurance["eligible"]
+    assert assurance["reviewDecision"] == {"status": "defer", "receipt": receipt}
+    restarted = Bridge(state)
+    assert restarted.call("reviewDecision.get", {"requestId": "request-1", "runId": run_id})["receipt"] == receipt
+    assert restarted.call("reviewDecision.prepare", deferred)["receipt"] == receipt
+    with pytest.raises(ValueError, match="another decision"):
+        restarted.call("reviewDecision.prepare", {**deferred, "reason": "different"})
+    with pytest.raises(ValueError, match="blocks"):
+        restarted.call("acceptance.prepare", base)
+    result = CliRunner().invoke(cli.app, ["--state", str(state), "accept", run_id, "--repo", str(repo),
+        "--base", scope["base"], "--runner", "host", "--trusted-chat-approval"])
+    assert result.exit_code != 0
+    assert "blocks acceptance" in result.output
+    token = restarted.call("reviewDecision.prepare", {**base, "requestId": "request-2", "action": "resume"})["token"]
+    restarted.call("reviewDecision.commit", {"token": token})
+    token = restarted.call("acceptance.prepare", base)["token"]
+    assert restarted.call("acceptance.commit", {"token": token})["accepted"]
+    with pytest.raises(ValueError, match="Acceptance"):
+        restarted.call("reviewDecision.prepare", {**base, "requestId": "request-3", "action": "reject", "reason": "no"})
+
+
+def test_review_decision_stale_and_corrupt_journal(quickstart):
+    repo, state, scope, revision = quickstart
+    bridge = Bridge(state)
+    token = bridge.call("approval.prepare", {**scope, "hostConsent": True})["token"]
+    bridge.call("approval.commit", {"token": token})
+    result = CliRunner().invoke(cli.app, ["--state", str(state), "verify", "--repo", str(repo),
+        "--base", scope["base"], "--runner", "host", "--rev", revision, "--json"])
+    assert result.exit_code == 0, result.output
+    run_id = json.loads(result.output)["run_id"]
+    params = {**scope, "runId": run_id, "revision": revision, "hostConsent": True,
+              "requestId": "stale", "action": "reject", "reason": "failed review"}
+    token = bridge.call("reviewDecision.prepare", params)["token"]
+    (repo / "later").write_text("change")
+    commit(repo)
+    with pytest.raises(ValueError, match="changed"):
+        bridge.call("reviewDecision.commit", {"token": token})
+    git(repo, "checkout", "--detach", revision)
+    (state / "review-decisions.json").write_text("broken")
+    with pytest.raises(ValueError, match="journal"):
+        bridge.call("reviewDecision.prepare", params)
+    with pytest.raises(ValueError, match="journal"):
+        bridge.call("acceptance.prepare", {k: params[k] for k in (*scope, "runId", "revision", "hostConsent")})
+
+
+def test_reject_failed_run_and_refuse_resume(quickstart):
+    repo, state, scope, _ = quickstart
+    bridge = Bridge(state)
+    token = bridge.call("approval.prepare", {**scope, "hostConsent": True})["token"]
+    bridge.call("approval.commit", {"token": token})
+    result = CliRunner().invoke(cli.app, ["--state", str(state), "verify", "--repo", str(repo),
+        "--base", scope["base"], "--runner", "host", "--rev", scope["base"], "--json"])
+    assert result.exit_code != 0
+    run_id = json.loads(result.output)["run_id"]
+    params = {**scope, "runId": run_id, "revision": scope["base"], "hostConsent": True,
+              "requestId": "reject-failed", "action": "reject", "reason": "failed checks"}
+    token = bridge.call("reviewDecision.prepare", params)["token"]
+    bridge.call("reviewDecision.commit", {"token": token})
+    with pytest.raises(ValueError, match="current decision"):
+        bridge.call("reviewDecision.prepare", {**params, "requestId": "resume-rejected", "action": "resume"})
+
+
+def test_damaged_review_receipt_fails_closed(quickstart):
+    repo, state, scope, revision = quickstart
+    bridge = Bridge(state)
+    token = bridge.call("approval.prepare", {**scope, "hostConsent": True})["token"]
+    bridge.call("approval.commit", {"token": token})
+    result = CliRunner().invoke(cli.app, ["--state", str(state), "verify", "--repo", str(repo),
+        "--base", scope["base"], "--runner", "host", "--rev", revision, "--json"])
+    assert result.exit_code == 0, result.output
+    run_id = json.loads(result.output)["run_id"]
+    base = {**scope, "runId": run_id, "revision": revision, "hostConsent": True}
+    token = bridge.call("reviewDecision.prepare", {**base, "requestId": "reject", "action": "reject", "reason": "no"})["token"]
+    bridge.call("reviewDecision.commit", {"token": token})
+    path = state / "review-decisions.json"
+    entries = json.loads(path.read_text())
+    original = json.dumps(entries)
+    damaged = [
+        ("approval", {}), ("manifest", "bad"), ("revision", "bad"),
+        ("scope", {**entries[0]["evaluation"]["scope"], "runner": "invalid"}),
+        ("scope", {**entries[0]["evaluation"]["scope"], "base": "0" * 40}),
+    ]
+    for key, value in damaged:
+        entry = json.loads(original)
+        entry[0]["evaluation"][key] = value
+        path.write_text(json.dumps(entry))
+        with pytest.raises(ValueError, match="journal"):
+            bridge.call("acceptance.prepare", base)
+    path.write_text(" " * 1_000_001)
+    with pytest.raises(ValueError, match="journal"):
+        bridge.call("acceptance.prepare", base)
+    entries[0]["evaluation"]["approval"] = {}
+    path.write_text(json.dumps(entries))
+    assurance = bridge.call("runs.get", {"runId": run_id, "revision": revision})["assurance"]
+    assert assurance["freshness"] == "current" and not assurance["eligible"]
+    assert "reviewDecision" not in assurance
+    with pytest.raises(ValueError, match="journal"):
+        bridge.call("acceptance.prepare", base)
+    result = CliRunner().invoke(cli.app, ["--state", str(state), "accept", run_id, "--repo", str(repo),
+        "--base", scope["base"], "--runner", "host", "--trusted-chat-approval"])
+    assert result.exit_code != 0 and "journal" in result.output
+
+
+def test_existing_legacy_acceptance_returns_bounded_source(quickstart):
+    repo, state, scope, revision = quickstart
+    bridge = Bridge(state)
+    token = bridge.call("approval.prepare", {**scope, "hostConsent": True})["token"]
+    bridge.call("approval.commit", {"token": token})
+    result = CliRunner().invoke(cli.app, ["--state", str(state), "verify", "--repo", str(repo),
+        "--base", scope["base"], "--runner", "host", "--rev", revision, "--json"])
+    assert result.exit_code == 0, result.output
+    run_id = json.loads(result.output)["run_id"]
+    result = CliRunner().invoke(cli.app, ["--state", str(state), "accept", run_id, "--repo", str(repo),
+        "--base", scope["base"], "--runner", "host", "--trusted-chat-approval"])
+    assert result.exit_code == 0, result.output
+    path = state / "acceptances" / f"{run_id}.json"
+    existing = json.loads(path.read_text())
+    existing.pop("decision_source")
+    evidence.write_record(path, evidence.json_bytes(existing))
+    original = path.read_bytes()
+    token = bridge.call("acceptance.prepare", {**scope, "runId": run_id, "revision": revision, "hostConsent": True})["token"]
+    response = bridge.call("acceptance.commit", {"token": token})
+    assert response["source"] == "unreported"
+    assert path.read_bytes() == original
