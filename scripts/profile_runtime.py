@@ -123,7 +123,8 @@ def docker_phase(args):
 @contextmanager
 def profiling(trace):
     originals = (project_formal._run, docker_runtime.doctor, docker_runtime._stage_cli,
-                 docker_runtime._docker, runner._process, runner._docker, runner._stage)
+                 docker_runtime._docker, runner._process, runner._docker, runner._stage,
+                 runner._stage_archive)
 
     def wrap(original, phase_for):
         def traced(*args, **kwargs):
@@ -171,10 +172,12 @@ def profiling(trace):
         runner._process = wrap(originals[4], lambda args: "runner.process")
         runner._docker = wrap(originals[5], lambda args: "runner." + docker_phase(args))
         runner._stage = wrap(originals[6], lambda args: "runner.stage")
+        runner._stage_archive = wrap(originals[7], lambda args: "runner.stage_archive")
         yield
     finally:
         (project_formal._run, docker_runtime.doctor, docker_runtime._stage_cli,
-         docker_runtime._docker, runner._process, runner._docker, runner._stage) = originals
+         docker_runtime._docker, runner._process, runner._docker, runner._stage,
+         runner._stage_archive) = originals
 
 
 def main():

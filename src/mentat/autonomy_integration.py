@@ -9,6 +9,7 @@ import re
 import secrets
 import socket
 import socketserver
+import sqlite3
 import stat
 import threading
 import time
@@ -253,6 +254,9 @@ class IntegrationAdapter:
         self.rates: deque[float] = deque()
         self.build_rates: deque[float] = deque()
         self.snapshots: dict[str, tuple[float, dict]] = {}
+        self.observer: sqlite3.Connection | None = None
+        self.observer_identity: tuple[int, int] | None = None
+        self.reusable: tuple[float, tuple[tuple[int, int], int], dict, dict] | None = None
         self.selected: str | None = None
         self.stopping, self.closed = False, False
         self.server: _Server | None = None
@@ -353,6 +357,10 @@ class IntegrationAdapter:
                 except (OSError, ValueError):
                     pass
         finally:
+            with self.build_lock:
+                if self.observer is not None:
+                    self.observer.close()
+                    self.observer = None
             if self.filefd is not None:
                 os.close(self.filefd)
                 self.filefd = None
@@ -373,6 +381,30 @@ class IntegrationAdapter:
 
     def _envelope(self, session: str | None) -> dict:
         return {"api_version": 1, "server_id": self.server_id, "store_id": self.store_id, "session_id": session}
+
+    def _ledger_version(self) -> tuple[tuple[int, int], int] | None:
+        """Observe commits on a dedicated connection; uncertainty disables reuse."""
+        try:
+            stat = self.store.path.stat()
+            identity = (stat.st_dev, stat.st_ino)
+            if self.observer is None or identity != self.observer_identity:
+                if self.observer is not None:
+                    self.observer.close()
+                self.reusable = None
+                self.observer = sqlite3.connect(self.store.path.as_uri() + "?mode=ro", uri=True, timeout=2, check_same_thread=False)
+                self.observer_identity = identity
+            version = self.observer.execute("PRAGMA data_version").fetchone()[0]
+            stat = self.store.path.stat()
+            if (stat.st_dev, stat.st_ino) != identity:
+                raise OSError("ledger replaced")
+            return identity, version
+        except (OSError, sqlite3.Error, TypeError, IndexError):
+            if self.observer is not None:
+                self.observer.close()
+            self.observer = None
+            self.observer_identity = None
+            self.reusable = None
+            return None
 
     def _cursor(self, session: str, seq: int) -> str:
         body = _encoded([self.store_id, session, self.server_id, seq])
@@ -408,9 +440,21 @@ class IntegrationAdapter:
         if session is None:
             raise _Failure(503, "unavailable", "Session is starting.", retryable=True)
         if method == "GET" and parsed.path == "/v1/snapshot" and not query:
-            if not self.admit(build=True) or not self.build_lock.acquire(blocking=False):
+            if not self.build_lock.acquire(blocking=False):
                 raise _Failure(429, "capacity", "Snapshot builder is busy.", retryable=True)
             try:
+                version = self._ledger_version()
+                controller = self._controller()
+                if self.reusable is not None:
+                    observed, saved_version, saved_controller, response = self.reusable
+                    saved = self.snapshots.get(response["snapshot_id"])
+                    if (version is not None and version == saved_version and controller == saved_controller
+                            and time.monotonic() - observed < 5 and response["expires_at"] > time.time()
+                            and saved is not None and saved[0] > time.time()):
+                        return 200, response
+                if not self.admit(build=True):
+                    raise _Failure(429, "capacity", "Snapshot builder is busy.", retryable=True)
+                observed = time.monotonic()
                 try:
                     raw = self.store.integration_snapshot(session, deadline=started + 10)
                 except TimeoutError:
@@ -432,8 +476,14 @@ class IntegrationAdapter:
                     while len(self.snapshots) >= 2:
                         self.snapshots.pop(next(iter(self.snapshots)))
                     self.snapshots[ident] = (now + 30, projection)
-                return 200, {**common, "snapshot_id": ident, "expires_at": now + 30, "observed_at": now, "refresh_seconds": 5,
+                response = {**common, "snapshot_id": ident, "expires_at": now + 30, "observed_at": now, "refresh_seconds": 5,
                              "high_water": raw["revision"], "cursor": self._cursor(session, raw["revision"]), "session": projection["session"], "freshness": projection["freshness"], "counts": {k: len(projection[k]) for k in _RESOURCES}}
+                after = self._ledger_version()
+                if version is not None and version == after and controller == projection["session"]["controller"]:
+                    self.reusable = (observed, version, controller, response)
+                else:
+                    self.reusable = None
+                return 200, response
             except IntegrationCapacityError:
                 raise _Failure(413, "capacity", "Snapshot exceeds capacity.") from None
             except (OSError, RuntimeError, TypeError, ValueError):

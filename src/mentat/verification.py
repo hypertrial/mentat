@@ -127,6 +127,9 @@ def verify(
         raise ValueError("Formal runner returned incomplete check results")
     if evidence.status(models, incomplete_first=True) == "pass":
         runtime = runner_info(project, context)
+        if checkpoint is not None:
+            checkpoint()
+        behavior_options = {"checkpoint": checkpoint} if checkpoint is not None else {}
         if artifacts:
             from .runner import MAX_RUN_OUTPUT
 
@@ -137,10 +140,11 @@ def verify(
                 runtime,
                 run_id,
                 output_budget=MAX_RUN_OUTPUT - sum(map(len, artifacts.values())),
+                **behavior_options,
             )
         else:
             behavior, behavior_artifacts = run_behavior(
-                project, candidate, context, runtime, run_id
+                project, candidate, context, runtime, run_id, **behavior_options
             )
         artifacts.update(behavior_artifacts)
         if len(behavior) != len(project.contract.behavior):

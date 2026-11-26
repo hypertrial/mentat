@@ -20,6 +20,7 @@ from .decision import acceptable as _acceptable
 from .decision import approval as _approval
 from .decision import approval_path as _approval_path
 from .decision import saved_run as _saved_run
+from .decision import saved_run_snapshot as _saved_run_snapshot
 from .decision import scope as _scope
 from .gitio import verify_revision
 from .project import load_project
@@ -199,12 +200,9 @@ class Bridge:
     def saved(self, params):
         state = self.state_for(params)
         run_id = _string(params, "runId", maximum=32)
-        bundle, record = _saved_run(state, run_id)
+        bundle, record, manifest = _saved_run_snapshot(state, run_id)
         if record.get("kind") != "project-verification":
             raise ValueError("Run is not a project verification")
-        _, confirmed, manifest = evidence.read_run_snapshot(state, run_id)
-        if confirmed != record:
-            raise ValueError("Evidence changed during read")
         if any(key in params for key in ("repo", "base", "runner")):
             project = self.project(params)
             self.state_for(params, project)
@@ -293,9 +291,8 @@ class Bridge:
                 raise ValueError("Reviewed scope changed")
             run_id, manifest, approved = saved
             verify_revision(project.root, scope["revision"])
-            _, record = _saved_run(state, run_id)
-            _, confirmed, current_manifest = evidence.read_run_snapshot(state, run_id)
-            if (confirmed != record or current_manifest != manifest or _approval(state, project) != approved
+            _, record, current_manifest = _saved_run_snapshot(state, run_id)
+            if (current_manifest != manifest or _approval(state, project) != approved
                     or record["revision"] != scope["revision"]
                     or not _acceptable(project, approved, record)):
                 raise ValueError("Reviewed evidence or approval changed")
@@ -382,10 +379,9 @@ class Bridge:
                     raise ValueError("Request ID already used for another decision")
                 return {"receipt": prior}
             verify_revision(project.root, evaluation["revision"])
-            _, record = _saved_run(state, evaluation["runId"])
-            _, confirmed, manifest = evidence.read_run_snapshot(state, evaluation["runId"])
+            _, record, manifest = _saved_run_snapshot(state, evaluation["runId"])
             approved = _approval(state, project)
-            if (_head(project.root) != head or confirmed != record
+            if (_head(project.root) != head
                     or review_decisions.evaluation(project, approved, record, manifest) != evaluation
                     or record.get("approval") != approved):
                 raise ValueError("Reviewed scope, evidence or approval changed")
@@ -442,9 +438,8 @@ class Bridge:
             try:
                 scope = receipt["scope"]
                 state = directory.parent.parent
-                _, record = _saved_run(state, receipt["runId"])
-                _, confirmed, manifest = evidence.read_run_snapshot(state, receipt["runId"])
-                if (record.get("kind") != "project-verification" or record != confirmed
+                _, record, manifest = _saved_run_snapshot(state, receipt["runId"])
+                if (record.get("kind") != "project-verification"
                         or any(record.get(key) != scope[key] for key in
                                ("repo", "base", "runner", "contract_digest", "revision"))):
                     raise ValueError("Operation evidence does not match its scope")
@@ -544,8 +539,9 @@ class Bridge:
                 checkpoint=checkpoint,
             )
             run_id = record["run_id"]
-            _, verified, _ = evidence.read_run_snapshot(state, run_id)
-            evidence.validate_run_record(verified)
+            _, verified, _ = _saved_run_snapshot(state, run_id)
+            if verified.get("kind") != "project-verification":
+                raise ValueError("Unsupported saved verification record")
             outcome = {"status": "completed", "runId": run_id}
         except Exception as exc:
             outcome = {"status": "failed", "error": (str(exc) or "Verification failed")[:1000]}
@@ -714,10 +710,9 @@ class Bridge:
                                                params.get("acrossContracts", False))
         if method == "evidence.compare":
             before, after = _string(params, "before", maximum=32), _string(params, "after", maximum=32)
-            state = self.state_for(params)
-            self.saved({**params, "runId": before})
-            self.saved({**params, "runId": after})
-            return evidence.compare_runs(state, before, after)
+            _, before_path, before_record, _ = self.saved({**params, "runId": before})
+            _, after_path, after_record, _ = self.saved({**params, "runId": after})
+            return evidence.compare_saved_runs(before_path, before_record, after_path, after_record)
         raise NotImplementedError("Unsupported method")
 
 

@@ -48,6 +48,33 @@ def report(**cases):
     return json.dumps({"schema_version": 1, "cases": cases})
 
 
+@pytest.mark.parametrize("cancel_before_control", [False, True])
+def test_cancellation_stops_next_behavior_phase(monkeypatch, cancel_before_control):
+    first = Behavior.model_validate({
+        **BASE,
+        **({"negative_control": {"args": ["--bad"], "violation_exit_code": 10,
+                                 "failing_case": "first"}} if cancel_before_control else {}),
+    })
+    second = first.model_copy(update={"id": "second"})
+    project = SimpleNamespace(runner="host", contract=SimpleNamespace(behavior=[first, second]))
+    phases = []
+
+    def phase(_project, _snapshot, _inherited, _info, _files, _remaining,
+              check, result, _prefix, _args):
+        phases.append(check.id)
+        result["status"] = "pass"
+
+    def checkpoint():
+        if phases:
+            raise InterruptedError("cancelled")
+
+    monkeypatch.setattr(runner, "_host_phase", phase)
+    monkeypatch.setattr(runner, "_host_precheck", lambda *args: False)
+    with pytest.raises(InterruptedError, match="cancelled"):
+        runner.run_behavior(project, None, None, {"path": ""}, "test", checkpoint=checkpoint)
+    assert phases == ["behavior"]
+
+
 @pytest.mark.parametrize(
     ("case_report", "artifacts"),
     [

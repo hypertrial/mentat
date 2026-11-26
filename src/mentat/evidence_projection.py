@@ -5,6 +5,7 @@ from pathlib import Path
 
 from . import evidence
 from .canonical import json_bytes
+from .decision import saved_run_snapshot
 from .project import ClaimProvenance
 from .records import Assurance
 
@@ -29,14 +30,15 @@ def _read(state, root, ref):
         raise ValueError("Invalid run reference")
     if any(not isinstance(value, str) or not value or len(value) > 128 for value in ref.values()):
         raise ValueError("Invalid run reference")
-    _, record, manifest = evidence.read_run_snapshot(state, ref["runId"])
-    evidence.validate_run_record(record)
+    bundle, record, manifest = saved_run_snapshot(state, ref["runId"])
+    if record.get("kind") != "project-verification":
+        raise ValueError("Unsupported saved verification record")
     expected = {"repo": str(root), "run_id": ref["runId"], "base": ref["base"],
                 "revision": ref["revision"], "runner": ref["runner"],
                 "contract_digest": ref["contractDigest"]}
     if any(record.get(key) != value for key, value in expected.items()):
         raise ValueError("Run does not match pinned project reference")
-    return record, manifest
+    return bundle, record, manifest
 
 
 def _run(record, manifest):
@@ -110,7 +112,7 @@ def _bounded(result):
 def inspect(state, repo, ref):
     root = _root(repo)
     state = evidence.state_directory(state, candidate_root=root)
-    record, manifest = _read(state, root, ref)
+    _, record, manifest = _read(state, root, ref)
     return _bounded({"run": _run(record, manifest), "claims": _claims(record),
                      "environment": _environment(record), "omissions": OMISSIONS})
 
@@ -127,13 +129,10 @@ def compare(state, repo, before_ref, after_ref, across_contracts):
         raise ValueError("Invalid acrossContracts")
     root = _root(repo)
     state = evidence.state_directory(state, candidate_root=root)
-    before, before_manifest = _read(state, root, before_ref)
-    after, after_manifest = _read(state, root, after_ref)
-    comparison = evidence.compare_runs(state, before_ref["runId"], after_ref["runId"],
-                                       across_contracts=across_contracts)
-    if (_read(state, root, before_ref) != (before, before_manifest)
-            or _read(state, root, after_ref) != (after, after_manifest)):
-        raise ValueError("Evidence changed during comparison")
+    before_path, before, before_manifest = _read(state, root, before_ref)
+    after_path, after, after_manifest = _read(state, root, after_ref)
+    comparison = evidence.compare_saved_runs(before_path, before, after_path, after,
+                                             across_contracts=across_contracts)
     claims = []
     for claim in comparison["claims"]:
         if across_contracts:

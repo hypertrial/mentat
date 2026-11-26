@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 SCHEMA_VERSION = 1
+DATASTORE_VERSION = 2
 MAX_JSON_BYTES = 1_000_000
 LOOPS = frozenset({"scl", "ivl", "iil"})
 ROLES = frozenset({"explorer", "implementer", "debugger", "test-engineer", "code-reviewer", "architecture-reviewer", "data-reviewer", "security-auditor", "verifier"})
@@ -71,7 +72,7 @@ class Store:
         with self._connect() as db:
             db.execute("BEGIN IMMEDIATE")
             version = db.execute("PRAGMA user_version").fetchone()[0]
-            if version not in (0, SCHEMA_VERSION):
+            if version not in (0, 1, DATASTORE_VERSION):
                 raise ValueError(f"unsupported autonomy schema version: {version}")
             if version == 0:
                 if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").fetchone():
@@ -130,6 +131,27 @@ class Store:
                 # Older stores could have crashed between finishing and advancing.
                 # Replay is conservative; advancement must be idempotent.
                 db.execute("INSERT INTO transitions(job_id, status) SELECT id, 'pending' FROM jobs WHERE status='succeeded'")
+            if version < DATASTORE_VERSION:
+                db.execute("CREATE INDEX IF NOT EXISTS events_session_seq ON events(session_id, seq)")
+                db.execute("CREATE INDEX IF NOT EXISTS events_session_kind_seq ON events(session_id, kind, seq)")
+                db.execute("CREATE INDEX IF NOT EXISTS feedback_consumed_seq ON events(session_id, json_extract(payload, '$.seq')) WHERE kind='feedback_consumed'")
+                db.execute("CREATE TABLE pending_feedback (session_id TEXT NOT NULL REFERENCES sessions(id), seq INTEGER PRIMARY KEY REFERENCES events(seq))")
+                db.execute("CREATE INDEX pending_feedback_session_seq ON pending_feedback(session_id, seq)")
+                db.execute("""INSERT INTO pending_feedback
+                    SELECT f.session_id, f.seq FROM events f WHERE f.kind='human_feedback'
+                      AND NOT EXISTS (SELECT 1 FROM events c WHERE c.session_id=f.session_id
+                        AND c.kind='feedback_consumed' AND json_type(c.payload, '$.seq') IN ('integer', 'real', 'true', 'false')
+                        AND json_extract(c.payload, '$.seq')=f.seq)""")
+                db.execute("""CREATE TRIGGER feedback_pending_insert AFTER INSERT ON events
+                    WHEN NEW.kind='human_feedback' BEGIN
+                      INSERT INTO pending_feedback VALUES (NEW.session_id, NEW.seq);
+                    END""")
+                db.execute("""CREATE TRIGGER feedback_pending_consume AFTER INSERT ON events
+                    WHEN NEW.kind='feedback_consumed' AND json_type(NEW.payload, '$.seq') IN ('integer', 'real', 'true', 'false') BEGIN
+                      DELETE FROM pending_feedback WHERE session_id=NEW.session_id
+                        AND seq=json_extract(NEW.payload, '$.seq');
+                    END""")
+                db.execute("PRAGMA user_version = 2")
             db.commit()
 
     def _connect(self) -> sqlite3.Connection:
@@ -1390,6 +1412,22 @@ class Store:
             db.execute("INSERT INTO integration_receipts VALUES (?,?,?,?,?)", (session_id, request_id, action, digest, _json(receipt)))
             db.commit()
             return receipt, True
+
+    def session(self, session_id: str) -> dict:
+        """Read session metadata without loading the ledger history."""
+        with self._connect() as db:
+            session = dict(self._session(db, session_id))
+            session["policy"] = json.loads(session["policy"])
+            return session
+
+    def pending_feedback(self, session_id: str, limit: int = 100) -> list[dict]:
+        """Read a bounded batch of feedback without a durable acknowledgement."""
+        with self._connect() as db:
+            self._session(db, session_id)
+            rows = db.execute("""SELECT f.seq, f.payload FROM pending_feedback p
+                JOIN events f ON f.seq=p.seq WHERE p.session_id=?
+                ORDER BY p.seq LIMIT ?""", (session_id, limit)).fetchall()
+            return [{"seq": row["seq"], "payload": json.loads(row["payload"])} for row in rows]
 
     def snapshot(self, session_id: str | None = None) -> dict:
         with self._connect() as db:

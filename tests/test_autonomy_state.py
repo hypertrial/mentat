@@ -328,3 +328,100 @@ def test_revision_stales_other_receipts_but_keeps_owner_for_replay(tmp_path: Pat
     assert restarted.transition_status(owner) == "done"
     with pytest.raises(ValueError, match="owner"):
         restarted.revise_record(session, "requirement", req, expected_digest=record_digest(revised), owner_job_id=owner)
+
+
+def test_ledger_migration_preserves_pending_feedback_and_is_idempotent(tmp_path: Path) -> None:
+    store, session = make_store(tmp_path)
+    first = store.append_event(session, "human_feedback", {"message": "first"})
+    second = store.append_event(session, "human_feedback", {"message": "second"})
+    store.append_event(session, "feedback_consumed", {"seq": first})
+    original = store.snapshot(session)
+    with sqlite3.connect(store.path) as db:
+        db.execute("DROP TRIGGER feedback_pending_insert")
+        db.execute("DROP TRIGGER feedback_pending_consume")
+        db.execute("DROP TABLE pending_feedback")
+        db.execute("DROP INDEX events_session_seq")
+        db.execute("DROP INDEX events_session_kind_seq")
+        db.execute("DROP INDEX feedback_consumed_seq")
+        db.execute("PRAGMA user_version=1")
+    store = Store(store.path)
+    assert store.snapshot(session) == original
+    assert store.session(session) == original["session"]
+    assert store.pending_feedback(session) == [{"seq": second, "payload": {"message": "second"}}]
+    store = Store(store.path)
+    assert store.snapshot(session) == original
+    store.append_event(session, "feedback_consumed", {"seq": second})
+    assert Store(store.path).pending_feedback(session) == []
+    with sqlite3.connect(store.path) as db:
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert store.snapshot(session)["schema_version"] == 1
+        plan = db.execute("EXPLAIN QUERY PLAN SELECT seq, kind FROM events WHERE session_id=? AND seq>? ORDER BY seq", (session, 0)).fetchall()
+        assert any("events_session_seq" in row[3] for row in plan)
+        plan = db.execute("EXPLAIN QUERY PLAN SELECT f.seq FROM pending_feedback p JOIN events f ON f.seq=p.seq WHERE p.session_id=? ORDER BY p.seq LIMIT 100", (session,)).fetchall()
+        assert any("pending_feedback_session_seq" in row[3] for row in plan)
+
+
+def test_pending_feedback_is_bounded_and_ordered(tmp_path: Path) -> None:
+    store, session = make_store(tmp_path)
+    ids = [store.append_event(session, "human_feedback", {"message": str(i)}) for i in range(4)]
+    assert [event["seq"] for event in store.pending_feedback(session, limit=2)] == ids[:2]
+    store.append_event(session, "feedback_consumed", {"seq": str(ids[0])})
+    assert [event["seq"] for event in store.pending_feedback(session, limit=2)] == ids[:2]
+    store.append_event(session, "feedback_consumed", {"seq": ids[0]})
+    assert [event["seq"] for event in Store(store.path).pending_feedback(session, limit=2)] == ids[1:3]
+
+
+def test_migration_failure_rolls_back_indexes_and_version(tmp_path: Path) -> None:
+    store, session = make_store(tmp_path)
+    before = store.snapshot(session)
+    with sqlite3.connect(store.path) as db:
+        db.execute("DROP TRIGGER feedback_pending_insert")
+        db.execute("DROP TRIGGER feedback_pending_consume")
+        db.execute("DROP INDEX events_session_seq")
+        db.execute("DROP INDEX events_session_kind_seq")
+        db.execute("DROP INDEX feedback_consumed_seq")
+        db.execute("PRAGMA user_version=1")
+    with pytest.raises(sqlite3.OperationalError, match="already exists"):
+        Store(store.path)
+    with sqlite3.connect(store.path) as db:
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 1
+        assert db.execute("SELECT name FROM sqlite_master WHERE name='events_session_seq'").fetchone() is None
+    assert store.snapshot(session) == before
+
+
+def test_feedback_enqueue_replay_before_acknowledgement(tmp_path: Path) -> None:
+    store, session = make_store(tmp_path)
+    seq = store.append_event(session, "human_feedback", {"message": "retry"})
+    payload = {"feedback": "retry"}
+    job = store.enqueue_job(session, "scl", "implementer", f"feedback.{seq}", "digest", payload)
+    store = Store(store.path)
+    assert store.pending_feedback(session)[0]["seq"] == seq
+    assert store.enqueue_job(session, "scl", "implementer", f"feedback.{seq}", "digest", payload) == job
+    store.append_event(session, "feedback_consumed", {"seq": seq})
+    assert Store(store.path).pending_feedback(session) == []
+    assert len(store.snapshot(session)["jobs"]) == 1
+
+
+def test_projection_keeps_scope_order_across_claims() -> None:
+    from mentat.autonomy import digest, project_snapshot
+
+    contract = {"path": "source.py", "function": "f", "inputs": {}, "requires": "True", "ensures": "True"}
+    claims = [{"id": f"c{i}", "formal_contract": contract} for i in range(30)]
+    evidence = []
+    scopes = []
+    for claim in reversed(claims):
+        for suffix in ("b", "a"):
+            evidence_id = claim["id"] + suffix
+            evidence.append({"id": evidence_id, "claim_id": claim["id"], "status": "counterexample",
+                             "method": "source-proof", "contract_origin": "reviewed-fas",
+                             "contract": {k: contract[k] for k in ("inputs", "requires", "ensures")},
+                             "source_identity": {"revision": "head", "path": "source.py", "function": "f",
+                                                 "blob_oid": "blob", "source_sha256": "sha"}})
+            scopes.append({"kind": "claim_source_scope", "payload": {"head": "head", "fas_head": "fas", "evidence_id": evidence_id}})
+    snapshot = {"session": {"status": "running", "policy": {}}, "claims": claims, "evidence": evidence,
+                "events": [{"kind": "fas_reviewed", "payload": {"head": "fas", "claims": {c["id"]: digest(c) for c in claims}}}, *scopes]}
+    projected = project_snapshot(snapshot, identity={})
+    for claim in projected["claims"]:
+        assert claim["status"] == "unconfirmed-counterexample"
+        assert claim["evidence_ids"] == [claim["id"] + "b", claim["id"] + "a"]
+    assert all("evidence_ids" not in claim for claim in snapshot["claims"])

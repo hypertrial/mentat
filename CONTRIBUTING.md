@@ -118,9 +118,9 @@ worker triggers separate fresh Python and Z3-import calibration samples to
 estimate that overhead; they do not isolate solver time. Timings stay outside
 verification evidence bundles.
 
-The profiler also times the runner's `_process`, `_stage`, and `_docker` helpers
-as `runner.process`, `runner.stage` (host runner only; the Docker runner stages
-with an archive), and `runner.docker.<operation>` (such as `create`, `cp`,
+The profiler also records `runner.process`, `runner.stage` for host staging,
+`runner.stage_archive` for Docker tar creation, and
+`runner.docker.<operation>` (such as `create`, `cp`,
 `start`, and `rm`). Polaris Docker calls keep the `docker.*` names. To profile the
 Docker runner, prepare the quickstart repository, its image, and a Docker
 context, then approve and profile it locally:

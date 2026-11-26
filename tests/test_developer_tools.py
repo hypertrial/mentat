@@ -31,7 +31,8 @@ def records(path):
 
 def patched():
     return (project_formal._run, docker_runtime.doctor, docker_runtime._stage_cli,
-            docker_runtime._docker, runner._process, runner._docker, runner._stage)
+            docker_runtime._docker, runner._process, runner._docker, runner._stage,
+            runner._stage_archive)
 
 
 def test_wrappers_forward_restore_and_hide_inputs(tmp_path, monkeypatch):
@@ -314,20 +315,23 @@ def test_runner_wrappers_forward_arguments_and_restore(tmp_path, monkeypatch):
     marker = object()
     monkeypatch.setattr(runner, "_process", lambda *a, **k: calls.append((a, k)) or marker)
     monkeypatch.setattr(runner, "_stage", lambda *a, **k: calls.append((a, k)))
+    monkeypatch.setattr(runner, "_stage_archive", lambda *a, **k: calls.append((a, k)))
     monkeypatch.setattr(runner, "_docker", lambda *a, **k: calls.append((a, k)) or marker)
     originals = patched()
     with profile.profiling(trace):
         assert runner._process(["secret"], timeout=5, input_file="private") is marker
         assert runner._stage("private", ["secret"], trusted=True) is None
+        assert runner._stage_archive("private", {"secret": marker}, {}) is None
         assert runner._docker("secret-context", "cp", "private", timeout=7) is marker
     assert calls == [
         ((["secret"],), {"timeout": 5, "input_file": "private"}),
         (("private", ["secret"]), {"trusted": True}),
+        (("private", {"secret": marker}, {}), {}),
         (("secret-context", "cp", "private"), {"timeout": 7}),
     ]
     assert patched() == originals
     assert [e["phase"] for e in records(tmp_path / "trace")] == [
-        "runner.process", "runner.stage", "runner.docker.cp"]
+        "runner.process", "runner.stage", "runner.stage_archive", "runner.docker.cp"]
     assert "private" not in (tmp_path / "trace").read_text()
 
 

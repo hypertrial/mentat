@@ -50,12 +50,18 @@ def saved_record() -> Iterator[None]:
         raise ValueError("Invalid saved verification record") from exc
 
 
-def saved_run(state: Path, run_id: str) -> tuple[Path, dict]:
-    """Read a saved run; a project verification is validated before any field is used."""
+def saved_run_snapshot(state: Path, run_id: str) -> tuple[Path, dict, str]:
+    """Read and validate a saved run and its manifest digest in one integrity pass."""
     with saved_record():
-        bundle, record = evidence.read_run(state, run_id)
+        bundle, record, manifest = evidence.read_run_snapshot(state, run_id)
         if record.get("kind") == "project-verification":
             evidence.validate_run_record(record)
+    return bundle, record, manifest
+
+
+def saved_run(state: Path, run_id: str) -> tuple[Path, dict]:
+    """Read a saved run; a project verification is validated before any field is used."""
+    bundle, record, _ = saved_run_snapshot(state, run_id)
     return bundle, record
 
 

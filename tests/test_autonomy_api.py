@@ -7,7 +7,10 @@ import http.client
 import json
 import os
 import socket
+import sqlite3
 import stat
+import subprocess
+import time
 from urllib.parse import urlsplit
 
 import pytest
@@ -217,6 +220,115 @@ def test_snapshot_pages_are_stable_and_changes_resume_past_1000(service):
     assert seqs[0] > snap["high_water"]
     assert get(adapter, "/v1/changes?cursor=foreign")[0] == 409
     assert get(adapter, "/v1/snapshots/foreign/claims")[0] == 409
+
+
+def test_snapshot_reuse_respects_ledger_controller_and_original_expiry(service, monkeypatch):
+    adapter, store, session, _ = service
+    calls = []
+    monkeypatch.setattr(adapter, "project", lambda raw, timeout: (calls.append(1), projection(raw, timeout=timeout))[1])
+    _, first = get(adapter, "/v1/snapshot")
+    _, repeated = get(adapter, "/v1/snapshot")
+    assert repeated == first and len(calls) == 1
+    old_page = get(adapter, f"/v1/snapshots/{first['snapshot_id']}/claims")
+    store.put_record(session, "claim", {"id": "new"})
+    _, second = get(adapter, "/v1/snapshot")
+    assert second["snapshot_id"] != first["snapshot_id"] and len(calls) == 2
+    assert get(adapter, f"/v1/snapshots/{first['snapshot_id']}/claims") == old_page
+    # Move past the build rate limit and expire only the saved snapshot.
+    adapter.build_rates.clear()
+    adapter.snapshots[second["snapshot_id"]] = (time.time() - 1, adapter.snapshots[second["snapshot_id"]][1])
+    _, third = get(adapter, "/v1/snapshot")
+    assert third["snapshot_id"] != second["snapshot_id"] and len(calls) == 3
+    adapter.build_rates.clear()
+    monkeypatch.setattr(adapter, "_controller", lambda: {"availability": "available", "generation": "new"})
+    _, fourth = get(adapter, "/v1/snapshot")
+    assert fourth["snapshot_id"] != third["snapshot_id"] and len(calls) == 4
+
+
+def test_snapshot_reobserves_external_state_after_fresh_window(service, monkeypatch):
+    adapter, _, _, _ = service
+    external = ["current"]
+    calls = []
+    def observe(raw, *, timeout):
+        calls.append(external[0])
+        result = projection(raw, timeout=timeout)
+        result["freshness"] = {"status": external[0]}
+        return result
+    monkeypatch.setattr(adapter, "project", observe)
+    _, first = get(adapter, "/v1/snapshot")
+    external[0] = "unknown"
+    assert get(adapter, "/v1/snapshot")[1] == first
+    observed, version, controller, response = adapter.reusable
+    adapter.reusable = (observed - 5, version, controller, response)
+    _, later = get(adapter, "/v1/snapshot")
+    assert later["freshness"]["status"] == "unknown" and calls == ["current", "unknown"]
+
+
+def test_snapshot_reuse_rejects_changed_session(service, monkeypatch):
+    adapter, _, _, _ = service
+    assert get(adapter, "/v1/snapshot")[0] == 200
+    monkeypatch.setattr(adapter, "session_getter", lambda: "different-session")
+    status, result = get(adapter, "/v1/snapshot")
+    assert status == 503 and result["error"]["code"] == "unavailable"
+
+
+def test_write_during_projection_prevents_reuse(service, monkeypatch):
+    adapter, store, session, _ = service
+    calls = []
+    def project_with_write(raw, *, timeout):
+        calls.append(1)
+        if len(calls) == 1:
+            store.put_record(session, "claim", {"id": "during-projection"})
+        return projection(raw, timeout=timeout)
+    monkeypatch.setattr(adapter, "project", project_with_write)
+    _, first = get(adapter, "/v1/snapshot")
+    _, second = get(adapter, "/v1/snapshot")
+    assert first["counts"]["claims"] == 0
+    assert second["counts"]["claims"] == 1 and len(calls) == 2
+
+
+def test_non_event_write_and_database_replacement_invalidate_reuse(service):
+    adapter, store, session, _ = service
+    _, first = get(adapter, "/v1/snapshot")
+    with sqlite3.connect(store.path) as db:
+        db.execute("UPDATE sessions SET status='paused' WHERE id=?", (session,))
+    _, second = get(adapter, "/v1/snapshot")
+    assert second["snapshot_id"] != first["snapshot_id"]
+    assert second["session"]["status"] == "paused"
+    replacement = store.path.with_name("replacement.sqlite")
+    with sqlite3.connect(store.path) as source, sqlite3.connect(replacement) as target:
+        source.backup(target)
+        target.execute("UPDATE sessions SET status='completed' WHERE id=?", (session,))
+    os.replace(replacement, store.path)
+    adapter.build_rates.clear()
+    _, third = get(adapter, "/v1/snapshot")
+    assert third["snapshot_id"] != second["snapshot_id"]
+    assert third["session"]["status"] == "completed"
+    observer = adapter.observer
+    adapter.close()
+    assert adapter.observer is None
+    with pytest.raises(sqlite3.ProgrammingError):
+        observer.execute("PRAGMA data_version")
+
+
+def test_snapshot_reobserves_git_drift_after_window(service, monkeypatch):
+    adapter, _, _, _ = service
+    subprocess.run(["git", "init", "-q", str(adapter.repo)], check=True)
+    def observe_git(raw, *, timeout):
+        result = projection(raw, timeout=timeout)
+        dirty = subprocess.run(["git", "status", "--porcelain"], cwd=adapter.repo,
+                               check=True, capture_output=True).stdout
+        result["freshness"] = {"status": "unknown" if dirty else "current"}
+        return result
+    monkeypatch.setattr(adapter, "project", observe_git)
+    _, first = get(adapter, "/v1/snapshot")
+    assert first["freshness"]["status"] == "current"
+    (adapter.repo / "untracked").write_text("changed")
+    assert get(adapter, "/v1/snapshot")[1] == first
+    observed, version, controller, response = adapter.reusable
+    adapter.reusable = (observed - 5, version, controller, response)
+    _, later = get(adapter, "/v1/snapshot")
+    assert later["freshness"]["status"] == "unknown"
 
 
 def test_snapshot_projection_unavailability_is_retryable(service, monkeypatch):

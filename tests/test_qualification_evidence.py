@@ -478,17 +478,17 @@ def test_legacy_refusal_keeps_the_existing_message(campaign):
 def test_acceptance_rechecks_the_run_read_after_confirmation(campaign, monkeypatch):
     _, _, state, _, scope, invoke, verify = campaign
     _, payload = verify()
-    original = evidence.read_run
+    original = evidence.read_run_snapshot
     reads = []
 
     def qualification_fails_after_confirmation(state_path, run_id):
-        bundle, record = original(state_path, run_id)
+        bundle, record, manifest = original(state_path, run_id)
         reads.append(run_id)
         if len(reads) > 1:
             record = {**record, "source_qualification_status": "violation"}
-        return bundle, record
+        return bundle, record, manifest
 
-    monkeypatch.setattr(evidence, "read_run", qualification_fails_after_confirmation)
+    monkeypatch.setattr(evidence, "read_run_snapshot", qualification_fails_after_confirmation)
     refused = invoke("accept", payload["run_id"], *scope)
     assert len(reads) == 2
     assert refused.exit_code == 2 and "any source qualification must also pass" in refused.output

@@ -846,6 +846,13 @@ def compare_runs(
 ) -> dict:
     before_path, before = read_run(state, before_id)
     after_path, after = read_run(state, after_id)
+    return compare_saved_runs(before_path, before, after_path, after, across_contracts=across_contracts)
+
+
+def compare_saved_runs(
+    before_path: Path, before: dict, after_path: Path, after: dict, *, across_contracts: bool = False
+) -> dict:
+    """Compare records already checked for integrity by the caller."""
     if any(run.get("kind") != "project-verification" for run in (before, after)):
         raise ValueError("Run comparison requires two project verification runs")
     if across_contracts:

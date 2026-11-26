@@ -648,7 +648,7 @@ def _docker_phase(
 
 
 def run_behavior(
-    project, snapshot, context, info, run_id, *, output_budget=None
+    project, snapshot, context, info, run_id, *, output_budget=None, checkpoint=None
 ) -> tuple[list[dict], dict[str, bytes]]:
     if output_budget is not None and (
         type(output_budget) is not int or not 0 <= output_budget <= MAX_RUN_OUTPUT
@@ -688,6 +688,8 @@ def run_behavior(
     else:
         phase = partial(_docker_phase, project, snapshot, context, run_id, info, files, remaining)
     for index, check in enumerate(project.contract.behavior, start=1):
+        if checkpoint is not None:
+            checkpoint()
         prefix = f"check-{index:03d}"
         result = {
             "id": check.id,
@@ -705,6 +707,8 @@ def run_behavior(
             continue
         phase(check, result, prefix, [])
         if check.negative_control and result["status"] == "pass":
+            if checkpoint is not None:
+                checkpoint()
             control = {
                 "status": "incomplete",
                 "detail": "Check did not complete",

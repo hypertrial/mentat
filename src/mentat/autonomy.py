@@ -247,6 +247,16 @@ def project_snapshot(snapshot: dict, *, identity: dict | None = None) -> dict:
     scopes = [e["payload"] for e in events if e.get("kind") == "claim_source_scope"]
     config_checks = session.get("policy", {}).get("source_checks", [])
     evidence = {e.get("id"): e for e in projected.get("evidence", [])}
+    scopes_by_claim: dict = {}
+    for scope in scopes:
+        ev = evidence.get(scope.get("evidence_id"))
+        if isinstance(ev, dict):
+            scopes_by_claim.setdefault(ev.get("claim_id"), []).append(scope)
+    reviewed_claims = {
+        (review.get("head"), claim_id, claim_digest)
+        for review in reviewed
+        for claim_id, claim_digest in review.get("claims", {}).items()
+    }
     final_jobs = [
         j
         for j in projected.get("jobs", [])
@@ -278,7 +288,7 @@ def project_snapshot(snapshot: dict, *, identity: dict | None = None) -> dict:
             continue
         matched = []
         unproved = []
-        for scope in scopes:
+        for scope in scopes_by_claim.get(claim.get("id"), []):
             if scope.get("head") != latest_head:
                 continue
             ev = evidence.get(scope.get("evidence_id"))
@@ -288,11 +298,7 @@ def project_snapshot(snapshot: dict, *, identity: dict | None = None) -> dict:
                 or ev.get("claim_id") != claim.get("id")
             ):
                 continue
-            if not any(
-                r.get("head") == scope.get("fas_head")
-                and r.get("claims", {}).get(claim["id"]) == claim_digest
-                for r in reviewed
-            ):
+            if (scope.get("fas_head"), claim["id"], claim_digest) not in reviewed_claims:
                 continue
             source_identity = ev.get("source_identity", {})
             if (
@@ -457,13 +463,7 @@ class Coordinator:
 
     def _consume_feedback(self) -> None:
         assert self.session_id
-        events = self.store.snapshot(self.session_id)["events"]
-        consumed = {
-            event["payload"].get("seq") for event in events if event["kind"] == "feedback_consumed"
-        }
-        for event in events:
-            if event["kind"] != "human_feedback" or event["seq"] in consumed:
-                continue
+        for event in self.store.pending_feedback(self.session_id):
             message = event["payload"].get("message")
             if not isinstance(message, str) or not 1 <= len(message) <= 8192:
                 raise ValueError("invalid archived feedback")
@@ -472,7 +472,7 @@ class Coordinator:
                 "implementer",
                 f"feedback.{event['seq']}",
                 {"kind": "generate_spec", "feedback": message, "human_feedback": message,
-                 "accepted_spec_base": self.store.snapshot(self.session_id)["session"]["head"]},
+                 "accepted_spec_base": self.store.session(self.session_id)["head"]},
             )
             self._event("feedback_consumed", {"seq": event["seq"]})
 
@@ -813,7 +813,7 @@ class Coordinator:
                 self.worker.expected_profile = copy.deepcopy(policy.get("worker_profile"))
             now = self.clock()
             if resume:
-                prior = self.store.snapshot(resume)["session"]
+                prior = self.store.session(resume)
                 if (
                     prior["repo"] != str(self.repo)
                     or prior["head"] != head
@@ -848,7 +848,7 @@ class Coordinator:
                                "surfaces": surfaces, "jobs": jobs, "spec_surface": self.spec_surface},
                 )
             assert self.session_id
-            deadline = self.store.snapshot(self.session_id)["session"]["deadline"]
+            deadline = self.store.session(self.session_id)["deadline"]
             self._event("capabilities", {"worker": self.worker.diagnostics()})
             active = {}
             try:
@@ -1098,10 +1098,11 @@ class Coordinator:
         autonomy_source_corrections.validate_result(result, scope, paths)
 
     def _validate_source_input(self, job: dict, decision: dict, scope: dict) -> None:
+        assert self.session_id
         outcome = autonomy_source_corrections.source_decision_outcome(job, decision)
         self._validate_source_result(job, outcome["result"], scope)
         context, _, _, _ = self._source_context(job["payload"]["proposal"]["head"], job)
-        session = self.store.snapshot(self.session_id)["session"]
+        session = self.store.session(self.session_id)
         autonomy_review_inputs.validate(self.repo, self.store.path.parent, job, decision,
                                         self._source_input_bindings(job),
                                         self._prompt(job, session) + context, scope)
@@ -1279,7 +1280,7 @@ class Coordinator:
 
         kind = job["payload"]["kind"]
         assert self.session_id
-        session = self.store.snapshot(self.session_id)["session"]
+        session = self.store.session(self.session_id)
         if self.stop.is_set() or self.clock() >= deadline:
             return {"status": "failed", "error": "session ended"}
         if kind == "source_check":
@@ -3128,7 +3129,7 @@ class Coordinator:
         def record_id(label: str) -> str:
             return digest({"job": job["id"], "record": label})
 
-        session = self.store.snapshot(self.session_id)["session"]
+        session = self.store.session(self.session_id)
         if kind == "investigate_defect" and "repair_checkpoint_gap" in outcome:
             self.store.put_record(
                 self.session_id, "finding", {
@@ -3994,7 +3995,7 @@ class Coordinator:
         self, head: str, commands: list, source_checks: list, repair: dict | None
     ) -> str:
         assert self.session_id
-        base = self.store.snapshot(self.session_id)["session"]["base"]
+        base = self.store.session(self.session_id)["base"]
         return digest(
             {
                 "head": head,
@@ -4206,7 +4207,7 @@ class Coordinator:
             {
                 "kind": kind,
                 "proposal": proposal,
-                "base": self.store.snapshot(self.session_id)["session"]["base"],
+                "base": self.store.session(self.session_id)["base"],
                 "targetfiles": payload.get("targetfiles"),
                 "chunk": payload.get("chunk", 0),
                 "batch_limit": payload.get("batch_limit"),
@@ -4277,7 +4278,7 @@ class Coordinator:
 
     def _publication_guard(self, job: dict, evidence: dict) -> bool:
         assert self.session_id
-        session = self.store.snapshot(self.session_id)["session"]
+        session = self.store.session(self.session_id)
         if self.stop.is_set() or self.clock() >= session["deadline"]:
             return False
         if (
@@ -4365,7 +4366,7 @@ class Coordinator:
         if not self._publication_guard(job, evidence):
             return
         assert self.session_id
-        session = self.store.snapshot(self.session_id)["session"]
+        session = self.store.session(self.session_id)
         proposal = job["payload"]["proposal"]
         head, reviews = proposal["head"], job["payload"]["reviews"]
         worktree = Path(proposal["worktree"])

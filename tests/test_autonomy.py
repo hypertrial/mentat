@@ -3590,6 +3590,9 @@ def test_chained_spec_reviews_reach_noop_verification_and_full_final_review(repo
         def snapshot(self, session_id):
             return earlier
 
+        def session(self, session_id):
+            return self.snapshot(session_id)["session"]
+
     github_spy = GitHub()
     coordinator = Coordinator(repo, store, Agent(), Worker(), github_spy)
     coordinator.session_id = snapshot['session']['id']
@@ -3711,6 +3714,9 @@ def test_chained_spec_reviews_reach_noop_verification_and_full_final_review(repo
 
         def snapshot(self, session_id):
             return self.data
+
+        def session(self, session_id):
+            return self.snapshot(session_id)["session"]
 
     for field in ('cohort', 'head', 'diff', 'reviewer', 'missing'):
         altered = deepcopy(original)
@@ -4065,6 +4071,9 @@ def test_repair_checkpoint_validates_reviewed_history_and_witness_context(repo, 
         class AlteredSnapshot:
             def snapshot(self, session_id):
                 return altered
+
+            def session(self, session_id):
+                return self.snapshot(session_id)["session"]
         coordinator.store = AlteredSnapshot()
     if drift == 'unchanged':
         assert coordinator._repair_checkpoint(job, original) == checkpoint

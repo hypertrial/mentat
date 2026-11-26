@@ -132,6 +132,8 @@ cross-system atomic snapshot. Expose `observed_at` and a recommended refresh
 interval of at most 5 seconds; clients must periodically refresh even when no
 journal event occurs. A page is an as-observed historical snapshot, never an
 unlimited lease on current assurance.
+Within the freshness window, an unchanged datastore and controller can reuse a
+published snapshot. Reuse preserves its original observation time and expiry.
 Freshness reads use trusted bounded Git invocation with sanitized environment
 and configuration, disabled hooks/fsmonitor/external diff/textconv and prompts,
 no networking and strict subprocess deadlines. Repository configuration must not

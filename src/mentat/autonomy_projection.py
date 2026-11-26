@@ -1,6 +1,5 @@
 """Bounded, qualified public projection of a saved autonomy session."""
 
-import copy
 import hashlib
 import json
 import math
@@ -236,8 +235,8 @@ def _qualify_proof(record: dict) -> None:
 
 def _project_inner(raw: dict, *, store_path: Path | None = None) -> dict:
     """Project only authorized fields; uncertain observations invalidate freshness."""
-    snapshot = copy.deepcopy(raw)
-    session = snapshot["session"]
+    snapshot = raw
+    session = raw["session"]
     observed_at = time.time()
     before = after = None
     try:
@@ -258,11 +257,11 @@ def _project_inner(raw: dict, *, store_path: Path | None = None) -> dict:
     tools = [e.get("payload", {}).get("identity") for e in snapshot.get("events", []) if e.get("kind") == "toolchain_pinned"]
     current = before is not None and before == after and not before[1] and before[0] == session.get("head") and authorities == [before[2]] and tools == [before[3]] and session.get("status") != "invalidated"
     if not current:
-        session["historical_status"] = session.get("status")
-        session["status"] = "invalidated"
+        # project_snapshot makes its own deep copy. Copy only the fields changed
+        # before that call, so the caller's capture remains untouched.
+        snapshot = {**raw, "session": {**session, "historical_status": session.get("status"), "status": "invalidated"}}
         for key in ("requirements", "claims", "evidence"):
-            for record in snapshot.get(key, []):
-                record["freshness"] = "stale"
+            snapshot[key] = [{**record, "freshness": "stale"} for record in raw.get(key, [])]
     projected = project_snapshot(snapshot, identity=before[3] if current and before is not None else {})
     for evidence in projected.get("evidence", []):
         source = evidence.get("source_identity")

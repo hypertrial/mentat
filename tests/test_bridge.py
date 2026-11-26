@@ -65,7 +65,7 @@ def test_review_scope_consent_replay_and_stale_head(quickstart):
         bridge.call("approval.commit", {"token": stale["token"]})
 
 
-def test_real_run_integrity_acceptance_export_and_compare(quickstart, tmp_path):
+def test_real_run_integrity_acceptance_export_and_compare(quickstart, tmp_path, monkeypatch):
     repo, state, scope, revision = quickstart
     bridge = Bridge(state)
     token = bridge.call("approval.prepare", {**scope, "hostConsent": True})["token"]
@@ -75,8 +75,18 @@ def test_real_run_integrity_acceptance_export_and_compare(quickstart, tmp_path):
     result = CliRunner().invoke(cli.app, args)
     assert result.exit_code == 0, result.output
     run_id = json.loads(result.output)["run_id"]
+    reads = []
+    read_snapshot = evidence.read_run_snapshot
+
+    def counted_read(state, run_id):
+        reads.append(run_id)
+        return read_snapshot(state, run_id)
+
+    monkeypatch.setattr(evidence, "read_run_snapshot", counted_read)
     assert bridge.call("runs.list", scope)["runs"][0]["runId"] == run_id
+    reads.clear()
     loaded = bridge.call("runs.get", {"runId": run_id, "revision": revision})
+    assert reads == [run_id]
     assert loaded["assurance"]["status"] == "pass"
     assert loaded["assurance"]["method"] and loaded["assurance"]["detail"]
     assert {check["id"] for check in loaded["assurance"]["claims"][0]["checks"]} == {"clamp-model", "clamp-cli"}
@@ -104,10 +114,14 @@ def test_real_run_integrity_acceptance_export_and_compare(quickstart, tmp_path):
         bridge.call("acceptance.commit", {"token": evidence_review["token"]})
     receipt.write_bytes(receipt_bytes)
     review = bridge.call("acceptance.prepare", params)
+    reads.clear()
     result = bridge.call("acceptance.commit", {"token": review["token"]})
+    assert reads == [run_id]
     assert result["assurance"]["accepted"]
     assert result["assurance"]["acceptanceSource"] == "cockpit_local_operator"
+    reads.clear()
     assert bridge.call("evidence.compare", {"before": run_id, "after": run_id})["status"] == "pass"
+    assert reads == [run_id, run_id]
     record = loaded["record"]
     ref = {"runId": run_id, "base": scope["base"], "revision": revision,
            "runner": scope["runner"], "contractDigest": record["contract_digest"]}
@@ -124,7 +138,9 @@ def test_real_run_integrity_acceptance_export_and_compare(quickstart, tmp_path):
     subprocess.run(["git", "init", str(foreign)], check=True, capture_output=True)
     with pytest.raises(ValueError, match="pinned"):
         bridge.call("evidence.inspect", {"repo": str(foreign), **ref})
+    reads.clear()
     comparison = bridge.call("evidence.compareScoped", {"repo": str(repo), "before": ref, "after": ref})
+    assert reads == [run_id, run_id]
     assert comparison["mode"] == "same-scope" and comparison["scopeDifferences"] == []
     assert str(state) not in json.dumps(comparison)
     assert "detail" not in json.dumps(comparison)
@@ -141,11 +157,25 @@ def test_real_run_integrity_acceptance_export_and_compare(quickstart, tmp_path):
     manifest = state / "runs" / run_id / "manifest.json"
     assert json.loads(manifest.read_bytes())["bundle_format"] == 2
     assert not (manifest.parent / "report.md").exists()
-    manifest.write_bytes(manifest.read_bytes() + b" ")
+    original_manifest = manifest.read_bytes()
+    manifest.write_bytes(original_manifest + b" ")
     with pytest.raises(ValueError, match="integrity"):
         bridge.call("evidence.inspect", {"repo": str(repo), **ref})
     with pytest.raises(ValueError, match="integrity"):
         bridge.call("runs.get", {"runId": run_id})
+    artifact = manifest.parent / "extra.log"
+    artifact.write_bytes(b"original")
+    amended = json.loads(original_manifest)
+    amended["artifacts"][artifact.name] = evidence.digest(b"original")
+    amended_bytes = json.dumps(amended).encode()
+    manifest.write_bytes(amended_bytes)
+    receipt.write_text(evidence.digest(amended_bytes))
+    assert bridge.call("runs.get", {"runId": run_id})["record"]["artifacts"]
+    artifact.write_bytes(b"tampered")
+    with pytest.raises(ValueError, match="integrity"):
+        bridge.call("evidence.compareScoped", {"repo": str(repo), "before": ref, "after": ref})
+    with pytest.raises(ValueError, match="integrity"):
+        bridge.call("acceptance.prepare", params)
     assert evidence.read_json(state / "acceptances" / f"{run_id}.json")["decision_source"] == "cockpit_local_operator"
 
 
@@ -223,9 +253,19 @@ def wait_operation(bridge, operation_id):
     pytest.fail("operation did not finish")
 
 
-def test_async_real_verification_and_idempotence(quickstart):
+def test_async_real_verification_and_idempotence(quickstart, monkeypatch):
+    from mentat import bridge as bridge_module
+
     repo, state, scope, revision = quickstart
     notifications = []
+    checkpoints = []
+    run_behavior = bridge_module.run_behavior
+
+    def observe_behavior(*args, **kwargs):
+        checkpoints.append(kwargs.get("checkpoint"))
+        return run_behavior(*args, **kwargs)
+
+    monkeypatch.setattr(bridge_module, "run_behavior", observe_behavior)
     bridge = Bridge(state, notify=notifications.append)
     token = bridge.call("approval.prepare", {**scope, "hostConsent": True})["token"]
     bridge.call("approval.commit", {"token": token})
@@ -234,6 +274,7 @@ def test_async_real_verification_and_idempotence(quickstart):
     assert bridge.call("verification.start", args) == {"operationId": "real-job"}
     result = wait_operation(bridge, "real-job")
     assert result["status"] == "completed"
+    assert len(checkpoints) == 1 and callable(checkpoints[0])
     assert result["assurance"]["status"] == "pass"
     fixture = json.loads((Path(__file__).parent / "fixtures/cockpit-bridge-v1.json").read_text())
     example = fixture["examples"]["completedPass"]["params"]
@@ -253,6 +294,17 @@ def test_async_real_verification_and_idempotence(quickstart):
     assert failed_check["assurance"]["freshness"] == "current"
     assert_contains(failed_check, fixture["examples"]["completedFail"]["params"])
     bridge.close()
+    reads = []
+    read_snapshot = evidence.read_run_snapshot
+
+    def counted_read(state, run_id):
+        reads.append(run_id)
+        return read_snapshot(state, run_id)
+
+    monkeypatch.setattr(evidence, "read_run_snapshot", counted_read)
+    recovered = Bridge(state).call("operation.get", {"operationId": "real-job"})
+    assert recovered["assurance"]["runId"] == result["runId"]
+    assert reads == [result["runId"]]
 
 
 def test_cancel_waits_for_unstoppable_worker_and_does_not_replay(quickstart, monkeypatch):

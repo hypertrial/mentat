@@ -165,6 +165,9 @@ def test_current_source_batches_precede_aggregate_and_publication(tmp_path, monk
             assert session_id == coordinator.session_id
             return self.value
 
+        def session(self, session_id):
+            return self.snapshot(session_id)["session"]
+
         def source_head_fenced(self, session_id, head):
             return store.source_head_fenced(session_id, head)
 
