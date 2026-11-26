@@ -46,6 +46,11 @@ uv run --locked mentat resume --repo /absolute/path/to/application
 
 Run from a clean committed tree. `run` and `resume` are headless by default and
 produce no rendered report. The independent AI Cockpit owns all presentation.
+Resume and publication check the execution fingerprint, which includes the
+source-correction and review-input validators. If trusted source changes while
+Mentat is running, restart the process to load the new code. A session pinned to
+an earlier execution fingerprint cannot resume under the new one.
+
 For a committed FAS-only change to one mapped tracked surface, use
 `mentat run --repo PATH --spec-surface TRACKED_PATH` for a read-only
 qualification. Resume retains the selected scope. All configured checks and

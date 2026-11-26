@@ -51,12 +51,14 @@ replacement. Permit only trusted nonwritable ancestors (the system temporary
 directory may be a sticky ancestor, never the final private directory). Do not overwrite an
 existing file, follow links, or write in a repository. It contains protocol major,
 loopback base URL, bearer capability, ephemeral server ID and selected session
-when known. Fsync it; normal shutdown removes only the exact file inode created
-by this server. Publish only after the listener/file are ready; failed secure
-creation/fsync shuts down the adapter without disclosing a capability. A crash may leave a stale file: clients treat failed connectivity
-as unavailable and use a fresh trusted launch/file, never infer engine failure
-or request replay. Same-user processes able to read private files are trusted;
-this capability is not isolation from a hostile same-user process or root.
+when known. Fsync it and keep its file descriptor open until shutdown to prevent
+inode reuse if the path is replaced. Shutdown checks that the path still names
+the published inode before removing it. Publish only after the listener and file
+are ready. If secure creation or fsync fails, shut down the adapter without
+disclosing a capability. A crash may leave a stale file. Clients treat failed
+connectivity as unavailable and use a fresh trusted launch or file. A failed
+connection is only an availability result. The trust boundary includes root and
+same-user processes with access to the private files.
 
 Reject every supplied Origin by default. An operator may explicitly allow exact
 loopback HTTP origins for an independently hosted cockpit; reject `null`, wildcard,

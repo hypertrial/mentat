@@ -35,18 +35,25 @@ from . import (
 )
 from .autonomy_state import record_digest
 
+
+def _execution_sources() -> tuple[bytes, ...]:
+    paths = (
+        Path(__file__),
+        Path(autonomy_worker.__file__),
+        Path(autonomy_private_merge.__file__),
+        Path(autonomy_git_transaction.__file__),
+        Path(autonomy_spec_scope.__file__),
+        *(Path(__file__).with_name(name) for name in (
+            "autonomy_state.py", "autonomy_cli.py", "autonomy_projection.py",
+            "autonomy_integration.py", "autonomy.py", "autonomy_final_review.py",
+            "autonomy_source_corrections.py", "autonomy_review_inputs.py",
+        )),
+    )
+    return tuple(path.read_bytes() for path in paths)
+
+
 # Refuse to attest code that changed after this process imported its implementation.
-_LOADED_EXECUTION_SOURCES = (
-    Path(__file__).read_bytes(),
-    Path(autonomy_worker.__file__).read_bytes(),
-    Path(autonomy_private_merge.__file__).read_bytes(),
-    Path(autonomy_git_transaction.__file__).read_bytes(),
-    Path(autonomy_spec_scope.__file__).read_bytes(),
-    *(Path(__file__).with_name(name).read_bytes() for name in (
-        "autonomy_state.py", "autonomy_cli.py", "autonomy_projection.py", "autonomy_integration.py",
-        "autonomy.py", "autonomy_final_review.py",
-    )),
-)
+_LOADED_EXECUTION_SOURCES = _execution_sources()
 
 
 def _execution_digest(parts: list[bytes]) -> str:
@@ -59,17 +66,7 @@ def _execution_digest(parts: list[bytes]) -> str:
 
 def execution_identity() -> str:
     """Fingerprint the executing worker implementation and its trusted assets."""
-    sources = (
-        Path(__file__).read_bytes(),
-        Path(autonomy_worker.__file__).read_bytes(),
-        Path(autonomy_private_merge.__file__).read_bytes(),
-        Path(autonomy_git_transaction.__file__).read_bytes(),
-        Path(autonomy_spec_scope.__file__).read_bytes(),
-    *(Path(__file__).with_name(name).read_bytes() for name in (
-        "autonomy_state.py", "autonomy_cli.py", "autonomy_projection.py", "autonomy_integration.py",
-        "autonomy.py", "autonomy_final_review.py",
-    )),
-    )
+    sources = _execution_sources()
     if sources != _LOADED_EXECUTION_SOURCES:
         raise ValueError("trusted execution code changed after import; restart required")
     assets = autonomy_worker.worker_assets()

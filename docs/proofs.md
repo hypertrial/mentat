@@ -90,6 +90,10 @@ files, compiled objects, toolchain/configuration files, symlinks and escaping pa
 are rejected. Proofs may add helper lemmas without changing approved statements
 or their supporting definitions.
 
+Protected proof preparation, submission checks, and verification rechecks share
+one host lock per operator account across state directories and `TMPDIR` settings.
+A concurrent check stops before recording a proof attempt.
+
 `proof check` exits zero for accepted submissions, one for a definitive rejection,
 and two when checking cannot complete. A failed attempt is retained. Only the
 latest submission for a target is eligible; a later failure cannot fall back to an

@@ -114,7 +114,7 @@ def _lock(path, *, blocking=True):
 
 
 def _host_lock_path():
-    return Path(tempfile.gettempdir()) / f"mentat-proof-build-{os.getuid()}.lock"
+    return Path("/tmp") / f"mentat-proof-build-{os.getuid()}.lock"
 
 
 @contextmanager
