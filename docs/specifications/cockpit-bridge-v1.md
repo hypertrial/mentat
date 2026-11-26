@@ -26,6 +26,11 @@ A repository scope carries an absolute `repo`, a full committed `base`, a `runne
 | `evidence.compareScoped` | two pinned run references, optional `acrossContracts` | safe scoped comparison |
 | `acceptance.prepare` | candidate scope, `runId`, optional `hostConsent` | `DecisionReview` |
 | `acceptance.commit` | `token` only | `accepted`, `source`, `assurance` |
+| `reviewDecision.prepare` | candidate scope, `runId`, `action`, `requestId`, optional `hostConsent` and action-dependent `reason` | expiring review or existing `receipt` |
+| `reviewDecision.commit` | `token` only | `receipt` |
+| `reviewDecision.get` | `runId`, `requestId`, optional `state` | `receipt` |
+
+See the [evidence projection](cockpit-evidence-projection-v1.md) and [review decision](review-decisions-v1.md) specifications for the optional methods' exact inputs and result fields.
 
 `ContractSummary` exposes status, runner, claims and the available verifier digest, committed files and approval source. `DecisionReview` carries kind, one-use token, scope, expiry and review detail. Approval presents all committed verification inputs as bounded review artifacts or refuses the decision. Assurance carries run/candidate/base/contract identities, check result, claims and method, available qualification, freshness (`current`, `historical`, `unknown`), eligibility and recorded acceptance. A preserved historical receipt may remain accepted as recorded while eligibility is false. Missing revision or an unavailable freshness check cannot yield current eligibility. Additive optional v1 result fields may be ignored.
 
@@ -38,3 +43,5 @@ A repository scope carries an absolute `repo`, a full committed `base`, a `runne
 ## Acceptance and evidence
 
 Port from the preserved prototype without moving its Git worktree or changing historical record fixtures. Lock v1 method names and representative assurance/status examples in producer-owned protocol fixtures. Run focused bridge, CLI, evidence, qualification and replay checks followed by `scripts/verify-fast`, `scripts/verify` and the zero-skip dedicated Linux `scripts/verify-worker` gate. Verify installed wheel and sdist from a clean committed source revision. The Cockpit consumer must exercise the installed wheel against the clamp failing baseline, repaired candidate, stale-candidate refusal, acceptance and export. Pairing evidence belongs with the Cockpit consumer; this specification and producer evidence belong in Mentat Git. Cockpit tracking begins at WORK-32.
+
+The stdio subprocess tests use the same Python environment as pytest, including an environment selected by `UV_PROJECT_ENVIRONMENT`.

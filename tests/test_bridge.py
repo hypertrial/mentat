@@ -1,6 +1,7 @@
 import io
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -9,6 +10,8 @@ from typer.testing import CliRunner
 
 from mentat import cli, evidence
 from mentat.bridge import Bridge, serve
+
+BRIDGE_LAUNCHER = (sys.executable, "-P", "-c", "from mentat.cli import app; app()")
 
 
 @pytest.fixture
@@ -33,7 +36,7 @@ def test_protocol_envelopes_and_unsupported(tmp_path):
     assert "verification.start" in lines[0]["result"]["capabilities"]
     assert lines[1]["error"]["code"] == "unsupported"
     assert lines[2]["error"]["code"] == "invalid_request"
-    proc = subprocess.run([str(Path(cli.__file__).parents[2] / ".venv/bin/mentat"),
+    proc = subprocess.run([*BRIDGE_LAUNCHER,
                            "--state", str(tmp_path / "state"), "bridge", "--stdio"],
                           input=requests[0], capture_output=True, check=True)
     assert json.loads(proc.stdout)["result"]["version"] == 1
@@ -319,8 +322,7 @@ def test_stdio_verification_acknowledged_before_notification(quickstart):
     bridge = Bridge(state)
     token = bridge.call("approval.prepare", {**scope, "hostConsent": True})["token"]
     bridge.call("approval.commit", {"token": token})
-    executable = Path(cli.__file__).parents[2] / ".venv/bin/mentat"
-    proc = subprocess.Popen([str(executable), "--state", str(state), "bridge", "--stdio"],
+    proc = subprocess.Popen([*BRIDGE_LAUNCHER, "--state", str(state), "bridge", "--stdio"],
                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                             bufsize=0)
     try:

@@ -10,12 +10,6 @@ Regression surfaces: old validated schema 2 records and legacy bundles, skipped 
 
 ## Implementation evidence
 
-Base revision: `23ce31b`; changes are uncommitted in the `cockpit/assurance-projection-v1` worktree. The module is classified as verifier code because the bridge imports it. This change updates the verifier fingerprint, so projects require fresh approval under the existing contract rules. The local Pad check reported `pad-disabled`.
+The projection module is classified as verifier code because the bridge imports it. This change updates the verifier fingerprint, so projects require fresh approval under the existing contract rules.
 
-- `PYTHONPATH=src ../mentat/.venv/bin/pytest -n 0 -q tests/test_bridge.py tests/test_evidence_comparison.py tests/test_evidence_bundle_format.py`: 67 passed using the neighboring checkout's Python environment and a local `.venv/bin/mentat` launcher. The initial attempt without the launcher had 65 pass and two missing-executable failures.
-- `PYTHONPATH=src ../mentat/.venv/bin/pytest -n 0 -q tests/test_bridge.py tests/test_evidence_comparison.py tests/test_evidence_bundle_format.py tests/test_verifier_digest.py`: 115 passed after correcting the verifier module classification.
-- `UV_CACHE_DIR=/tmp/mentat-uv-cache UV_PROJECT_ENVIRONMENT='../mentat/.venv' PYTHONPATH=src scripts/verify-fast`: passed.
-- `scripts/verify-worker`: unavailable here, exits 2 because the dedicated checker gate requires Linux. Run it on the dedicated worker with zero skipped checker fixtures before acceptance.
-- `scripts/verify`: lint and claims checks passed; pytest showed a failure before the run was interrupted to isolate it. The earlier module-classification error was corrected and targeted digest tests pass. A new full run is in progress; the completion gate remains unverified. Installed wheel/sdist and consumer pairing are not verified here and require a clean committed source revision and the consumer environment.
-
-Independent adversarial review and final acceptance verification remain required. No commit, push, or publication was performed.
+The earlier branch passed 115 focused bridge, comparison, bundle-format, and verifier-digest tests. Its integrated revision, `c3c4324b4604f74d9876ac6ec9925ea75ab776c6`, passed `scripts/verify-fast`, the hosted check, and all 45 protected Linux checker tests with zero skips. A full native pass remains required before merge. The [draft PR](https://github.com/hypertrial/mentat/pull/86) records the verification status for that revision.
