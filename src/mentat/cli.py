@@ -10,7 +10,7 @@ from typing import Annotated, Literal
 
 import typer
 
-from . import evidence, spec_review, verification
+from . import evidence, review_decisions, spec_review, verification
 from .autonomy_cli import register as register_autonomy
 from .claims import checked_claims, provenance_lines, write_claims
 from .claims_notion import notion_claims
@@ -512,28 +512,37 @@ def accept(
         receipt = (state / "receipts" / run_id).read_text()
         if not trusted_chat_approval:
             operator_confirm(f"Accept candidate {record['revision']} from run {run_id}?")
-        if load_project(repo, base, runner).fingerprint != project.fingerprint:
-            raise ValueError("Contract changed during acceptance")
-        _, record = _saved_run(state, run_id)
-        if not _acceptable(project, approved, record):
-            raise _refusal(record)
-        if (state / "receipts" / run_id).read_text() != receipt or _approval(
-            state, project
-        ) != approved:
-            raise ValueError("Evidence or approval changed during acceptance")
-        evidence.write_record(
-            state / "acceptances" / f"{run_id}.json",
-            evidence.json_bytes(
-                {
-                    "run_id": run_id,
-                    "manifest_digest": receipt,
-                    "revision": record["revision"],
-                    "contract_digest": project.fingerprint,
-                    "accepted_at": evidence.now(),
-                    **({"decision_source": "unverified_agent_relay"} if trusted_chat_approval else {}),
-                }
-            ),
-        )
+        with review_decisions.locked(state):
+            if load_project(repo, base, runner).fingerprint != project.fingerprint:
+                raise ValueError("Contract changed during acceptance")
+            _, record = _saved_run(state, run_id)
+            if not _acceptable(project, approved, record):
+                raise _refusal(record)
+            if (state / "receipts" / run_id).read_text() != receipt or _approval(
+                state, project
+            ) != approved:
+                raise ValueError("Evidence or approval changed during acceptance")
+            evaluation = review_decisions.evaluation(project, approved, record, receipt)
+            review_decisions.check_acceptance(state, evaluation)
+            existing, present = evidence.acceptance_receipt(state, record, receipt)
+            if present:
+                if not existing:
+                    raise ValueError("Existing acceptance receipt is invalid")
+                finish({"status": "pass", "run_id": run_id}, False)
+                return
+            evidence.write_record(
+                state / "acceptances" / f"{run_id}.json",
+                evidence.json_bytes(
+                    {
+                        "run_id": run_id,
+                        "manifest_digest": receipt,
+                        "revision": record["revision"],
+                        "contract_digest": project.fingerprint,
+                        "accepted_at": evidence.now(),
+                        **({"decision_source": "unverified_agent_relay"} if trusted_chat_approval else {}),
+                    }
+                ),
+            )
         finish({"status": "pass", "run_id": run_id}, False)
     except _USER_ERRORS as exc:
         _error(exc, False)

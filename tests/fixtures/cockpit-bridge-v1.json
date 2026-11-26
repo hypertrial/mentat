@@ -4,7 +4,8 @@
     "initialize", "project.inspect", "specification.get", "approval.prepare",
     "approval.commit", "verification.start", "verification.cancel", "operation.get",
     "runs.list", "runs.get", "evidence.export", "evidence.compare",
-    "acceptance.prepare", "acceptance.commit"
+    "acceptance.prepare", "acceptance.commit",
+    "reviewDecision.prepare", "reviewDecision.commit", "reviewDecision.get"
   ],
   "examples": {
     "startResponse": {"id": 17, "result": {"operationId": "stdio-job"}},
