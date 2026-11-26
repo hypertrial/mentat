@@ -5,6 +5,7 @@ projection and freshness are exercised separately in test_autonomy_projection.
 """
 import http.client
 import json
+import os
 import socket
 import stat
 from urllib.parse import urlsplit
@@ -89,6 +90,65 @@ def test_cleanup_does_not_unlink_replacement(service):
     path.write_text("replacement")
     adapter.close()
     assert path.read_text() == "replacement"
+
+
+def test_published_rendezvous_remains_open_until_close(service, monkeypatch):
+    existing, store, session, path = service
+    path = path.with_name("second.json")
+    original_open = os.open
+    created = []
+
+    def track_open(name, flags, *args, **kwargs):
+        fd = original_open(name, flags, *args, **kwargs)
+        if flags & os.O_CREAT and flags & os.O_EXCL:
+            created.append(fd)
+        return fd
+
+    monkeypatch.setattr(os, "open", track_open)
+    adapter = create_adapter(store=store, repo=existing.repo, session_id=lambda: session,
+                             project=projection, connection_file=path)
+    try:
+        adapter.start()
+        assert len(created) == 1
+        fd = created[0]
+        published = path.stat()
+        path.unlink()
+        path.write_text("replacement")
+        held = os.fstat(fd)
+        assert (held.st_dev, held.st_ino) == (published.st_dev, published.st_ino)
+        adapter.close()
+        with pytest.raises(OSError):
+            os.fstat(fd)
+        assert path.read_text() == "replacement"
+    finally:
+        adapter.close()
+
+
+def test_failed_rendezvous_publication_closes_file(service, monkeypatch):
+    existing, store, session, path = service
+    path = path.with_name("failed.json")
+    original_open = os.open
+    created = []
+
+    def track_open(name, flags, *args, **kwargs):
+        fd = original_open(name, flags, *args, **kwargs)
+        if flags & os.O_CREAT and flags & os.O_EXCL:
+            created.append(fd)
+        return fd
+
+    def fail_link(*args, **kwargs):
+        raise OSError("publication failed")
+
+    monkeypatch.setattr(os, "open", track_open)
+    monkeypatch.setattr(os, "link", fail_link)
+    adapter = create_adapter(store=store, repo=existing.repo, session_id=lambda: session,
+                             project=projection, connection_file=path)
+    with pytest.raises(OSError, match="publication failed"):
+        adapter.start()
+    assert len(created) == 1
+    with pytest.raises(OSError):
+        os.fstat(created[0])
+    assert not path.exists()
 
 
 def test_rejects_insecure_and_existing_rendezvous(service, tmp_path):

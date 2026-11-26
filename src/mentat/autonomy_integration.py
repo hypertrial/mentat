@@ -258,7 +258,7 @@ class IntegrationAdapter:
         self.server: _Server | None = None
         self.thread: threading.Thread | None = None
         self.dirfd: int | None = None
-        self.file_inode: tuple[int, int] | None = None
+        self.filefd: int | None = None
 
     def _session(self) -> str | None:
         with self.lock:
@@ -306,12 +306,14 @@ class IntegrationAdapter:
                 os.fsync(filefd)
                 self._verify_directory()
                 os.link(temp, name, src_dir_fd=fd, dst_dir_fd=fd, follow_symlinks=False)
-                self.file_inode = (info.st_dev, info.st_ino)
+                # Keep the published inode alive even if its pathname is replaced.
+                self.filefd = filefd
                 os.unlink(temp, dir_fd=fd)
                 temp_created = False
                 os.fsync(fd)
             finally:
-                os.close(filefd)
+                if self.filefd is None:
+                    os.close(filefd)
             self.thread = threading.Thread(target=self.server.serve_forever, name="mentat-integration", daemon=True)
             self.thread.start()
         except BaseException:
@@ -334,21 +336,27 @@ class IntegrationAdapter:
             if self.closed:
                 return
             self.closed = True
-        if self.server:
-            if self.thread and self.thread.is_alive():
-                self.server.shutdown()
-                self.thread.join()
-            self.server.server_close()
-        if self.dirfd is not None:
-            try:
-                self._verify_directory()
-                info = os.stat(self.connection_file.name, dir_fd=self.dirfd, follow_symlinks=False)
-                if self.file_inode == (info.st_dev, info.st_ino) and stat.S_ISREG(info.st_mode):
-                    os.unlink(self.connection_file.name, dir_fd=self.dirfd)
-                    os.fsync(self.dirfd)
-            except (OSError, ValueError):
-                pass
-            finally:
+        try:
+            if self.server:
+                if self.thread and self.thread.is_alive():
+                    self.server.shutdown()
+                    self.thread.join()
+                self.server.server_close()
+            if self.dirfd is not None and self.filefd is not None:
+                try:
+                    self._verify_directory()
+                    info = os.stat(self.connection_file.name, dir_fd=self.dirfd, follow_symlinks=False)
+                    original = os.fstat(self.filefd)
+                    if (original.st_dev, original.st_ino) == (info.st_dev, info.st_ino) and stat.S_ISREG(info.st_mode):
+                        os.unlink(self.connection_file.name, dir_fd=self.dirfd)
+                        os.fsync(self.dirfd)
+                except (OSError, ValueError):
+                    pass
+        finally:
+            if self.filefd is not None:
+                os.close(self.filefd)
+                self.filefd = None
+            if self.dirfd is not None:
                 os.close(self.dirfd)
                 self.dirfd = None
 
