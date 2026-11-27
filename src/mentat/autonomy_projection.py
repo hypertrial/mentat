@@ -305,6 +305,39 @@ def _project_inner(raw: dict, *, store_path: Path | None = None) -> dict:
                 if isinstance(original, dict) and original.get("status") == "proved":
                     _qualify_proof(public)
         result[section] = public_records
+    inventories = [event.get("payload") for event in raw.get("events", [])
+                   if event.get("kind") == "inventory"]
+    result["inventory"] = []
+    if inventories:
+        if len(inventories) != 1 or not isinstance(inventories[0], dict):
+            raise ValueError("invalid inventory")
+        surfaces = inventories[0].get("surfaces")
+        if not isinstance(surfaces, list) or inventories[0].get("count") != len(surfaces):
+            raise ValueError("invalid inventory")
+        reviewed_requirements = {
+            (record_id, record_digest)
+            for event in raw.get("events", []) if event.get("kind") == "fas_reviewed"
+            for record_id, record_digest in event.get("payload", {}).get("requirements", {}).items()
+        }
+        mapped = set()
+        if current:
+            for requirement in raw.get("requirements", []):
+                if not isinstance(requirement, dict) or requirement.get("origin") == "uncertain":
+                    continue
+                record = {key: value for key, value in requirement.items() if key != "freshness"}
+                if (record.get("id"), digest(record)) not in reviewed_requirements:
+                    continue
+                for citation in record.get("citations", []):
+                    if isinstance(citation, dict) and citation.get("revision") == session.get("base") and _path(citation.get("path")):
+                        mapped.add(citation["path"])
+        for surface in surfaces:
+            if not isinstance(surface, dict) or not _path(surface.get("path")) or surface.get("status") != "unmapped":
+                raise ValueError("invalid inventory surface")
+            path = _clean(surface["path"], feedback)
+            is_mapped = path in mapped
+            result["inventory"].append({"path": path, "status": "mapped" if is_mapped else "unmapped",
+                                        "reason": "Reviewed requirement cites this path at the base revision." if is_mapped
+                                        else "Initial inventory; mapping has not been assessed."})
     public_evidence = {record.get("id"): record for record in result["evidence"]}
     for claim in result["claims"]:
         if claim.get("status") == "established-within-scope":

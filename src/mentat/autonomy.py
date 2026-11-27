@@ -430,13 +430,31 @@ def _allowed_path(kind: str, path: str) -> bool:
 _OUTPUT_INSTRUCTIONS = autonomy_final_review.OUTPUT_INSTRUCTIONS
 
 
+def normalize_local_trial(local_trial: dict) -> dict:
+    if not isinstance(local_trial, dict) or set(local_trial) != {"base", "request_id", "repair_paths"}:
+        raise ValueError("invalid local trial identity")
+    base, request_id, paths = (local_trial[k] for k in ("base", "request_id", "repair_paths"))
+    if not isinstance(base, str) or not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", base):
+        raise ValueError("trial base must be a full commit ID")
+    if not isinstance(request_id, str) or not re.fullmatch(r"[A-Za-z0-9._~-]{1,128}", request_id):
+        raise ValueError("invalid trial request ID")
+    if not isinstance(paths, tuple) or len(paths) > 128 or any(not isinstance(p, str) for p in paths):
+        raise ValueError("invalid trial repair paths")
+    if len(set(paths)) != len(paths):
+        raise ValueError("duplicate trial repair path")
+    for path in paths:
+        safe_relative_path(path)
+    return {"base": base, "request_id": request_id, "repair_paths": list(paths)}
+
+
 class Coordinator:
     """One active controller owns a workspace; adapters are injectable for acceptance tests."""
 
-    def __init__(self, repo: Path, store: Store, agents, worker, github, *, clock=time.time):
+    def __init__(self, repo: Path, store: Store, agents, worker, github, *, clock=time.time, local_trial: dict | None = None):
         self.repo = repo.resolve()
         self.store, self.agents, self.worker, self.github = store, agents, worker, github
         self.clock = clock
+        self.local_trial = normalize_local_trial(local_trial) if local_trial is not None else None
         self.stop = threading.Event()
         self.session_id: str | None = None
         self.spec_surface: str | None = None
@@ -496,6 +514,8 @@ class Coordinator:
         if len(starts) != 1 or len(inventories) != 1:
             raise ValueError("incomplete initial session bootstrap; start a new session")
         start = starts[0]
+        if start.get("local_trial") != self.local_trial:
+            raise ValueError("trial session identity changed")
         self.spec_surface = start.get("spec_surface")
         if self.spec_surface is not None:
             autonomy_spec_scope.validate_seeded_surface(self, start["base"], start["head"], self.spec_surface, inventory, git)
@@ -765,8 +785,32 @@ class Coordinator:
                 raise ValueError(
                     "commit or preserve working-tree changes before running autonomous work"
                 )
-            self.config = load_config(self.repo, head)
             policy = load_policy_path(self.store.path)
+            if self.local_trial is not None:
+                if resume is not None or spec_surface is not None:
+                    raise ValueError("trial session identity is selected from local state")
+                if str(self.repo) != git(self.repo, "rev-parse", "--show-toplevel") or head != self.local_trial["base"]:
+                    raise ValueError("trial requires the exact clean repository base")
+                if policy.get("schema_version") != 2 or policy.get("local_trial") != self.local_trial or policy.get("auto_merge") is not False:
+                    raise ValueError("local trial authority does not match the request")
+                if type(policy.get("session_seconds")) is not int or not 1 <= policy["session_seconds"] <= 3600 or type(policy.get("max_attempts")) is not int or not 1 <= policy["max_attempts"] <= 3:
+                    raise ValueError("invalid trial resource limits")
+                tracked = set(_git_paths(self.repo, "ls-tree", "-r", "--name-only", "-z", head))
+                self.config = load_config(self.repo, head) if CONFIG_PATH in tracked else default_config(self.repo)
+                if any(self.config[source] != policy.get(required) for source, required in (
+                    ("local_checks", "mandatory_local_checks"),
+                    ("worker_checks", "mandatory_worker_checks"),
+                    ("source_checks", "mandatory_source_checks"),
+                )):
+                    raise ValueError("trial checks do not match trusted local authority")
+                self.config["auto_merge"] = False
+                self.config["session_seconds"] = min(self.config["session_seconds"], policy["session_seconds"])
+                self.config["max_attempts"] = min(self.config["max_attempts"], policy["max_attempts"])
+                resume = self.store.trial_session_id()
+            else:
+                if "local_trial" in policy or self.store.has_local_trial():
+                    raise ValueError("local trial authority cannot be used by ordinary runs")
+                self.config = load_config(self.repo, head)
             if policy.get("repo") != str(self.repo):
                 raise ValueError("local policy belongs to a different repository")
             self.authority_digest = digest(policy)
@@ -779,9 +823,10 @@ class Coordinator:
                     if e["kind"] == "authority_pinned"
                 ]
                 if identities != [self.authority_digest]:
-                    self.store.invalidate(
-                        resume, {"head": head, "authority_digest": self.authority_digest}
-                    )
+                    if self.local_trial is None:
+                        self.store.invalidate(
+                            resume, {"head": head, "authority_digest": self.authority_digest}
+                        )
                     raise ValueError(
                         "local authority changed; prior evidence is stale, start a new session"
                     )
@@ -792,7 +837,8 @@ class Coordinator:
                     if e["kind"] == "toolchain_pinned"
                 ]
                 if pinned_tools != [self.tool_identity]:
-                    self.store.invalidate(resume, {"head": head, "toolchain": self.tool_identity})
+                    if self.local_trial is None:
+                        self.store.invalidate(resume, {"head": head, "toolchain": self.tool_identity})
                     raise ValueError(
                         "source proof toolchain changed; prior evidence is stale, start a new session"
                     )
@@ -819,17 +865,27 @@ class Coordinator:
                     or prior["head"] != head
                     or prior["policy"] != self.config
                 ):
-                    self.store.invalidate(resume, {"head": head, "policy": digest(self.config)})
+                    if self.local_trial is None:
+                        self.store.invalidate(resume, {"head": head, "policy": digest(self.config)})
                     raise ValueError(
                         "source or policy changed; prior evidence is stale, start a new session"
                     )
                 self._validate_initial_jobs(previous)
                 self.session_id = resume
+                if self.local_trial is not None:
+                    resumable = prior["status"] in {"running", "paused"} or (
+                        prior["status"] in {"completed", "blocked"} and bool(self.store.pending_feedback(resume))
+                    )
+                    if now >= prior["deadline"] and prior["status"] in {"running", "paused"}:
+                        self.store.expire_local_trial(resume, now=now)
+                        return project_snapshot(self.store.snapshot(resume), identity=self.tool_identity)
+                    if not resumable or now >= prior["deadline"]:
+                        return project_snapshot(previous, identity=self.tool_identity)
                 self.store.resume_session(
-                    resume, now=now, deadline=now + self.config["session_seconds"]
+                    resume, now=now, deadline=prior["deadline"] if self.local_trial is not None else now + self.config["session_seconds"]
                 )
             else:
-                base = git(
+                base = self.local_trial["base"] if self.local_trial is not None else git(
                     self.repo, "rev-parse", f"{self.config['remote']}/{self.config['base_branch']}"
                 )
                 if self.spec_surface is not None:
@@ -845,7 +901,8 @@ class Coordinator:
                     now + self.config["session_seconds"],
                     bootstrap={"authority_digest": self.authority_digest,
                                "tool_identity": self.tool_identity, "records": records,
-                               "surfaces": surfaces, "jobs": jobs, "spec_surface": self.spec_surface},
+                               "surfaces": surfaces, "jobs": jobs, "spec_surface": self.spec_surface,
+                               "local_trial": self.local_trial},
                 )
             assert self.session_id
             deadline = self.store.session(self.session_id)["deadline"]
@@ -1283,6 +1340,8 @@ class Coordinator:
         session = self.store.session(self.session_id)
         if self.stop.is_set() or self.clock() >= deadline:
             return {"status": "failed", "error": "session ended"}
+        if kind == "investigate_defect" and self.local_trial is not None and not self.local_trial["repair_paths"]:
+            return {"status": "succeeded", "repair_checkpoint_gap": "Local trial does not authorize application repair."}
         if kind == "source_check":
             check = dict(job["payload"]["check"])
             check.pop("counterexample_cases", None)
@@ -1552,6 +1611,10 @@ class Coordinator:
                 )
             if any(not _allowed_path(kind, item.get("path", "")) for item in proposed_changes):
                 raise ValueError("proposal changed files outside its permitted scope")
+            if self.local_trial is not None and kind == "investigate_defect" and any(
+                item.get("path") not in self.local_trial["repair_paths"] for item in proposed_changes
+            ):
+                raise ValueError("trial repair proposal exceeds authorized paths")
             apply_changes(worktree, proposed_changes, kind=kind, protected_paths=protected)
         structured = dict(result["result"])
         if "changes" in structured and kind != "review_final_source":
@@ -1589,6 +1652,8 @@ class Coordinator:
         if any(not _allowed_path(kind, path) for path in changes):
             raise ValueError("proposal changed files outside its permitted scope")
         if kind == "investigate_defect":
+            if self.local_trial is not None and not changes <= set(self.local_trial["repair_paths"]):
+                raise ValueError("trial repair modified unauthorized paths")
             protected_commands = {
                 arg.removeprefix("./")
                 for argv in self.config["local_checks"] + self.config["worker_checks"]
@@ -3831,6 +3896,7 @@ class Coordinator:
                 {
                     "head": proposal["head"],
                     "claims": {claim["id"]: digest(claim) for claim in fas["claims"]},
+                    "requirements": {requirement["id"]: digest(requirement) for requirement in fas["requirements"]},
                     "decision_ids": [d["id"] for d in decisions],
                     **({"repair_backed": True} if isinstance(job["payload"].get("repair"), dict) else {}),
                 },
@@ -4363,6 +4429,8 @@ class Coordinator:
         return True
 
     def _publish(self, job: dict, evidence: dict) -> None:
+        if self.local_trial is not None:
+            return
         if not self._publication_guard(job, evidence):
             return
         assert self.session_id

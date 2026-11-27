@@ -1,7 +1,10 @@
 """Additive CLI for session-scoped autonomous work and direct source evidence."""
 
 import json
+import os
+import stat
 import subprocess
+import time
 from pathlib import Path
 from typing import Annotated, NoReturn
 
@@ -11,7 +14,7 @@ from .autonomy import Coordinator, initialize, state_path
 from .autonomy_integration import create_adapter
 from .autonomy_policy import pin_policy
 from .autonomy_projection import project
-from .autonomy_runtime import CodexAgent, GitHub, LocalWorker, diagnostics
+from .autonomy_runtime import CodexAgent, GitHub, LocalWorker, diagnostics, git
 from .autonomy_state import Store
 from .source_verify import verify_source
 
@@ -30,6 +33,23 @@ def _failure(exc: Exception) -> NoReturn:
 
 def _store(ctx: typer.Context, repo: Path) -> Store:
     return Store(state_path(repo.resolve(), ctx.obj["state"]))
+
+
+def _trial_store(ctx: typer.Context, repo: Path) -> Store:
+    if not ctx.obj["state_explicit"]:
+        raise ValueError("trial-run requires an explicit private --state directory per request")
+    path = state_path(repo, ctx.obj["state"])
+    root = Path(ctx.obj["state"]).expanduser().resolve()
+    for directory in (root, path.parent.parent, path.parent):
+        directory.mkdir(mode=0o700, exist_ok=True)
+        info = directory.lstat()
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+            raise ValueError("trial state must be owned by the operator and inaccessible to other users")
+    if path.exists() or path.is_symlink():
+        info = path.lstat()
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_nlink != 1:
+            raise ValueError("unsafe trial database")
+    return Store(path)
 
 
 def register(app: typer.Typer) -> None:
@@ -51,11 +71,23 @@ def register(app: typer.Typer) -> None:
         except _ERRORS as exc:
             _failure(exc)
 
-    def execute(ctx: typer.Context, repo: Path, resume: str | None, integration_file: Path | None, allow_origin: list[str], spec_surface: str | None = None) -> None:
+    def execute(ctx: typer.Context, repo: Path, resume: str | None, integration_file: Path | None,
+                allow_origin: list[str], spec_surface: str | None = None, *, local_trial: dict | None = None) -> None:
         adapter = None
+        closed_trial = False
         try:
-            store = _store(ctx, repo)
-            coordinator = Coordinator(repo, store, CodexAgent(), LocalWorker(), GitHub())
+            repo = repo.resolve()
+            store = _trial_store(ctx, repo) if local_trial else _store(ctx, repo)
+            options = {"local_trial": local_trial} if local_trial is not None else {}
+            coordinator = Coordinator(repo, store, CodexAgent(), LocalWorker(), GitHub(), **options)
+            if local_trial is not None:
+                from .autonomy_policy import pin_local_trial_policy
+
+                if (git(repo, "rev-parse", "--show-toplevel") != str(repo)
+                        or git(repo, "rev-parse", "HEAD") != local_trial["base"]
+                        or git(repo, "remote") or git(repo, "status", "--porcelain", "--untracked-files=all")):
+                    raise ValueError("trial-run requires a clean standalone checkout at the exact base with no Git remotes")
+                pin_local_trial_policy(store, repo, coordinator.local_trial)
             if integration_file is not None:
                 adapter = create_adapter(repo=repo.resolve(), store=store, session_id=lambda: coordinator.session_id,
                                          project=lambda raw, timeout: project(raw, store_path=store.path, timeout=timeout),
@@ -65,16 +97,38 @@ def register(app: typer.Typer) -> None:
                 adapter.start()
             elif allow_origin:
                 raise ValueError("--allow-origin requires --integration-file")
-            result = coordinator.run(resume=resume, **({"spec_surface": spec_surface} if spec_surface is not None else {}))
-            _emit({"schema_version": 1, "status": result["session"]["status"],
-                   "session_id": result["session"]["id"], "jobs": len(result["jobs"]),
-                   "requirements": len(result["requirements"]), "claims": len(result["claims"]),
-                   "formal_completion": "inspect individual evidence and gaps"})
+            while True:
+                result = coordinator.run(resume=resume, **({"spec_surface": spec_surface} if spec_surface is not None else {}))
+                session = result["session"]
+                _emit({"schema_version": 1, "status": session["status"],
+                       "session_id": session["id"], "jobs": len(result["jobs"]),
+                       "requirements": len(result["requirements"]), "claims": len(result["claims"]),
+                       "formal_completion": "inspect individual evidence and gaps"})
+                if local_trial is None or adapter is None:
+                    break
+                # Keep the same loopback generation for inspection and clarification.
+                # A newer fixture base is a different Cockpit scope and state directory.
+                deadline = store.session(session["id"])["deadline"]
+                while time.time() < deadline and git(repo, "rev-parse", "HEAD") == local_trial["base"]:
+                    if session["status"] in {"completed", "blocked"} and store.pending_feedback(session["id"], limit=1):
+                        break
+                    time.sleep(1)
+                else:
+                    closed_trial = (not any(job["status"] == "running" for job in result["jobs"])
+                                    and not any(not task.done() for task in coordinator._pending_tasks)
+                                    and not store.path.with_suffix(".termination-unconfirmed").exists())
+                    break
+        except KeyboardInterrupt:
+            if local_trial is None:
+                raise
         except _ERRORS as exc:
             _failure(exc)
         finally:
             if adapter is not None:
                 adapter.close()
+        if closed_trial and local_trial is not None:
+            _emit({"schema_version": 1, "status": "closed", "base": local_trial["base"],
+                   "request_id": local_trial["request_id"]})
 
     @app.command("run")
     def run_workspace(ctx: typer.Context, repo: Repo, integration_file: Path | None = None,
@@ -82,6 +136,15 @@ def register(app: typer.Typer) -> None:
                       spec_surface: Annotated[str | None, typer.Option(help="Review one committed FAS surface without agent file edits.")] = None) -> None:
         """Run autonomous SCL, IVL and IIL within one bounded coding session."""
         execute(ctx, repo, None, integration_file, allow_origin or [], spec_surface)
+
+    @app.command("trial-run")
+    def run_local_trial(ctx: typer.Context, repo: Repo, base: Annotated[str, typer.Option()],
+                        request_id: Annotated[str, typer.Option()], integration_file: Path | None = None,
+                        repair_path: Annotated[list[str] | None, typer.Option()] = None) -> None:
+        """Analyze an isolated local checkout under a bounded, durable trial request."""
+        execute(ctx, repo, None, integration_file, [], local_trial={
+            "base": base, "request_id": request_id, "repair_paths": tuple(repair_path or ()),
+        })
 
     @app.command("resume")
     def resume_workspace(ctx: typer.Context, repo: Repo, session: str | None = None,

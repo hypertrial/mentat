@@ -204,3 +204,62 @@ def check_policy(config: dict, policy: dict) -> None:
             raise ValueError("repository configuration removes a required local gate")
     if config["auto_merge"] and not policy["auto_merge"]:
         raise ValueError("automatic merge is not authorized by the local policy")
+
+
+def pin_local_trial_policy(store, repo: Path, local_trial: dict) -> dict:
+    """Atomically pin one local trial without a controller source checkout."""
+    from .autonomy import (
+        CONFIG_PATH,
+        _git_paths,
+        default_config,
+        load_config,
+        normalize_local_trial,
+    )
+    from .autonomy_runtime import git
+    from .autonomy_worker import packaged_profile_identity
+
+    repo = repo.resolve()
+    if isinstance(local_trial, dict) and isinstance(local_trial.get("repair_paths"), list):
+        local_trial = {**local_trial, "repair_paths": tuple(local_trial["repair_paths"])}
+    trial = normalize_local_trial(local_trial)
+    head = git(repo, "rev-parse", "HEAD")
+    if str(repo) != git(repo, "rev-parse", "--show-toplevel") or head != trial["base"] or git(repo, "status", "--porcelain"):
+        raise ValueError("trial requires the exact clean repository base")
+    if store.path.resolve().is_relative_to(repo):
+        raise ValueError("trial state must be outside the repository")
+    tracked = set(_git_paths(repo, "ls-tree", "-r", "--name-only", "-z", head))
+    config = load_config(repo, head) if CONFIG_PATH in tracked else default_config(repo)
+    local, worker = minimum_gates(repo)
+    if config["local_checks"] != local or config["worker_checks"] != worker:
+        raise ValueError("configured checks require explicit trusted policy")
+    minimum = minimum_source_checks(repo)
+    if any(item not in config["source_checks"] for item in minimum):
+        raise ValueError("repository configuration removes a required source check")
+    policy = {
+        "schema_version": 2, "repo": str(repo), "mandatory_local_checks": local,
+        "mandatory_worker_checks": worker,
+        "mandatory_source_checks": copy.deepcopy(config["source_checks"]),
+        "model": "gpt-6.1-terra", "reasoning_effort": "high", "auto_merge": False,
+        "session_seconds": min(3600, config["session_seconds"]),
+        "concurrency": config["concurrency"], "max_attempts": min(3, config["max_attempts"]),
+        "trust": "trusted local trial caller", "worker_profile": packaged_profile_identity(),
+        "local_trial": trial,
+    }
+    path = store.path.parent / "policy.json"
+    encoded = json.dumps(policy, indent=2, allow_nan=False) + "\n"
+    if len(encoded.encode()) > 65536:
+        raise ValueError("local policy exceeds 64 KiB")
+    if not path.exists():
+        fd, temporary = tempfile.mkstemp(dir=path.parent, prefix=".policy-")
+        try:
+            with os.fdopen(fd, "w") as stream:
+                stream.write(encoded)
+            try:
+                os.link(temporary, path)
+            except FileExistsError:
+                pass
+        finally:
+            os.unlink(temporary)
+    if load_policy_path(store.path) != policy:
+        raise ValueError("existing local trial policy differs from request")
+    return policy

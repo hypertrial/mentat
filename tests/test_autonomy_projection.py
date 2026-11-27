@@ -55,6 +55,9 @@ def test_real_http_snapshot_uses_production_projection(tmp_path):
     session = store.new_session(str(repo), head, head, {}, 1, 1000)
     store.put_record(session, "claim", {"id": "claim", "statement": "Public project statement",
                      "status": "unattempted", "prompt": "PRIVATE_PROMPT_SENTINEL"})
+    store.append_event(session, "inventory", {"surfaces": [
+        {"path": "source.py", "category": "application", "status": "unmapped", "revision": head}
+    ], "count": 1, "status": "unexamined"})
     private = tmp_path / "private"
     private.mkdir(mode=0o700)
     adapter = create_adapter(store=store, repo=repo, session_id=lambda: session,
@@ -88,6 +91,10 @@ def test_real_http_snapshot_uses_production_projection(tmp_path):
         assert capabilities["capabilities"]["changes"] is True
         snap = request("GET", "/v1/snapshot")
         assert snap["session_id"] == session
+        assert snap["counts"]["inventory"] == 1
+        inventory = request("GET", f"/v1/snapshots/{snap['snapshot_id']}/inventory")
+        assert inventory["items"] == [{"path": "source.py", "status": "unmapped",
+                                       "reason": "Initial inventory; mapping has not been assessed."}]
         claim_url = f"/v1/snapshots/{snap['snapshot_id']}/claims"
         page = request("GET", claim_url)
         store.put_record(session, "claim", {"id": "later", "statement": "Later statement",
@@ -139,3 +146,43 @@ def test_projection_supervisor_kills_timed_out_child_process_group(tmp_path):
         process.run([sys.executable, "-c", parent], output_limit=4096, timeout=0.3)
     time.sleep(1.2)
     assert not marker.exists()
+
+
+def test_inventory_projection_preserves_unmapped_surfaces(tmp_path):
+    store = Store(tmp_path / "state.sqlite")
+    session = store.new_session(str(tmp_path / "missing"), "a" * 40, "a" * 40, {}, 1, 1000)
+    store.append_event(session, "inventory", {"surfaces": [
+        {"path": "src/app.py", "category": "application", "status": "unmapped", "revision": "a" * 40},
+        {"path": "tests/test_app.py", "category": "verification-infrastructure", "status": "unmapped", "revision": "a" * 40},
+    ], "count": 2, "status": "unexamined"})
+    result = project(store.integration_snapshot(session), store_path=store.path)
+    assert result["inventory"] == [
+        {"path": "src/app.py", "status": "unmapped", "reason": "Initial inventory; mapping has not been assessed."},
+        {"path": "tests/test_app.py", "status": "unmapped", "reason": "Initial inventory; mapping has not been assessed."},
+    ]
+
+
+def test_inventory_mapping_requires_current_reviewed_requirement_at_base(tmp_path, monkeypatch):
+    from mentat.autonomy import digest
+    from mentat.autonomy_projection import _project_inner
+
+    head = "a" * 40
+    store = Store(tmp_path / "state.sqlite")
+    session = store.new_session(str(tmp_path / "repo"), head, head, {}, 1, 1000)
+    store.append_event(session, "authority_pinned", {"digest": "policy"})
+    store.append_event(session, "toolchain_pinned", {"identity": {}})
+    store.append_event(session, "inventory", {"surfaces": [
+        {"path": "app.py", "status": "unmapped"}, {"path": "other.py", "status": "unmapped"}
+    ], "count": 2, "status": "unexamined"})
+    requirement = {"id": "req", "area": "functional", "origin": "observed", "statement": "Behavior",
+                   "citations": [{"path": "app.py", "revision": head}]}
+    store.put_record(session, "requirement", requirement)
+    store.append_event(session, "fas_reviewed", {"head": "b" * 40, "claims": {},
+                                                  "requirements": {"req": digest(requirement)}})
+    monkeypatch.setattr("mentat.autonomy_projection._check_git_config", lambda *_: None)
+    monkeypatch.setattr("mentat.autonomy_projection._git", lambda *_: "")
+    monkeypatch.setattr("mentat.autonomy_projection._observe", lambda *_: (head, False, "policy", {}))
+    raw = store.integration_snapshot(session)
+    assert [item["status"] for item in _project_inner(raw)["inventory"]] == ["mapped", "unmapped"]
+    raw["requirements"][0]["statement"] = "Changed after review"
+    assert [item["status"] for item in _project_inner(raw)["inventory"]] == ["unmapped", "unmapped"]

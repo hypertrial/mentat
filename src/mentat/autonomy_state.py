@@ -189,7 +189,7 @@ class Store:
             if self._unresolved_private_dispatch(db):
                 raise ValueError("unresolved private merge dispatch blocks a new session")
             db.execute("INSERT INTO sessions VALUES (?, 'running', ?, ?, ?, ?, ?, ?)", (session_id, repo, base, head, now, deadline, policy_json))
-            self._event(db, session_id, "session_started", {"repo": repo, "base": base, "head": head, "started_at": now, "deadline": deadline, "policy": policy, **({"spec_surface": bootstrap["spec_surface"]} if bootstrap and bootstrap.get("spec_surface") is not None else {})})
+            self._event(db, session_id, "session_started", {"repo": repo, "base": base, "head": head, "started_at": now, "deadline": deadline, "policy": policy, **({"spec_surface": bootstrap["spec_surface"]} if bootstrap and bootstrap.get("spec_surface") is not None else {}), **({"local_trial": bootstrap["local_trial"]} if bootstrap and bootstrap.get("local_trial") is not None else {})})
             if bootstrap is not None:
                 self._event(db, session_id, "authority_pinned", {"digest": bootstrap["authority_digest"]})
                 self._event(db, session_id, "toolchain_pinned", {"identity": bootstrap["tool_identity"]})
@@ -1412,6 +1412,37 @@ class Store:
             db.execute("INSERT INTO integration_receipts VALUES (?,?,?,?,?)", (session_id, request_id, action, digest, _json(receipt)))
             db.commit()
             return receipt, True
+
+    def expire_local_trial(self, session_id: str, *, now: float) -> None:
+        """Record an expired controller without claiming that remote workers stopped."""
+        now = _time(now)
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            session = self._session(db, session_id)
+            if now < session["deadline"]:
+                raise ValueError("trial deadline has not expired")
+            if session["status"] in {"running", "paused"}:
+                finding = {"id": uuid.uuid4().hex, "status": "inconclusive",
+                           "summary": "Local trial expired; unfinished worker state is unconfirmed."}
+                db.execute("INSERT INTO records VALUES (?, 'finding', ?, ?)",
+                           (session_id, finding["id"], _json(finding)))
+                self._event(db, session_id, "record_added", {"kind": "finding", "record": finding})
+                db.execute("UPDATE sessions SET status='blocked' WHERE id=?", (session_id,))
+                self._event(db, session_id, "session_status", {"status": "blocked"})
+                self._event(db, session_id, "trial_expired", {"reason": "deadline expired; worker state unconfirmed"})
+            db.commit()
+
+    def has_local_trial(self) -> bool:
+        with self._connect() as db:
+            return db.execute("SELECT 1 FROM events WHERE kind='session_started' AND json_type(payload, '$.local_trial') IS NOT NULL LIMIT 1").fetchone() is not None
+
+    def trial_session_id(self) -> str | None:
+        """A trial database belongs to exactly one durable request."""
+        with self._connect() as db:
+            rows = db.execute("SELECT id FROM sessions LIMIT 2").fetchall()
+            if len(rows) > 1:
+                raise ValueError("trial state contains multiple sessions")
+            return str(rows[0][0]) if rows else None
 
     def session(self, session_id: str) -> dict:
         """Read session metadata without loading the ledger history."""

@@ -1,0 +1,67 @@
+[project]
+name = "hypertrial-mentat"
+version = "0.1.2"
+description = "Verify Git commits against approved project contracts"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "markdown-it-py>=4,<5",
+    "pydantic>=2.12,<3",
+    "rich>=14,<16",
+    "typer>=0.20,<1",
+    "z3-solver>=4.15,<5",
+]
+
+[project.urls]
+Homepage = "https://github.com/hypertrial/mentat"
+Repository = "https://github.com/hypertrial/mentat"
+Issues = "https://github.com/hypertrial/mentat/issues"
+
+[project.optional-dependencies]
+polaris = ["pyyaml>=6.0.3,<7"]
+
+[project.scripts]
+mentat = "mentat.cli:app"
+
+[dependency-groups]
+dev = ["hypothesis>=6,<7", "pyright[nodejs]>=1.1.414,<2", "pytest>=9,<10", "pytest-xdist>=3.6,<4", "ruff>=0.11,<1"]
+
+[build-system]
+requires = ["hatchling==1.29.0"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mentat"]
+
+[tool.hatch.build.targets.sdist]
+exclude = ["/.git"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Parallel by default; add `-n 0` for a serial run.
+addopts = "-n auto"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["B", "E4", "E7", "E9", "F", "I", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+# Typer option defaults are the framework's idiom (B008). Editing this file would change the Polaris pack digest.
+"src/mentat/showcases/polaris/cli.py" = ["B008"]
+# The %r template is a Python source literal, not a plain format string; an f-string rewrite would need brace escaping. Editing this file would change the Polaris pack digest.
+"src/mentat/showcases/polaris/regression.py" = ["UP031"]
+# Approved base file: editing it renews Mentat's own approval. Its loop closures are called within the same iteration.
+".mentat/selfcheck.py" = ["B023"]
+
+[tool.pyright]
+# Basic mode on the core package. showcases is excluded: it has 43 basic-mode errors, mostly z3 Ref attribute access.
+typeCheckingMode = "basic"
+reportUnnecessaryTypeIgnoreComment = "error"
+pythonVersion = "3.12"
+include = ["src/mentat"]
+exclude = ["src/mentat/showcases", "**/__pycache__"]

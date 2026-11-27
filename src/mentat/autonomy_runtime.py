@@ -44,7 +44,7 @@ def _execution_sources() -> tuple[bytes, ...]:
         Path(autonomy_git_transaction.__file__),
         Path(autonomy_spec_scope.__file__),
         *(Path(__file__).with_name(name) for name in (
-            "autonomy_state.py", "autonomy_cli.py", "autonomy_projection.py",
+            "autonomy_state.py", "autonomy_policy.py", "autonomy_cli.py", "autonomy_projection.py",
             "autonomy_integration.py", "autonomy.py", "autonomy_final_review.py",
             "autonomy_source_corrections.py", "autonomy_review_inputs.py",
         )),
@@ -70,7 +70,12 @@ def execution_identity() -> str:
     if sources != _LOADED_EXECUTION_SOURCES:
         raise ValueError("trusted execution code changed after import; restart required")
     assets = autonomy_worker.worker_assets()
-    return _execution_digest([*sources, *(data for _, _, data in assets)])
+    from importlib.resources import files
+
+    baseline = files("mentat").joinpath("worker_assets")
+    return _execution_digest([*sources, *(data for _, _, data in assets),
+                              *(baseline.joinpath("baseline-" + name).read_bytes()
+                                for name in ("pyproject.toml", "uv.lock"))])
 
 _OUTPUT_LIMIT = 1_000_000
 _MODEL = "gpt-6.1-terra"
@@ -815,10 +820,14 @@ class LocalWorker(_Cancellable):
         super().__init__()
         self._units: set[str] = set()
         self.trusted_repo = (trusted_repo or Path(__file__).resolve().parents[2]).resolve()
+        self._packaged_profile = trusted_repo is None and not (
+            (self.trusted_repo / "pyproject.toml").is_file() and (self.trusted_repo / "uv.lock").is_file()
+        )
         self.expected_profile = dict(expected_profile) if expected_profile is not None else None
 
     def _profile(self) -> dict:
-        actual = autonomy_worker.profile_identity(self.trusted_repo)
+        actual = (autonomy_worker.packaged_profile_identity() if self._packaged_profile
+                  else autonomy_worker.profile_identity(self.trusted_repo))
         if self.expected_profile is not None and any(actual[key] != self.expected_profile.get(key) for key in actual):
             raise ValueError("trusted worker profile differs from pinned policy")
         if self.expected_profile is None:

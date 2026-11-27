@@ -22,7 +22,7 @@ from mentat.autonomy_state import Store
 def projection(raw, *, timeout):
     return {"session": {"id": raw["session"]["id"], "status": raw["session"]["status"]},
             "freshness": {"status": "unknown"}, **{name: list(raw.get(name, [])) for name in
-            ("requirements", "claims", "jobs", "findings", "decisions", "evidence")}}
+            ("requirements", "claims", "jobs", "findings", "decisions", "evidence", "inventory")}}
 
 
 @pytest.fixture

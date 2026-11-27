@@ -21,7 +21,7 @@ from typing import Any
 
 from mentat.autonomy_state import IntegrationCapacityError, Store
 
-_RESOURCES = ("requirements", "claims", "jobs", "findings", "decisions", "evidence")
+_RESOURCES = ("requirements", "claims", "jobs", "findings", "decisions", "evidence", "inventory")
 _LIMITS = {"connections": 8, "header_bytes": 16384, "body_bytes": 16384,
            "feedback_bytes": 8192, "request_id_characters": 128, "page_items": 100,
            "response_bytes": 262144, "snapshot_bytes": 8388608, "snapshot_count": 2,
@@ -40,7 +40,7 @@ _EVENT_KINDS = frozenset({
     "source_cycle_superseded", "source_correction_blocked", "source_correction_checkpoint",
     "source_correction_handoff", "human_feedback", "feedback_consumed", "integration_stop_requested",
     "remote_reconciliation_pending", "private_merge_resolved", "publication", "merge", "capabilities",
-    "repair_checkpoint_selected",
+    "repair_checkpoint_selected", "trial_expired",
 })
 _KEY = re.compile(r"[A-Za-z0-9._~-]{1,128}\Z")
 

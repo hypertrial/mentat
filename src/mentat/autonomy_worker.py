@@ -73,15 +73,27 @@ def worker_assets() -> list[tuple[str, str, bytes]]:
     )]
 
 
-def profile_identity(repo: Path) -> dict[str, str]:
-    """Identify the trusted baseline and the embedded immutable provisioner."""
-    files = dict(_baseline(repo))
+def packaged_profile_identity() -> dict[str, str]:
+    """Identify the controller baseline bundled with the installed package."""
+    from importlib.resources import files
+
+    root = files("mentat").joinpath("worker_assets")
+    return _profile_from_files({name: root.joinpath("baseline-" + name).read_bytes()
+                                for name in ("pyproject.toml", "uv.lock")})
+
+
+def _profile_from_files(files: dict[str, bytes]) -> dict[str, str]:
     return {
         "pyproject_sha256": hashlib.sha256(files["pyproject.toml"]).hexdigest(),
         "uv_lock_sha256": hashlib.sha256(files["uv.lock"]).hexdigest(),
         "provisioner_sha256": hashlib.sha256(PROVISION_SCRIPT).hexdigest(),
         **{profile_key: hashlib.sha256(data).hexdigest() for _, profile_key, data in worker_assets()},
     }
+
+
+def profile_identity(repo: Path) -> dict[str, str]:
+    """Identify the trusted baseline and the embedded immutable provisioner."""
+    return _profile_from_files(dict(_baseline(repo)))
 
 
 def provision_script(repo: Path) -> bytes:
