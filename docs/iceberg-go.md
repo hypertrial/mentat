@@ -47,7 +47,9 @@ catalog, storage, or crash-durability behavior.
 Use the [versioned installation instructions](../README.md#install), then run
 this walkthrough from the same tagged Mentat clone. The reference tools are
 Python 3.12, Go 1.26.3, and Lean 4.31.0. Linux x86-64 and Apple Silicon macOS
-are checked in CI. No Docker daemon or cloud credentials are required. The pinned source contains
+are the platforms the release checks target. Hosted CI runs only a Python syntax and
+changed-whitespace check; full verification records are in
+[implementation evidence](implementation-evidence.md). No Docker daemon or cloud credentials are required. The pinned source contains
 a relative `CLAUDE.md` link to `AGENTS.md`; Mentat preserves that link and its
 Git mode in the candidate snapshot without loading host files.
 

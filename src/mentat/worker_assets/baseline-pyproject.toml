@@ -1,6 +1,6 @@
 [project]
 name = "hypertrial-mentat"
-version = "0.1.2"
+version = "0.1.3.dev0"
 description = "Verify Git commits against approved project contracts"
 readme = "README.md"
 license = "MIT"

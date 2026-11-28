@@ -11,6 +11,32 @@
   Integration/evidence identities change; renew approvals and use a fresh actual
   self-run before Titanic readiness. Hosted CI remains syntax/whitespace only.
 
+- Add the Cockpit stdio bridge v1. `mentat --state PATH bridge --stdio` serves explicit Git project
+  verification to a private subprocess over bounded newline-delimited JSON, with the same approved
+  contract, checks, evidence validation and acceptance rules as the terminal CLI. See
+  `docs/specifications/cockpit-bridge-v1.md`.
+- Add `evidence.inspect` and `evidence.compareScoped` to the bridge. They return one validated saved
+  project-verification run and compare two exactly pinned runs. Existing bridge methods and saved
+  formats are unchanged. See `docs/specifications/cockpit-evidence-projection-v1.md`.
+- Add operator review decisions to the bridge (`reviewDecision.prepare`, `reviewDecision.commit` and
+  `reviewDecision.get`). A local operator can reject or defer an exact validated run evaluation with a
+  bounded reason, or resume that deferred evaluation. Decisions are recorded in a durable journal keyed
+  by request ID, and a new run or candidate starts pending. See `docs/specifications/review-decisions-v1.md`.
+- Preserve replaced integration connection files on shutdown. The integration adapter keeps its
+  published rendezvous file descriptor until shutdown, leaves a replacement file in place, and closes
+  descriptors after a failed publication.
+- Include the trusted source-correction and review-input validators in the execution fingerprint, so
+  an update invalidates the prior execution identity and an in-process change to trusted execution
+  code requires a restart. Protected proof campaigns for the same operator share one host lock
+  (`/tmp/mentat-proof-build-<uid>.lock`) across temporary directories and state roots, so contention
+  is refused before an attempt is recorded.
+- Bound bridge evidence reads and session monitoring. A saved run is validated in one integrity pass
+  per bridge read, session metadata and pending feedback use bounded, purpose-specific queries, and
+  monitoring reuses a published snapshot only within its five-second freshness window.
+- Add the local trial coordinator behind `mentat trial-run`, which starts or resumes a bounded
+  analysis of one clean checkout at an exact base under a request ID, with a private `--state`
+  directory. The trial is not yet qualified: full verification, the dedicated Linux-worker gate and
+  independent review remain outstanding (see `openspec/specs/local-trial/spec.md`).
 - Verified Git reads start one `git cat-file --batch` process instead of two, and the object
   format is looked up once per repository per process instead of on every snapshot. Object size
   limits and the integrity check keep their messages. A batch header that does not name its
