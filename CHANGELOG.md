@@ -11,6 +11,14 @@
   Integration/evidence identities change; renew approvals and use a fresh actual
   self-run before Titanic readiness. Hosted CI remains syntax/whitespace only.
 
+- Change the development version to `0.1.3.dev0`. The worker baseline files in
+  `src/mentat/worker_assets` follow the root `pyproject.toml` and `uv.lock`, so the packaged worker
+  profile, the execution (tool) identity and the local trial policy pin all change. Existing state
+  fails closed: a local trial policy pinned before this change reports `trusted worker profile
+  differs from pinned policy`; resuming a session started before it reports `source proof toolchain
+  changed; prior evidence is stale, start a new session`; and a provisioned worker reports `worker
+  baseline does not match pinned profile` until `/opt/mentat-tools` is removed and the worker is
+  provisioned again. Recovery steps are in `docs/autonomy.md`.
 - Add the Cockpit stdio bridge v1. `mentat --state PATH bridge --stdio` serves explicit Git project
   verification to a private subprocess over bounded newline-delimited JSON, with the same approved
   contract, checks, evidence validation and acceptance rules as the terminal CLI. See
@@ -37,6 +45,10 @@
   analysis of one clean checkout at an exact base under a request ID, with a private `--state`
   directory. The trial is not yet qualified: full verification, the dedicated Linux-worker gate and
   independent review remain outstanding (see `openspec/specs/local-trial/spec.md`).
+- Omit an empty `host_environment` from serialized behavior checks, so claim fingerprints match runs
+  recorded before that field existed (commit `90d9e04`). `evidence compare --out` prints the report
+  path in text mode, and a claim whose definition fingerprint is unavailable is labeled
+  "Definition unavailable" instead of "Unchanged".
 - Verified Git reads start one `git cat-file --batch` process instead of two, and the object
   format is looked up once per repository per process instead of on every snapshot. Object size
   limits and the integrity check keep their messages. A batch header that does not name its
@@ -249,7 +261,8 @@
   so approvals, proof campaigns, and pending acceptances must be renewed, and
   `evidence compare` across the change needs `--across-contracts`.
 - Install the proof checker with a restrictive bubblewrap policy on hosted CI
-  runners (`scripts/install-proof-checker --ci-profile`).
+  runners (`scripts/install-proof-checker --ci-profile`). The hosted check is now
+  syntax/whitespace only; the gate is local `scripts/verify`.
 - Batch OpenSpec blob reads while preserving valid neighboring specs, ordered
   diagnostics, provenance, and input limits.
 - Explain incomplete Polaris native regressions by stage in JSON, terminal
@@ -271,7 +284,8 @@
   between a direct install and elan shows a tools change. Direct installs are
   unaffected.
 - Run the test suite in parallel by default, and have CI call `scripts/verify`
-  so the local gate and the required check cannot drift apart.
+  so the local gate and the required check cannot drift apart. The hosted check is now
+  syntax/whitespace only; the gate is local `scripts/verify`.
 - Add a corpus of saved records from v0.1.2 and the pre-split main revision.
   Tests check that these records are read, round-tripped through the current
   writer, compared, and rendered, and that their receipts and integrity checks

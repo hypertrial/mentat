@@ -36,6 +36,20 @@ Installed-artifact checks ignore inherited Python import overrides so that they
 validate the installed artifact. A changed worker profile requires explicit trusted
 initialization; an old session is not silently repinned or presented as resumed.
 
+A change to the worker baseline (`pyproject.toml`, `uv.lock` or the bundled
+`worker_assets`, including a version bump) changes the worker profile, so pinned
+state fails closed until it is refreshed:
+
+1. Start new sessions. A session begun before the change cannot resume, and its evidence is stale.
+2. Stop any session that uses the worker, then remove the old baseline in the VM:
+   `limactl shell mentat-autonomy sudo rm -rf /opt/mentat-tools`. Provisioning
+   refuses to replace an existing `/opt/mentat-tools`.
+3. Provision again with `uv run --locked mentat worker provision`, then confirm with
+   `uv run --locked mentat worker doctor --repo /absolute/path/to/application`.
+   A worker still reporting "worker baseline does not match pinned profile" was not refreshed.
+4. Start each local trial with a new private `--state` directory. A `policy.json` already
+   in a state directory is never rewritten, so an old pin in that directory keeps failing.
+
 ## Run and resume
 
 ```sh
