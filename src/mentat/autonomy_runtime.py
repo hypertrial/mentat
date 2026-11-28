@@ -109,13 +109,7 @@ def _run(argv: list[str], *, cwd: Path | None = None, timeout: int = 30, env: di
     return out.decode("utf-8", "strict")
 
 
-def git(repo: Path, *args: str) -> str:
-    """Execute bounded Git with caller Git environment and repository hooks disabled."""
-    env = gitio.git_env()
-    env["GIT_CONFIG_NOSYSTEM"] = "1"
-    env["GIT_CONFIG_GLOBAL"] = os.devnull
-    env["GIT_LFS_SKIP_SMUDGE"] = "1"
-    env["GIT_ALLOW_PROTOCOL"] = "ssh"
+def _check_repository_filters(repo: Path, env: dict[str, str]) -> None:
     # A repository-local clean/smudge or process filter executes host code during
     # checkout and may also run while Git inspects the working tree.
     code, out, _ = process.run(["git", "--no-replace-objects", "-C", str(repo), "config", "--local", "--includes", "--name-only", "--get-regexp", r"^filter\."], output_limit=65536, timeout=15, env=env)
@@ -123,17 +117,26 @@ def git(repo: Path, *args: str) -> str:
         raise ValueError("repository-local Git filters are not allowed for autonomous work")
     if code not in (0, 1):
         raise ValueError("cannot verify repository-local Git filters")
+
+
+def git(repo: Path, *args: str) -> str:
+    """Execute bounded Git with caller Git environment and repository hooks disabled."""
+    env = gitio.git_env()
+    env["GIT_CONFIG_NOSYSTEM"] = "1"
+    env["GIT_CONFIG_GLOBAL"] = os.devnull
+    env["GIT_LFS_SKIP_SMUDGE"] = "1"
+    env["GIT_ALLOW_PROTOCOL"] = "ssh"
+    _check_repository_filters(repo, env)
     return _run(["git", "--no-replace-objects", "-c", "core.hooksPath=/dev/null", "-C", str(repo), *args], timeout=60, env=env).strip()
 
 
 def git_paths(repo: Path, *args: str) -> list[str]:
     """Read NUL-delimited Git paths without quoting or trimming filename bytes."""
-    # Preserve the autonomous Git wrapper's repository-filter safety check.
-    git(repo, "rev-parse", "--git-dir")
     env = gitio.git_env()
     env.update(
         {"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull, "GIT_LFS_SKIP_SMUDGE": "1"}
     )
+    _check_repository_filters(repo, env)
     code, raw, _ = process.run(
         ["git", "--no-replace-objects", "-c", "core.hooksPath=/dev/null", "-C", str(repo), *args],
         env=env,
@@ -144,6 +147,7 @@ def git_paths(repo: Path, *args: str) -> list[str]:
     if code:
         raise ValueError("unable to enumerate Git paths")
     return [path.decode("utf-8", "strict") for path in raw.split(b"\0") if path]
+
 
 def identity(repo: Path) -> dict:
     root = Path(git(repo, "rev-parse", "--show-toplevel")).resolve()

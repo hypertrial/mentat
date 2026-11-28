@@ -295,6 +295,8 @@ def test_git_rejects_local_filters_before_checkout(tmp_path: Path) -> None:
     git("config", "filter.unsafe.smudge", f"touch {marker}; cat")
     with pytest.raises(ValueError, match="Git filters"):
         runtime.git(tmp_path, "checkout", "--", "file")
+    with pytest.raises(ValueError, match="Git filters"):
+        runtime.git_paths(tmp_path, "ls-files", "-z")
     assert not marker.exists()
 
 
