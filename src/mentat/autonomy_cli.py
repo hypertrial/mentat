@@ -87,7 +87,7 @@ def register(app: typer.Typer) -> None:
                         or git(repo, "rev-parse", "HEAD") != local_trial["base"]
                         or git(repo, "remote") or git(repo, "status", "--porcelain", "--untracked-files=all")):
                     raise ValueError("trial-run requires a clean standalone checkout at the exact base with no Git remotes")
-                pin_local_trial_policy(store, repo, coordinator.local_trial)
+                pin_local_trial_policy(store, repo, local_trial)
             if integration_file is not None:
                 adapter = create_adapter(repo=repo.resolve(), store=store, session_id=lambda: coordinator.session_id,
                                          project=lambda raw, timeout: project(raw, store_path=store.path, timeout=timeout),

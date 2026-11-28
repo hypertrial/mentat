@@ -1413,6 +1413,15 @@ class Store:
             db.commit()
             return receipt, True
 
+    def prepare_local_trial_resume(self, session_id: str, prior: dict, *, now: float) -> bool:
+        if now >= prior["deadline"]:
+            if prior["status"] in {"running", "paused"}:
+                self.expire_local_trial(session_id, now=now)
+            return False
+        return prior["status"] in {"running", "paused"} or (
+            prior["status"] in {"completed", "blocked"} and bool(self.pending_feedback(session_id, limit=1))
+        )
+
     def expire_local_trial(self, session_id: str, *, now: float) -> None:
         """Record an expired controller without claiming that remote workers stopped."""
         now = _time(now)

@@ -126,6 +126,25 @@ def git(repo: Path, *args: str) -> str:
     return _run(["git", "--no-replace-objects", "-c", "core.hooksPath=/dev/null", "-C", str(repo), *args], timeout=60, env=env).strip()
 
 
+def git_paths(repo: Path, *args: str) -> list[str]:
+    """Read NUL-delimited Git paths without quoting or trimming filename bytes."""
+    # Preserve the autonomous Git wrapper's repository-filter safety check.
+    git(repo, "rev-parse", "--git-dir")
+    env = gitio.git_env()
+    env.update(
+        {"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull, "GIT_LFS_SKIP_SMUDGE": "1"}
+    )
+    code, raw, _ = process.run(
+        ["git", "--no-replace-objects", "-c", "core.hooksPath=/dev/null", "-C", str(repo), *args],
+        env=env,
+        output_limit=1_000_000,
+        timeout=60,
+        stderr=False,
+    )
+    if code:
+        raise ValueError("unable to enumerate Git paths")
+    return [path.decode("utf-8", "strict") for path in raw.split(b"\0") if path]
+
 def identity(repo: Path) -> dict:
     root = Path(git(repo, "rev-parse", "--show-toplevel")).resolve()
     return {"repo": str(root), "head": git(root, "rev-parse", "--verify", "HEAD^{commit}"),

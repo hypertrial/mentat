@@ -66,6 +66,15 @@ paging/cursors, freshness, lifecycle, authorization, bounds and migration.
 The former `ui` and `--ui/--no-ui` surfaces are removed. Optional feedback remains
 untrusted task data and never authorizes policy, proof or publication changes.
 
+For a disposable checkout without Git remotes, use `mentat --state PRIVATE_STATE
+trial-run --repo PATH --base FULL_COMMIT --request-id REQUEST_ID`. Use one private
+state directory per base and request. This path keeps proposals local and uses
+the built-in minimum shell checks. Extra shell checks in committed configuration
+block trial startup. Repairs require explicit `--repair-path`
+arguments. With `--integration-file`, typed feedback may resume an eligible
+session within its original deadline. Queueing a clarification is distinct from
+reviewing and retaining an updated requirement.
+
 SCL maintains all six CAS areas and records observed, intended, inferred, and uncertain requirements. IVL separately records formal obligations, models, implementation connections, executable checks, and unsupported scope. IIL handles evidenced violations of established requirements. Each generator is independently reviewed; consequential checker, CI, acceptance, and guarantee changes require two independent reviews. Application rewrites solely to ease verification are excluded.
 
 Specification generators can propose small FAS record upserts with `patch_fas`

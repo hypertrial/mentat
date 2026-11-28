@@ -142,7 +142,9 @@ produces unknown/stale, never current assurance.
 
 `GET /v1/snapshots/SNAPSHOT/RESOURCE?offset=0&limit=100` pages that exact
 materialization with stable order, offset, total, next offset and omission data.
-Resource names: requirements, claims, jobs, findings, decisions and evidence.
+Resources include requirements, claims, jobs, findings, decisions, evidence and
+inventory. Inventory lists committed paths with a status and reason. A path is
+mapped when a current reviewed requirement cites that exact path and base.
 Expired/evicted/foreign snapshot returns explicit reset-required. A client
 reacquires a snapshot instead of mixing pages. New capture failures do not alter
 existing engine results.
@@ -178,7 +180,7 @@ fields. Status, freshness and assurance method are separate fields.
 
 | Message | Required payload fields | Semantics |
 | --- | --- | --- |
-| Snapshot | snapshot_id:string, expires_at:number, observed_at:number, high_water:integer>=0, cursor:string, session:object, freshness:object, counts:object | Session includes actual id/status/base/head and explicit controller availability; never raw repo/policy. Counts name all six resources. |
+| Snapshot | snapshot_id:string, expires_at:number, observed_at:number, high_water:integer>=0, cursor:string, session:object, freshness:object, counts:object | Session includes actual id/status/base/head and explicit controller availability; never raw repo/policy. Counts name all seven resources. |
 | Resource page | snapshot_id:string, resource:string, offset:integer>=0, total:integer>=0, next_offset:integer or null, items:array | Omitted fields/items carry explicit `omissions`; next_offset null means this materialization's end, not complete assurance. |
 | Resource item | id:string, status:string, freshness:string, unavailable_fields:array | Other fields are narrowly allowlisted supported engine fields; absent proof/scope is not proof. Requirement/specification source paths and exact safe links are optional. |
 | Changes | high_water:integer>=0, cursor:string, has_more:boolean, events:array | Each notice requires seq:integer>0 and kind:string; optional related_ids is a bounded array of opaque identifiers. No raw payload. |

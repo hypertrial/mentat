@@ -7,10 +7,12 @@ import copy
 import hashlib
 import json
 import os
+import re
 import tempfile
 from pathlib import Path
 
 from . import autonomy_private_merge
+from .project import safe_relative_path
 
 
 def workspace_state_path(repo: Path, state_root: Path) -> Path:
@@ -206,15 +208,53 @@ def check_policy(config: dict, policy: dict) -> None:
         raise ValueError("automatic merge is not authorized by the local policy")
 
 
+def normalize_local_trial(local_trial: dict) -> dict:
+    if not isinstance(local_trial, dict) or set(local_trial) != {"base", "request_id", "repair_paths"}:
+        raise ValueError("invalid local trial identity")
+    base, request_id, paths = (local_trial[k] for k in ("base", "request_id", "repair_paths"))
+    if not isinstance(base, str) or not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", base):
+        raise ValueError("trial base must be a full commit ID")
+    if not isinstance(request_id, str) or not re.fullmatch(r"[A-Za-z0-9._~-]{1,128}", request_id):
+        raise ValueError("invalid trial request ID")
+    if not isinstance(paths, tuple) or len(paths) > 128 or any(not isinstance(p, str) for p in paths):
+        raise ValueError("invalid trial repair paths")
+    if len(set(paths)) != len(paths):
+        raise ValueError("duplicate trial repair path")
+    for path in paths:
+        safe_relative_path(path)
+    return {"base": base, "request_id": request_id, "repair_paths": list(paths)}
+
+
+def local_trial_config(repo: Path, head: str) -> dict:
+    from .autonomy import CONFIG_PATH, default_config, load_config
+    from .autonomy_runtime import git_paths
+
+    paths = git_paths(repo, "ls-tree", "-r", "--name-only", "-z", head, "--", CONFIG_PATH)
+    return load_config(repo, head) if CONFIG_PATH in paths else default_config(repo)
+
+
+def prepare_local_trial_config(repo: Path, head: str, trial: dict, policy: dict) -> dict:
+    from .autonomy_runtime import git
+
+    if str(repo) != git(repo, "rev-parse", "--show-toplevel") or head != trial["base"]:
+        raise ValueError("trial requires the exact clean repository base")
+    if policy.get("schema_version") != 2 or policy.get("local_trial") != trial or policy.get("auto_merge") is not False:
+        raise ValueError("local trial authority does not match the request")
+    for key, maximum in (("session_seconds", 3600), ("max_attempts", 3)):
+        if type(policy.get(key)) is not int or not 1 <= policy[key] <= maximum:
+            raise ValueError("invalid trial resource limits")
+    config = local_trial_config(repo, head)
+    if any(config[key] != policy.get(f"mandatory_{key}")
+           for key in ("local_checks", "worker_checks", "source_checks")):
+        raise ValueError("trial checks do not match trusted local authority")
+    config["auto_merge"] = False
+    for key in ("session_seconds", "max_attempts"):
+        config[key] = min(config[key], policy[key])
+    return config
+
+
 def pin_local_trial_policy(store, repo: Path, local_trial: dict) -> dict:
     """Atomically pin one local trial without a controller source checkout."""
-    from .autonomy import (
-        CONFIG_PATH,
-        _git_paths,
-        default_config,
-        load_config,
-        normalize_local_trial,
-    )
     from .autonomy_runtime import git
     from .autonomy_worker import packaged_profile_identity
 
@@ -227,8 +267,7 @@ def pin_local_trial_policy(store, repo: Path, local_trial: dict) -> dict:
         raise ValueError("trial requires the exact clean repository base")
     if store.path.resolve().is_relative_to(repo):
         raise ValueError("trial state must be outside the repository")
-    tracked = set(_git_paths(repo, "ls-tree", "-r", "--name-only", "-z", head))
-    config = load_config(repo, head) if CONFIG_PATH in tracked else default_config(repo)
+    config = local_trial_config(repo, head)
     local, worker = minimum_gates(repo)
     if config["local_checks"] != local or config["worker_checks"] != worker:
         raise ValueError("configured checks require explicit trusted policy")

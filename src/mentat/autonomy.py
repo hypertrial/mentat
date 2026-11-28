@@ -28,8 +28,16 @@ from . import (
     gitio,
     process,
 )
-from .autonomy_policy import check_policy, load_policy_path, workspace_config, workspace_state_path
+from .autonomy_policy import (
+    check_policy,
+    load_policy_path,
+    normalize_local_trial,
+    prepare_local_trial_config,
+    workspace_config,
+    workspace_state_path,
+)
 from .autonomy_runtime import git
+from .autonomy_runtime import git_paths as _git_paths
 from .autonomy_state import (
     SourceBarrierHeld,
     SourceEpochStale,
@@ -195,26 +203,6 @@ def load_config(repo: Path, revision: str) -> dict:
     if len(raw) > MAX_ARTIFACT:
         raise ValueError("workspace configuration is too large")
     return validate_config(json.loads(raw))
-
-
-def _git_paths(repo: Path, *args: str) -> list[str]:
-    """Read NUL-delimited Git paths without quoting or trimming filename bytes."""
-    # Preserve the autonomous Git wrapper's repository-filter safety check.
-    git(repo, "rev-parse", "--git-dir")
-    env = gitio.git_env()
-    env.update(
-        {"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull, "GIT_LFS_SKIP_SMUDGE": "1"}
-    )
-    code, raw, _ = process.run(
-        ["git", "--no-replace-objects", "-c", "core.hooksPath=/dev/null", "-C", str(repo), *args],
-        env=env,
-        output_limit=1_000_000,
-        timeout=60,
-        stderr=False,
-    )
-    if code:
-        raise ValueError("unable to enumerate Git paths")
-    return [path.decode("utf-8", "strict") for path in raw.split(b"\0") if path]
 
 
 def inventory(repo: Path, revision: str) -> list[dict]:
@@ -428,23 +416,6 @@ def _allowed_path(kind: str, path: str) -> bool:
 
 
 _OUTPUT_INSTRUCTIONS = autonomy_final_review.OUTPUT_INSTRUCTIONS
-
-
-def normalize_local_trial(local_trial: dict) -> dict:
-    if not isinstance(local_trial, dict) or set(local_trial) != {"base", "request_id", "repair_paths"}:
-        raise ValueError("invalid local trial identity")
-    base, request_id, paths = (local_trial[k] for k in ("base", "request_id", "repair_paths"))
-    if not isinstance(base, str) or not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", base):
-        raise ValueError("trial base must be a full commit ID")
-    if not isinstance(request_id, str) or not re.fullmatch(r"[A-Za-z0-9._~-]{1,128}", request_id):
-        raise ValueError("invalid trial request ID")
-    if not isinstance(paths, tuple) or len(paths) > 128 or any(not isinstance(p, str) for p in paths):
-        raise ValueError("invalid trial repair paths")
-    if len(set(paths)) != len(paths):
-        raise ValueError("duplicate trial repair path")
-    for path in paths:
-        safe_relative_path(path)
-    return {"base": base, "request_id": request_id, "repair_paths": list(paths)}
 
 
 class Coordinator:
@@ -789,23 +760,7 @@ class Coordinator:
             if self.local_trial is not None:
                 if resume is not None or spec_surface is not None:
                     raise ValueError("trial session identity is selected from local state")
-                if str(self.repo) != git(self.repo, "rev-parse", "--show-toplevel") or head != self.local_trial["base"]:
-                    raise ValueError("trial requires the exact clean repository base")
-                if policy.get("schema_version") != 2 or policy.get("local_trial") != self.local_trial or policy.get("auto_merge") is not False:
-                    raise ValueError("local trial authority does not match the request")
-                if type(policy.get("session_seconds")) is not int or not 1 <= policy["session_seconds"] <= 3600 or type(policy.get("max_attempts")) is not int or not 1 <= policy["max_attempts"] <= 3:
-                    raise ValueError("invalid trial resource limits")
-                tracked = set(_git_paths(self.repo, "ls-tree", "-r", "--name-only", "-z", head))
-                self.config = load_config(self.repo, head) if CONFIG_PATH in tracked else default_config(self.repo)
-                if any(self.config[source] != policy.get(required) for source, required in (
-                    ("local_checks", "mandatory_local_checks"),
-                    ("worker_checks", "mandatory_worker_checks"),
-                    ("source_checks", "mandatory_source_checks"),
-                )):
-                    raise ValueError("trial checks do not match trusted local authority")
-                self.config["auto_merge"] = False
-                self.config["session_seconds"] = min(self.config["session_seconds"], policy["session_seconds"])
-                self.config["max_attempts"] = min(self.config["max_attempts"], policy["max_attempts"])
+                self.config = prepare_local_trial_config(self.repo, head, self.local_trial, policy)
                 resume = self.store.trial_session_id()
             else:
                 if "local_trial" in policy or self.store.has_local_trial():
@@ -872,15 +827,8 @@ class Coordinator:
                     )
                 self._validate_initial_jobs(previous)
                 self.session_id = resume
-                if self.local_trial is not None:
-                    resumable = prior["status"] in {"running", "paused"} or (
-                        prior["status"] in {"completed", "blocked"} and bool(self.store.pending_feedback(resume))
-                    )
-                    if now >= prior["deadline"] and prior["status"] in {"running", "paused"}:
-                        self.store.expire_local_trial(resume, now=now)
-                        return project_snapshot(self.store.snapshot(resume), identity=self.tool_identity)
-                    if not resumable or now >= prior["deadline"]:
-                        return project_snapshot(previous, identity=self.tool_identity)
+                if self.local_trial is not None and not self.store.prepare_local_trial_resume(resume, prior, now=now):
+                    return project_snapshot(self.store.snapshot(resume), identity=self.tool_identity)
                 self.store.resume_session(
                     resume, now=now, deadline=prior["deadline"] if self.local_trial is not None else now + self.config["session_seconds"]
                 )
